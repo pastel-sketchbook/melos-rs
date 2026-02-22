@@ -126,6 +126,10 @@ pub enum Commands {
 /// Arguments for the `bootstrap` command
 #[derive(Args, Debug)]
 pub struct BootstrapArgs {
+    /// Number of concurrent pub get processes
+    #[arg(short = 'c', long, default_value_t = 5)]
+    pub concurrency: usize,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -133,6 +137,10 @@ pub struct BootstrapArgs {
 /// Arguments for the `clean` command
 #[derive(Args, Debug)]
 pub struct CleanArgs {
+    /// Deep clean: also remove .dart_tool/, build/, and pubspec.lock
+    #[arg(long)]
+    pub deep: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }

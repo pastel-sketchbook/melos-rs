@@ -58,35 +58,46 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `--all` flag to bump all packages
 - [x] `--yes` flag to skip confirmation
 - [x] Pre-commit hook execution from config
+- [x] Post-commit hook execution from config
 - [x] Pubspec.yaml version rewriting
 - [x] Flutter `+buildNumber` format handling
-- [ ] CHANGELOG.md generation from git commits
-- [ ] Git tag creation after version bump
-- [ ] Branch validation (ensure on correct branch)
-- [ ] Conventional commit parsing
+- [x] CHANGELOG.md generation from conventional commits
+- [x] Git tag creation after version bump (`--no-git-tag` to skip)
+- [x] Branch validation (ensure on correct branch from config)
+- [x] Conventional commit parsing (`--conventional-commits` flag)
+- [x] Commit type to bump mapping (feat=minor, fix=patch, breaking=major)
+- [x] Per-package commit mapping via git diff-tree
+- [x] Workspace-level CHANGELOG.md aggregation
+- [x] Configurable changelog options (include body, include commit ID)
+- [x] Configurable commit message template
+- [x] `--no-changelog` flag to skip changelog generation
 
 ### `bootstrap` Command
 - [x] Run `flutter pub get` / `dart pub get` in each package
 - [x] Global filters support
+- [x] Parallel bootstrapping with configurable concurrency (`-c N`)
+- [x] Progress bar with `indicatif`
 - [ ] Link local package dependencies (path overrides)
-- [ ] Parallel bootstrapping with progress indicator
 
 ### `clean` Command
 - [x] Run `flutter clean` in Flutter packages
+- [x] Clean build artifacts in pure Dart packages (build/, .dart_tool/)
 - [x] Global filters support
-- [ ] Clean build artifacts in pure Dart packages
-- [ ] `--deep` flag to also delete `.dart_tool/`, `pubspec.lock`
+- [x] `--deep` flag to also delete `.dart_tool/`, `build/`, `pubspec.lock`
 
 ### `list` Command
 - [x] List all packages
 - [x] `--long` flag for detailed output (shows private tag)
-- [x] `--json` flag for machine-readable output (includes private field)
+- [x] `--json` flag for machine-readable JSON output
 - [x] Global filters support
-- [ ] Dependency graph visualization
-- [ ] `--graph` flag for tree output
-- [ ] `--parsable`, `--relative`, `--gviz`, `--mermaid`, `--cycles`
+- [x] `--parsable` format (name:version:path per line)
+- [x] `--relative` flag (show relative paths)
+- [x] `--format=graph` dependency graph as adjacency list
+- [x] `--format=gviz` Graphviz DOT output
+- [x] `--format=mermaid` Mermaid diagram output
+- [x] `--cycles` flag for circular dependency detection (Kahn's algorithm)
 
-### `format` Command (NEW)
+### `format` Command
 - [x] `dart format .` across all matching packages
 - [x] `-c N` concurrency control
 - [x] `--set-exit-if-changed` flag (CI mode)
@@ -94,13 +105,20 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `--line-length` flag
 - [x] Global filters support
 
-### `publish` Command (NEW)
+### `publish` Command
 - [x] `dart pub publish` across non-private packages
 - [x] `--dry-run` flag (default: true, safe by default)
 - [x] `--git-tag-version` flag (creates annotated git tags after publish)
 - [x] `--yes` flag to skip confirmation
 - [x] `-c N` concurrency control
 - [x] Automatic private package exclusion
+
+## Phase 2.5: Config Extensions
+
+- [x] `VersionCommandConfig` with branch, message template, changelog options, hooks
+- [x] `ChangelogConfig` with include_commit_body, include_commit_id
+- [x] `BootstrapCommandConfig` with run_pub_get_in_parallel
+- [x] `CleanCommandConfig` with hooks
 
 ## Phase 3: Advanced Features
 
@@ -125,14 +143,13 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 ### Versioning & Release
 - [ ] `version:set` command (set explicit version across all packages)
 - [ ] Coordinated versioning (keep all packages in sync)
-- [ ] Git integration (commit, tag, push after version bump)
-- [ ] CHANGELOG.md auto-generation from conventional commits
+- [ ] Git integration (push after version bump)
 - [ ] Release branch management
 
 ### Developer Experience
 - [ ] `melos-rs init` - generate a starter melos.yaml
 - [ ] Tab completion for bash/zsh/fish
-- [ ] Progress bars with `indicatif`
+- [ ] Progress bars with `indicatif` for more commands
 - [ ] Verbose/quiet/debug log levels
 - [ ] Config validation and helpful error messages
 - [ ] Watch mode for development (`--watch`)
