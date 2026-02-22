@@ -117,7 +117,8 @@ impl ProcessRunner {
             let pb = progress.cloned();
 
             let handle = tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
+                // Safety: the semaphore is never closed, so acquire always succeeds.
+                let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
 
                 // Skip if already failed and fail-fast is enabled
                 if fail_fast && failed.load(std::sync::atomic::Ordering::Relaxed) {

@@ -12,8 +12,10 @@ use clap::Parser;
 use colored::Colorize;
 
 /// Built-in command names that can be overridden by scripts with the same name.
+/// Note: `run`, `init`, and `completion` are excluded because they are never overridden.
+/// The `bs` alias for `bootstrap` is resolved by clap before reaching our code.
 const OVERRIDABLE_COMMANDS: &[&str] = &[
-    "analyze", "bootstrap", "bs", "clean", "exec", "format", "health", "list", "pub", "publish", "run", "version",
+    "analyze", "bootstrap", "clean", "exec", "format", "health", "list", "pub", "publish", "version",
 ];
 
 #[tokio::main]

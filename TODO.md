@@ -307,3 +307,31 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - Wired into `Workspace::find_and_load()` — includes root dir as a package via `Package::from_path()`
   - Propagated from `MelosSection` in the `from_pubspec_yaml` constructor
 - [x] Tests: 17 new tests (parent env vars, dependency override paths, offline config, override path helpers)
+
+## Batch 20: Quality & Polish
+
+- [x] Error handling hardening
+  - Replaced `sem.acquire().await.unwrap()` with documented `.expect()` in runner (semaphore never closed)
+  - Replaced `.expect("commits should be loaded")` with `.ok_or_else(|| anyhow!(...))` in version command
+  - Added safety comments on regex `caps.get(0).expect()` calls in run command
+- [x] Dead code cleanup
+  - Removed dead `"bs"` and `"run"` entries from `OVERRIDABLE_COMMANDS` constant (clap resolves aliases before our code; `run` is never overridden)
+  - Added documentation comment explaining exclusion rationale
+- [x] Integration test suite (`tests/cli.rs`) using `assert_cmd` + `predicates`
+  - Added `assert_cmd` and `predicates` dev-dependencies
+  - Fixture workspace helper `create_fixture_workspace()` builds temp dirs with `melos.yaml` + packages
+  - `test_help_output` — `--help` exits 0 with expected subcommands
+  - `test_version_flag` — `--version` shows binary name
+  - `test_no_workspace_error` — running in empty dir exits 1 with actionable error
+  - `test_init_creates_7x_workspace` — `init` scaffolds 7.x workspace with pubspec.yaml
+  - `test_init_legacy_creates_melos_yaml` — `init --legacy` scaffolds 6.x workspace with melos.yaml
+  - `test_list_packages` — `list` shows discovered packages
+  - `test_list_json_output` — `list --json` outputs valid JSON array with correct fields
+  - `test_list_parsable_output` — `list --parsable` outputs `name:version:path` format
+  - `test_list_graph_output` — `list --graph` shows dependency adjacency
+  - `test_exec_echo` — `exec -- echo hello` runs in each package
+  - `test_exec_dry_run` — `exec --dry-run` prints commands without executing
+  - `test_completion_bash` — `completion bash` generates shell completions
+  - `test_health_check_no_issues` — `health --version-drift` reports no issues on clean workspace
+  - `test_list_with_scope_filter` — `list --scope` correctly filters packages
+- [x] Tests: 14 new integration tests (286 total: 272 unit + 14 integration)

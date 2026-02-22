@@ -1164,7 +1164,9 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             .collect()
     } else if args.conventional_commits {
         // Use conventional commits to determine bumps
-        let mapped = conventional_commits.as_ref().expect("commits should be loaded");
+        let mapped = conventional_commits
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("conventional commits not loaded; this is a bug"))?;
         workspace
             .packages
             .iter()

@@ -843,7 +843,8 @@ fn substitute_env_vars(command: &str, env: &HashMap<String, String>) -> String {
             let bytes = bytes.as_bytes();
             result = re
                 .replace_all(&result.clone(), |caps: &regex::Captures| {
-                    let m = caps.get(0).unwrap();
+                    // Safety: group 0 (the full match) is always present in a Captures
+                    let m = caps.get(0).expect("regex group 0 always exists");
                     let end = m.end();
                     // If followed by an alphanumeric or underscore, don't replace
                     if end < bytes.len() {
@@ -886,7 +887,8 @@ fn expand_command(command: &str) -> Result<Vec<String>> {
             // Use replace_all with a closure that checks context after the match
             let bytes = part.as_bytes();
             re.replace_all(part, |caps: &regex::Captures| {
-                let m = caps.get(0).unwrap();
+                    // Safety: group 0 (the full match) is always present in a Captures
+                    let m = caps.get(0).expect("regex group 0 always exists");
                 let end = m.end();
                 // If followed by `-rs`, don't replace (it's already melos-rs)
                 if end < bytes.len() && bytes[end] == b'-' {
