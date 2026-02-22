@@ -342,16 +342,19 @@ mod tests {
                 name: "test".to_string(),
                 packages: vec!["packages/**".to_string()],
                 repository: None,
+                sdk_path: None,
                 command: Some(CommandConfig {
                     version: None,
                     bootstrap: bootstrap_config,
                     clean: None,
+                    publish: None,
                 }),
                 scripts: HashMap::new(),
                 ignore: None,
                 categories: HashMap::new(),
             },
             packages: vec![],
+            sdk_path: None,
         }
     }
 

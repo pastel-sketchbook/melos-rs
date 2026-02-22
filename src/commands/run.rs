@@ -38,6 +38,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub include_private: bool,
 
+    /// Filter scripts by group (can be repeated)
+    #[arg(long)]
+    pub group: Vec<String>,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -46,7 +50,7 @@ pub struct RunArgs {
 pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
     // Handle --list mode
     if args.list {
-        return list_scripts(workspace, args.json, args.include_private);
+        return list_scripts(workspace, args.json, args.include_private, &args.group);
     }
 
     let script_name = match args.script {
@@ -54,7 +58,7 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
         None if args.no_select => {
             bail!("No script name provided and --no-select is set");
         }
-        None => select_script_interactive(workspace, args.include_private)?,
+        None => select_script_interactive(workspace, args.include_private, &args.group)?,
     };
 
     let cli_filters: PackageFilters = (&args.filters).into();
@@ -66,12 +70,13 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
 ///
 /// With `--json`, outputs a JSON array of script objects.
 /// Otherwise, prints a formatted table.
-fn list_scripts(workspace: &Workspace, json: bool, include_private: bool) -> Result<()> {
+fn list_scripts(workspace: &Workspace, json: bool, include_private: bool, groups: &[String]) -> Result<()> {
     let mut scripts: Vec<(&String, &ScriptEntry)> = workspace
         .config
         .scripts
         .iter()
         .filter(|(_, entry)| include_private || !entry.is_private())
+        .filter(|(_, entry)| groups.is_empty() || groups.iter().any(|g| entry.in_group(g)))
         .collect();
     scripts.sort_by_key(|(name, _)| *name);
 
@@ -95,6 +100,13 @@ fn list_scripts(workspace: &Workspace, json: bool, include_private: bool) -> Res
                 }
                 if entry.steps().is_some() {
                     obj.insert("steps".to_string(), serde_json::Value::Bool(true));
+                }
+                if let Some(groups) = entry.groups() {
+                    let groups_json: Vec<serde_json::Value> = groups
+                        .iter()
+                        .map(|g| serde_json::Value::String(g.clone()))
+                        .collect();
+                    obj.insert("groups".to_string(), serde_json::Value::Array(groups_json));
                 }
                 serde_json::Value::Object(obj)
             })
@@ -542,12 +554,13 @@ async fn run_exec_script(
 }
 
 /// Prompt the user to select a script interactively from available scripts
-fn select_script_interactive(workspace: &Workspace, include_private: bool) -> Result<String> {
+fn select_script_interactive(workspace: &Workspace, include_private: bool, groups: &[String]) -> Result<String> {
     let scripts: Vec<(&String, &ScriptEntry)> = workspace
         .config
         .scripts
         .iter()
         .filter(|(_, entry)| include_private || !entry.is_private())
+        .filter(|(_, entry)| groups.is_empty() || groups.iter().any(|g| entry.in_group(g)))
         .collect();
 
     if scripts.is_empty() {

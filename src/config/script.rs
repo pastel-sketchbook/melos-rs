@@ -51,6 +51,13 @@ pub struct ScriptConfig {
     /// Environment variables to set when running this script
     #[serde(default)]
     pub env: HashMap<String, String>,
+
+    /// Groups this script belongs to (for `run --group <name>` filtering).
+    ///
+    /// Scripts can belong to zero or more groups. When `--group` is specified,
+    /// only scripts that belong to at least one matching group are shown/run.
+    #[serde(default)]
+    pub groups: Option<Vec<String>>,
 }
 
 /// Exec configuration that can be either a string shorthand or an options object.

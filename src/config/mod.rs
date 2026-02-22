@@ -12,6 +12,7 @@ use crate::workspace::ConfigSource;
 
 /// Top-level melos.yaml configuration
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MelosConfig {
     /// Workspace name
     pub name: String,
@@ -22,6 +23,13 @@ pub struct MelosConfig {
     /// Repository URL or object for changelog commit links
     #[serde(default)]
     pub repository: Option<RepositoryConfig>,
+
+    /// Custom Dart/Flutter SDK path. Overrides the default SDK resolution.
+    ///
+    /// Can also be set via the `MELOS_SDK_PATH` env var or the `--sdk-path` CLI flag.
+    /// Priority: CLI flag > env var > config file.
+    #[serde(default)]
+    pub sdk_path: Option<String>,
 
     /// Command-level configuration (version hooks, etc.)
     #[serde(default)]
@@ -248,6 +256,22 @@ impl ScriptEntry {
             ScriptEntry::Full(config) => &config.env,
         }
     }
+
+    /// Get the groups this script belongs to.
+    ///
+    /// Returns `None` for simple scripts or full scripts without groups.
+    pub fn groups(&self) -> Option<&[String]> {
+        match self {
+            ScriptEntry::Simple(_) => None,
+            ScriptEntry::Full(config) => config.groups.as_deref(),
+        }
+    }
+
+    /// Check whether this script belongs to a given group.
+    pub fn in_group(&self, group: &str) -> bool {
+        self.groups()
+            .is_some_and(|groups| groups.iter().any(|g| g == group))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +407,9 @@ pub struct CommandConfig {
 
     /// Clean command config
     pub clean: Option<CleanCommandConfig>,
+
+    /// Publish command config
+    pub publish: Option<PublishCommandConfig>,
 }
 
 /// Configuration for the `version` command
@@ -681,6 +708,31 @@ pub struct BootstrapHooks {
     pub post: Option<String>,
 }
 
+/// Configuration for the `publish` command
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishCommandConfig {
+    /// Lifecycle hooks (pre/post)
+    #[serde(default)]
+    pub hooks: Option<PublishHooks>,
+}
+
+/// Hooks for the publish command
+///
+/// The pre-hook runs before `melos publish` and the post-hook runs after.
+/// Both run only once, even if multiple packages are published.
+/// The `MELOS_PUBLISH_DRY_RUN` env var is set to `true` or `false` so hooks
+/// can detect dry-run mode.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishHooks {
+    /// Script to run before publishing
+    pub pre: Option<String>,
+
+    /// Script to run after publishing
+    pub post: Option<String>,
+}
+
 fn default_true_opt() -> Option<bool> {
     Some(true)
 }
@@ -711,6 +763,7 @@ struct PubspecWithMelos {
 /// All the familiar melos.yaml fields except `name` (taken from pubspec top-level)
 /// and `packages` (taken from `workspace:` field).
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MelosSection {
     /// Override workspace name (optional; defaults to pubspec `name`)
     #[serde(default)]
@@ -723,6 +776,10 @@ struct MelosSection {
     /// Repository URL or object for changelog commit links
     #[serde(default)]
     repository: Option<RepositoryConfig>,
+
+    /// Custom Dart/Flutter SDK path
+    #[serde(default)]
+    sdk_path: Option<String>,
 
     /// Command-level configuration
     #[serde(default)]
@@ -790,6 +847,7 @@ pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
                 name,
                 packages,
                 repository: wrapper.melos.repository,
+                sdk_path: wrapper.melos.sdk_path,
                 command: wrapper.melos.command,
                 scripts: wrapper.melos.scripts,
                 ignore: wrapper.melos.ignore,
@@ -1019,6 +1077,7 @@ melos:
             name: "test".to_string(),
             packages: vec![],
             repository: None,
+            sdk_path: None,
             command: None,
             scripts: HashMap::new(),
             ignore: None,
@@ -1040,6 +1099,7 @@ melos:
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
             repository: None,
+            sdk_path: None,
             command: None,
             scripts,
             ignore: None,
@@ -1061,6 +1121,7 @@ melos:
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
             repository: None,
+            sdk_path: None,
             command: None,
             scripts,
             ignore: None,
@@ -1081,6 +1142,7 @@ melos:
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
             repository: None,
+            sdk_path: None,
             command: None,
             scripts,
             ignore: None,
@@ -1107,12 +1169,14 @@ melos:
                     ..Default::default()
                 }),
                 env: HashMap::new(),
+                groups: None,
             })),
         );
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
             repository: None,
+            sdk_path: None,
             command: None,
             scripts,
             ignore: None,
@@ -1392,12 +1456,14 @@ scripts:
                 description: None,
                 package_filters: None,
                 env: HashMap::new(),
+                groups: None,
             })),
         );
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
             repository: None,
+            sdk_path: None,
             command: None,
             scripts,
             ignore: None,
@@ -1421,12 +1487,14 @@ scripts:
                 description: None,
                 package_filters: None,
                 env: HashMap::new(),
+                groups: None,
             })),
         );
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
             repository: None,
+            sdk_path: None,
             command: None,
             scripts,
             ignore: None,
@@ -1466,5 +1534,182 @@ packages:
 "#;
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.ignore.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Publish hooks config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_publish_hooks() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  publish:
+    hooks:
+      pre: dart pub run build_runner build
+      post: dart pub run build_runner clean
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let publish = config.command.unwrap().publish.unwrap();
+        let hooks = publish.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("dart pub run build_runner build"));
+        assert_eq!(hooks.post.as_deref(), Some("dart pub run build_runner clean"));
+    }
+
+    #[test]
+    fn test_parse_publish_hooks_pre_only() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  publish:
+    hooks:
+      pre: echo before
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let publish = config.command.unwrap().publish.unwrap();
+        let hooks = publish.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("echo before"));
+        assert!(hooks.post.is_none());
+    }
+
+    #[test]
+    fn test_parse_no_publish_config() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert!(config.command.unwrap().publish.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // SDK path config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_sdk_path() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+sdkPath: /opt/flutter/sdk
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert_eq!(config.sdk_path.as_deref(), Some("/opt/flutter/sdk"));
+    }
+
+    #[test]
+    fn test_parse_no_sdk_path() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert!(config.sdk_path.is_none());
+    }
+
+    #[test]
+    fn test_parse_7x_sdk_path() {
+        let yaml = r#"
+name: my_workspace
+workspace:
+  - packages/core
+melos:
+  sdkPath: /usr/local/flutter
+"#;
+        let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
+        assert_eq!(wrapper.melos.sdk_path.as_deref(), Some("/usr/local/flutter"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Script groups tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_script_groups() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+scripts:
+  analyze:
+    run: dart analyze .
+    groups:
+      - ci
+      - quality
+  test:
+    run: flutter test
+    groups:
+      - ci
+  format: dart format .
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+
+        let analyze = &config.scripts["analyze"];
+        assert_eq!(analyze.groups(), Some(vec!["ci".to_string(), "quality".to_string()].as_slice()));
+        assert!(analyze.in_group("ci"));
+        assert!(analyze.in_group("quality"));
+        assert!(!analyze.in_group("build"));
+
+        let test = &config.scripts["test"];
+        assert_eq!(test.groups(), Some(vec!["ci".to_string()].as_slice()));
+        assert!(test.in_group("ci"));
+
+        let format = &config.scripts["format"];
+        assert!(format.groups().is_none());
+        assert!(!format.in_group("ci"));
+    }
+
+    #[test]
+    fn test_script_entry_simple_has_no_groups() {
+        let entry = ScriptEntry::Simple("echo hello".to_string());
+        assert!(entry.groups().is_none());
+        assert!(!entry.in_group("anything"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Script override: overridable command names
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_all_command_configs_together() {
+        // Ensure all command configs can coexist
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+  bootstrap:
+    runPubGetInParallel: true
+  clean:
+    hooks:
+      pre: echo pre-clean
+  publish:
+    hooks:
+      pre: echo pre-publish
+      post: echo post-publish
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let cmd = config.command.unwrap();
+        assert!(cmd.version.is_some());
+        assert!(cmd.bootstrap.is_some());
+        assert!(cmd.clean.is_some());
+        assert!(cmd.publish.is_some());
+        let publish = cmd.publish.unwrap();
+        let hooks = publish.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("echo pre-publish"));
+        assert_eq!(hooks.post.as_deref(), Some("echo post-publish"));
     }
 }

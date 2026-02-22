@@ -22,12 +22,37 @@ pub fn apply_filters(
 /// Apply package filters with category definitions from melos.yaml.
 ///
 /// `categories` maps category names to lists of package name glob patterns.
+///
+/// If the `MELOS_PACKAGES` environment variable is set, it overrides the `scope`
+/// filter with a comma-delimited list of package names. This applies to both
+/// direct filters and script-level `packageFilters.scope`.
 pub fn apply_filters_with_categories(
     packages: &[Package],
     filters: &PackageFilters,
     workspace_root: Option<&Path>,
     categories: &HashMap<String, Vec<String>>,
 ) -> Result<Vec<Package>> {
+    // Check for MELOS_PACKAGES env var — overrides scope filter
+    let effective_filters: std::borrow::Cow<'_, PackageFilters> =
+        if let Ok(melos_packages) = std::env::var("MELOS_PACKAGES") {
+            let scope: Vec<String> = melos_packages
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if scope.is_empty() {
+                std::borrow::Cow::Borrowed(filters)
+            } else {
+                let mut overridden = filters.clone();
+                overridden.scope = Some(scope);
+                std::borrow::Cow::Owned(overridden)
+            }
+        } else {
+            std::borrow::Cow::Borrowed(filters)
+        };
+
+    let filters = effective_filters.as_ref();
+
     // Resolve category filter into a set of matching package names
     let category_names: Option<HashSet<String>> =
         resolve_category_packages(packages, filters, categories);
@@ -810,6 +835,75 @@ mod tests {
         };
 
         let result = apply_filters(&packages, &filters, None).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_melos_packages_env_overrides_scope() {
+        let packages = vec![
+            make_package("app_main", false, vec![]),
+            make_package("core_lib", false, vec![]),
+            make_package("utils", false, vec![]),
+        ];
+
+        // SAFETY: test-only, tests run with --test-threads=1 for env var isolation
+        unsafe { std::env::set_var("MELOS_PACKAGES", "core_lib,utils") };
+
+        // Even though filters have no scope, MELOS_PACKAGES acts as scope
+        let filters = PackageFilters::default();
+        let result =
+            apply_filters_with_categories(&packages, &filters, None, &HashMap::new()).unwrap();
+
+        // Clean up env var before assertions so it doesn't leak
+        unsafe { std::env::remove_var("MELOS_PACKAGES") };
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "core_lib");
+        assert_eq!(result[1].name, "utils");
+    }
+
+    #[test]
+    fn test_melos_packages_env_overrides_existing_scope() {
+        let packages = vec![
+            make_package("app_main", false, vec![]),
+            make_package("core_lib", false, vec![]),
+            make_package("utils", false, vec![]),
+        ];
+
+        // SAFETY: test-only, tests run with --test-threads=1 for env var isolation
+        unsafe { std::env::set_var("MELOS_PACKAGES", "app_main") };
+
+        // Filters have a different scope, but MELOS_PACKAGES overrides it
+        let filters = PackageFilters {
+            scope: Some(vec!["core_*".to_string()]),
+            ..Default::default()
+        };
+        let result =
+            apply_filters_with_categories(&packages, &filters, None, &HashMap::new()).unwrap();
+
+        unsafe { std::env::remove_var("MELOS_PACKAGES") };
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "app_main");
+    }
+
+    #[test]
+    fn test_melos_packages_env_empty_string_no_effect() {
+        let packages = vec![
+            make_package("app_main", false, vec![]),
+            make_package("core_lib", false, vec![]),
+        ];
+
+        // SAFETY: test-only, tests run with --test-threads=1 for env var isolation
+        unsafe { std::env::set_var("MELOS_PACKAGES", "") };
+
+        let filters = PackageFilters::default();
+        let result =
+            apply_filters_with_categories(&packages, &filters, None, &HashMap::new()).unwrap();
+
+        unsafe { std::env::remove_var("MELOS_PACKAGES") };
+
+        // Empty MELOS_PACKAGES should not affect filtering
         assert_eq!(result.len(), 2);
     }
 }

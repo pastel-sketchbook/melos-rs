@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use clap_complete::Shell;
 
 use crate::commands::{
-    exec::ExecArgs, format::FormatArgs, init::InitArgs, list::ListArgs, pub_cmds::PubArgs,
-    publish::PublishArgs, run::RunArgs, version::VersionArgs,
+    analyze::AnalyzeArgs, exec::ExecArgs, format::FormatArgs, init::InitArgs, list::ListArgs,
+    pub_cmds::PubArgs, publish::PublishArgs, run::RunArgs, version::VersionArgs,
 };
 
 /// melos-rs: A Rust CLI for Flutter/Dart monorepo management
@@ -19,6 +19,10 @@ pub struct Cli {
     /// Suppress non-essential output
     #[arg(short, long, global = true, conflicts_with = "verbose")]
     pub quiet: bool,
+
+    /// Path to the Dart/Flutter SDK (overrides MELOS_SDK_PATH and sdkPath config)
+    #[arg(long, global = true)]
+    pub sdk_path: Option<String>,
 
     #[command(subcommand)]
     pub command: Commands,
@@ -150,6 +154,9 @@ impl GlobalFilterArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Run static analysis across packages using `dart analyze`
+    Analyze(AnalyzeArgs),
+
     /// Initialize the workspace by linking packages and running `pub get`
     #[command(alias = "bs")]
     Bootstrap(BootstrapArgs),

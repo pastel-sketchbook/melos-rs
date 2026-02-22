@@ -10,6 +10,11 @@ use cli::{Cli, Commands, Verbosity};
 use clap::Parser;
 use colored::Colorize;
 
+/// Built-in command names that can be overridden by scripts with the same name.
+const OVERRIDABLE_COMMANDS: &[&str] = &[
+    "analyze", "bootstrap", "bs", "clean", "exec", "format", "list", "pub", "publish", "run", "version",
+];
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -42,7 +47,7 @@ async fn main() -> Result<()> {
     }
 
     // Find and load workspace
-    let workspace = match workspace::Workspace::find_and_load() {
+    let workspace = match workspace::Workspace::find_and_load(cli.sdk_path.as_deref()) {
         Ok(ws) => ws,
         Err(e) => {
             eprintln!("{} Failed to load workspace: {}", "ERROR".red().bold(), e);
@@ -75,18 +80,43 @@ async fn main() -> Result<()> {
         );
     }
 
-    let result = match cli.command {
-        Commands::Bootstrap(args) => commands::bootstrap::run(&workspace, args).await,
-        Commands::Clean(args) => commands::clean::run(&workspace, args).await,
-        Commands::Completion(_) => unreachable!("completion handled above"),
-        Commands::Exec(args) => commands::exec::run(&workspace, args).await,
-        Commands::Format(args) => commands::format::run(&workspace, args).await,
-        Commands::Init(_) => unreachable!("init handled above"),
-        Commands::List(args) => commands::list::run(&workspace, args).await,
-        Commands::Pub(args) => commands::pub_cmds::run(&workspace, args).await,
-        Commands::Publish(args) => commands::publish::run(&workspace, args).await,
-        Commands::Run(args) => commands::run::run(&workspace, args).await,
-        Commands::Version(args) => commands::version::run(&workspace, args).await,
+    // Check for script overrides: if a script has the same name as the built-in
+    // command being invoked, run the script instead.
+    let result = if let Some(script_name) = get_overridable_command_name(&cli.command)
+        && workspace.config.scripts.contains_key(script_name)
+    {
+        if verbosity == Verbosity::Verbose {
+            println!(
+                "{} Script '{}' overrides the built-in command",
+                "DEBUG".dimmed(),
+                script_name,
+            );
+        }
+        let run_args = commands::run::RunArgs {
+            script: Some(script_name.to_string()),
+            no_select: false,
+            list: false,
+            json: false,
+            include_private: false,
+            group: vec![],
+            filters: cli::GlobalFilterArgs::default(),
+        };
+        commands::run::run(&workspace, run_args).await
+    } else {
+        match cli.command {
+            Commands::Analyze(args) => commands::analyze::run(&workspace, args).await,
+            Commands::Bootstrap(args) => commands::bootstrap::run(&workspace, args).await,
+            Commands::Clean(args) => commands::clean::run(&workspace, args).await,
+            Commands::Completion(_) => unreachable!("completion handled above"),
+            Commands::Exec(args) => commands::exec::run(&workspace, args).await,
+            Commands::Format(args) => commands::format::run(&workspace, args).await,
+            Commands::Init(_) => unreachable!("init handled above"),
+            Commands::List(args) => commands::list::run(&workspace, args).await,
+            Commands::Pub(args) => commands::pub_cmds::run(&workspace, args).await,
+            Commands::Publish(args) => commands::publish::run(&workspace, args).await,
+            Commands::Run(args) => commands::run::run(&workspace, args).await,
+            Commands::Version(args) => commands::version::run(&workspace, args).await,
+        }
     };
 
     match result {
@@ -100,5 +130,30 @@ async fn main() -> Result<()> {
             eprintln!("\n{} {}", "FAILED".red().bold(), e);
             std::process::exit(1);
         }
+    }
+}
+
+/// If the CLI command is a built-in that can be overridden by a script,
+/// return the command name as a string.
+fn get_overridable_command_name(command: &Commands) -> Option<&'static str> {
+    let name = match command {
+        Commands::Analyze(_) => "analyze",
+        Commands::Bootstrap(_) => "bootstrap",
+        Commands::Clean(_) => "clean",
+        Commands::Exec(_) => "exec",
+        Commands::Format(_) => "format",
+        Commands::List(_) => "list",
+        Commands::Pub(_) => "pub",
+        Commands::Publish(_) => "publish",
+        Commands::Version(_) => "version",
+        // `run`, `init`, `completion` are never overridden
+        Commands::Run(_) | Commands::Init(_) | Commands::Completion(_) => return None,
+    };
+
+    // Only override if the name is in our overridable list
+    if OVERRIDABLE_COMMANDS.contains(&name) {
+        Some(name)
+    } else {
+        None
     }
 }

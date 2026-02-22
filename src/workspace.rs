@@ -44,6 +44,9 @@ pub struct Workspace {
 
     /// All packages discovered in the workspace
     pub packages: Vec<Package>,
+
+    /// Effective SDK path (resolved from CLI > env var > config, if any)
+    pub sdk_path: Option<String>,
 }
 
 impl Workspace {
@@ -52,7 +55,9 @@ impl Workspace {
     ///
     /// Priority: melos.yaml is preferred over pubspec.yaml (the user hasn't
     /// migrated to 7.x yet).
-    pub fn find_and_load() -> Result<Self> {
+    ///
+    /// `sdk_path_override` is the CLI `--sdk-path` value, which takes highest priority.
+    pub fn find_and_load(sdk_path_override: Option<&str>) -> Result<Self> {
         let config_source = find_config()?;
         let root_path = config_source
             .path()
@@ -81,11 +86,18 @@ impl Workspace {
             });
         }
 
+        // Resolve SDK path: CLI flag > MELOS_SDK_PATH env var > config sdkPath
+        let sdk_path = sdk_path_override
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("MELOS_SDK_PATH").ok())
+            .or_else(|| config.sdk_path.clone());
+
         Ok(Workspace {
             root_path,
             config_source,
             config,
             packages,
+            sdk_path,
         })
     }
 
@@ -93,6 +105,7 @@ impl Workspace {
     ///
     /// Melos provides these env vars:
     ///   MELOS_ROOT_PATH - absolute path to the workspace root
+    ///   MELOS_SDK_PATH  - custom SDK path (if configured)
     ///   MELOS_PACKAGE_NAME - (set per-package during exec)
     ///   MELOS_PACKAGE_PATH - (set per-package during exec)
     ///   MELOS_PACKAGE_VERSION - (set per-package during exec)
@@ -102,6 +115,9 @@ impl Workspace {
             "MELOS_ROOT_PATH".to_string(),
             self.root_path.display().to_string(),
         );
+        if let Some(ref sdk_path) = self.sdk_path {
+            env.insert("MELOS_SDK_PATH".to_string(), sdk_path.clone());
+        }
         env
     }
 }

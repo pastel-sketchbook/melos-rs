@@ -216,6 +216,15 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `changelogFormat.includeDate` config (optional date in changelog version headers, default false)
 - [x] `updateGitTagRefs` config (scan pubspec.yaml git deps and update `ref:` tags to new versions)
 
+## Batch 16: Melos Parity Gaps
+
+- [x] `analyze` command (`dart analyze` across packages with `--fatal-warnings`, `--fatal-infos`, `--no-fatal`, `-c` concurrency)
+- [x] `run --group` + script `groups` field (filter scripts by group in selection and `--list`)
+- [x] Script overriding built-in commands (scripts with same name as commands take precedence, except `run`/`init`/`completion`)
+- [x] `sdkPath` config + `--sdk-path` global flag + `MELOS_SDK_PATH` env var (CLI > env > config priority)
+- [x] Publish hooks (pre/post) via `command.publish.hooks` config, `MELOS_PUBLISH_DRY_RUN` env var
+- [x] `MELOS_PACKAGES` env var (comma-delimited scope override applied in `apply_filters_with_categories`)
+
 ## Phase 4: Parity & Beyond
 
 - [ ] Full Melos CLI flag compatibility

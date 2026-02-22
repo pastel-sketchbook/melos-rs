@@ -94,6 +94,35 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         }
     }
 
+    let dry_run_str = if args.dry_run { "true" } else { "false" };
+
+    // Run pre-publish hook if configured
+    if let Some(publish_config) = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.publish.as_ref())
+        && let Some(hooks) = &publish_config.hooks
+        && let Some(ref pre_hook) = hooks.pre
+    {
+        println!(
+            "\n{} Running pre-publish hook: {}",
+            "$".cyan(),
+            pre_hook
+        );
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(pre_hook)
+            .current_dir(&workspace.root_path)
+            .env("MELOS_PUBLISH_DRY_RUN", dry_run_str)
+            .status()
+            .await?;
+
+        if !status.success() {
+            anyhow::bail!("Pre-publish hook failed with exit code: {}", status.code().unwrap_or(-1));
+        }
+    }
+
     // Build the publish command
     let mut cmd = String::from("dart pub publish");
     if args.dry_run {
@@ -139,6 +168,33 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
                     }
                 }
             }
+        }
+    }
+
+    // Run post-publish hook if configured (before bail on failure, matching Melos behavior)
+    if let Some(publish_config) = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.publish.as_ref())
+        && let Some(hooks) = &publish_config.hooks
+        && let Some(ref post_hook) = hooks.post
+    {
+        println!(
+            "\n{} Running post-publish hook: {}",
+            "$".cyan(),
+            post_hook
+        );
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(post_hook)
+            .current_dir(&workspace.root_path)
+            .env("MELOS_PUBLISH_DRY_RUN", dry_run_str)
+            .status()
+            .await?;
+
+        if !status.success() {
+            anyhow::bail!("Post-publish hook failed with exit code: {}", status.code().unwrap_or(-1));
         }
     }
 
