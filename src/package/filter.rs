@@ -411,6 +411,7 @@ mod tests {
             publish_to: None,
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
         }
     }
 
@@ -423,6 +424,7 @@ mod tests {
             publish_to: Some("none".to_string()),
             dependencies: vec![],
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
         }
     }
 
@@ -586,6 +588,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec!["core".to_string()],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
             Package {
                 name: "core".to_string(),
@@ -595,6 +598,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec!["utils".to_string()],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
             Package {
                 name: "utils".to_string(),
@@ -604,6 +608,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec![],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
             Package {
                 name: "unrelated".to_string(),
@@ -613,6 +618,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec![],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
         ];
 
@@ -643,6 +649,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec!["core".to_string()],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
             Package {
                 name: "core".to_string(),
@@ -652,6 +659,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec!["utils".to_string()],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
             Package {
                 name: "utils".to_string(),
@@ -661,6 +669,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec![],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
             Package {
                 name: "unrelated".to_string(),
@@ -670,6 +679,7 @@ mod tests {
                 publish_to: None,
                 dependencies: vec![],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
             },
         ];
 

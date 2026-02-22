@@ -218,6 +218,7 @@ async fn run_pub_in_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_pub_cmd_flutter() {
@@ -228,6 +229,7 @@ mod tests {
             is_flutter: true,
             dependencies: vec![],
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
             publish_to: None,
         };
         assert_eq!(pub_cmd(&pkg), "flutter");
@@ -242,6 +244,7 @@ mod tests {
             is_flutter: false,
             dependencies: vec![],
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
             publish_to: None,
         };
         assert_eq!(pub_cmd(&pkg), "dart");

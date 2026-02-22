@@ -664,9 +664,11 @@ pub struct BootstrapCommandConfig {
     #[serde(default)]
     pub run_pub_get_in_parallel: Option<bool>,
 
-    /// Enforce versions for dependency resolution
+    /// When true, validate that workspace packages' version constraints on
+    /// sibling packages are satisfied by the sibling's actual version before
+    /// running `pub get`. This catches constraint mismatches early — important
+    /// because published packages won't have the local path overrides.
     #[serde(default)]
-    #[allow(dead_code)]
     pub enforce_versions_for_dependency_resolution: Option<bool>,
 
     /// Pass --enforce-lockfile to pub get

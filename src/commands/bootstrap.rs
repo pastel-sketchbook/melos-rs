@@ -1,15 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::cli::BootstrapArgs;
 use crate::config::filter::PackageFilters;
 use crate::package::Package;
 use crate::package::filter::{apply_filters_with_categories, topological_sort};
-use crate::runner::ProcessRunner;
+use crate::runner::{ProcessRunner, create_progress_bar};
 use crate::workspace::Workspace;
 
 /// Bootstrap the workspace: link local packages and run `pub get` in each package
@@ -30,7 +29,12 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     let concurrency = effective_concurrency(workspace, args.concurrency);
 
     // Merge CLI flags with config flags to determine extra pub get arguments.
-    let enforce_lockfile = args.enforce_lockfile || config_enforce_lockfile(workspace);
+    // --no-enforce-lockfile overrides both --enforce-lockfile and config.
+    let enforce_lockfile = if args.no_enforce_lockfile {
+        false
+    } else {
+        args.enforce_lockfile || config_enforce_lockfile(workspace)
+    };
 
     println!(
         "\n{} Bootstrapping {} packages (concurrency: {}, dependency order)...\n",
@@ -58,6 +62,11 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         generate_pubspec_overrides(&packages, &workspace.packages)?;
     }
 
+    // Validate version constraints if configured
+    if config_enforce_versions(workspace) {
+        enforce_versions(&packages, &workspace.packages)?;
+    }
+
     // Build the pub get command with extra flags
     let flutter_cmd = build_pub_get_command("flutter", enforce_lockfile, args.no_example, args.offline);
     let dart_cmd = build_pub_get_command("dart", enforce_lockfile, args.no_example, args.offline);
@@ -66,13 +75,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     let dart_packages: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
 
     let total = flutter_packages.len() + dart_packages.len();
-    let pb = ProgressBar::new(total as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
-            .progress_chars("=> "),
-    );
+    let pb = create_progress_bar(total as u64, "bootstrapping");
 
     // Bootstrap Flutter packages in parallel
     if !flutter_packages.is_empty() {
@@ -149,6 +152,91 @@ fn config_enforce_lockfile(workspace: &Workspace) -> bool {
         .and_then(|c| c.bootstrap.as_ref())
         .and_then(|b| b.enforce_lockfile)
         .unwrap_or(false)
+}
+
+/// Check if `enforce_versions_for_dependency_resolution` is set in bootstrap config.
+fn config_enforce_versions(workspace: &Workspace) -> bool {
+    workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref())
+        .and_then(|b| b.enforce_versions_for_dependency_resolution)
+        .unwrap_or(false)
+}
+
+/// Validate that workspace packages' version constraints on sibling packages are
+/// satisfied by the siblings' actual versions.
+///
+/// This catches cases like package `app` depending on `core: ^1.0.0` while
+/// workspace package `core` is at version `2.0.0`. Such mismatches would cause
+/// failures when packages are published (without local path overrides).
+fn enforce_versions(packages: &[Package], all_workspace_packages: &[Package]) -> Result<()> {
+    let workspace_map: HashMap<&str, &Package> = all_workspace_packages
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+
+    let mut violations = Vec::new();
+
+    for pkg in packages {
+        // Check all dependencies that are also workspace packages
+        for dep_name in pkg.dependencies.iter().chain(pkg.dev_dependencies.iter()) {
+            let Some(sibling) = workspace_map.get(dep_name.as_str()) else {
+                continue; // Not a workspace package
+            };
+
+            let Some(constraint_str) = pkg.dependency_versions.get(dep_name) else {
+                continue; // No version constraint (path-only, SDK, etc.)
+            };
+
+            let Some(ref sibling_version_str) = sibling.version else {
+                continue; // Sibling has no version
+            };
+
+            // Parse the version constraint and sibling version using semver
+            let constraint = match semver::VersionReq::parse(constraint_str) {
+                Ok(req) => req,
+                Err(_) => {
+                    // Can't parse constraint — skip (e.g. unusual Dart constraint syntax)
+                    continue;
+                }
+            };
+
+            // Dart versions may have +buildNumber; strip it for semver parsing
+            let version_for_semver = sibling_version_str.split('+').next().unwrap_or(sibling_version_str);
+            let sibling_version = match semver::Version::parse(version_for_semver) {
+                Ok(v) => v,
+                Err(_) => {
+                    continue; // Can't parse version — skip
+                }
+            };
+
+            if !constraint.matches(&sibling_version) {
+                violations.push(format!(
+                    "  {} depends on {} {} but workspace has {}",
+                    pkg.name, dep_name, constraint_str, sibling_version_str
+                ));
+            }
+        }
+    }
+
+    if violations.is_empty() {
+        println!(
+            "  {} All workspace dependency version constraints satisfied.\n",
+            "OK".green()
+        );
+        return Ok(());
+    }
+
+    let msg = format!(
+        "Version constraint violations found ({} issue{}):\n{}\n\n\
+         Update the version constraints in pubspec.yaml to match the workspace packages' actual versions.",
+        violations.len(),
+        if violations.len() == 1 { "" } else { "s" },
+        violations.join("\n")
+    );
+    anyhow::bail!(msg);
 }
 
 /// Build the `pub get` command string with optional flags.
@@ -331,6 +419,7 @@ mod tests {
             publish_to: None,
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
         }
     }
 
@@ -493,5 +582,78 @@ mod tests {
     fn test_config_enforce_lockfile_none() {
         let ws = make_workspace(None);
         assert!(!config_enforce_lockfile(&ws));
+    }
+
+    // -----------------------------------------------------------------------
+    // enforce_versions tests
+    // -----------------------------------------------------------------------
+
+    fn make_versioned_package(name: &str, version: &str, deps: Vec<&str>, dep_versions: Vec<(&str, &str)>) -> Package {
+        Package {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/workspace/packages/{}", name)),
+            version: Some(version.to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: deps.into_iter().map(String::from).collect(),
+            dev_dependencies: vec![],
+            dependency_versions: dep_versions.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    #[test]
+    fn test_enforce_versions_all_satisfied() {
+        let core = make_versioned_package("core", "1.2.3", vec![], vec![]);
+        let app = make_versioned_package("app", "1.0.0", vec!["core"], vec![("core", "^1.0.0")]);
+        let all = vec![core.clone(), app.clone()];
+        assert!(enforce_versions(&[app], &all).is_ok());
+    }
+
+    #[test]
+    fn test_enforce_versions_violation() {
+        let core = make_versioned_package("core", "2.0.0", vec![], vec![]);
+        let app = make_versioned_package("app", "1.0.0", vec!["core"], vec![("core", "^1.0.0")]);
+        let all = vec![core.clone(), app.clone()];
+        let result = enforce_versions(&[app], &all);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("app"));
+        assert!(err.contains("core"));
+        assert!(err.contains("^1.0.0"));
+        assert!(err.contains("2.0.0"));
+    }
+
+    #[test]
+    fn test_enforce_versions_no_constraint_skipped() {
+        // If there's no version constraint (path-only dep), it's fine
+        let core = make_versioned_package("core", "2.0.0", vec![], vec![]);
+        let app = make_versioned_package("app", "1.0.0", vec!["core"], vec![]);
+        let all = vec![core.clone(), app.clone()];
+        assert!(enforce_versions(&[app], &all).is_ok());
+    }
+
+    #[test]
+    fn test_enforce_versions_non_workspace_dep_skipped() {
+        // External deps should not be checked
+        let app = make_versioned_package("app", "1.0.0", vec!["http"], vec![("http", "^0.13.0")]);
+        let all = vec![app.clone()];
+        assert!(enforce_versions(&[app], &all).is_ok());
+    }
+
+    #[test]
+    fn test_config_enforce_versions_default() {
+        let ws = make_workspace(None);
+        assert!(!config_enforce_versions(&ws));
+    }
+
+    #[test]
+    fn test_config_enforce_versions_true() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: None,
+            enforce_versions_for_dependency_resolution: Some(true),
+            enforce_lockfile: None,
+            hooks: None,
+        }));
+        assert!(config_enforce_versions(&ws));
     }
 }

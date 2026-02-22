@@ -5,7 +5,7 @@ use colored::Colorize;
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
 use crate::package::filter::{apply_filters_with_categories, topological_sort};
-use crate::runner::ProcessRunner;
+use crate::runner::{ProcessRunner, create_progress_bar};
 use crate::workspace::Workspace;
 
 /// Arguments for the `exec` command
@@ -98,10 +98,12 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     };
 
     // Execute command in each package (runner handles per-package env vars + colored output)
+    let pb = create_progress_bar(packages.len() as u64, "exec");
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let results = runner
-        .run_in_packages(&packages, &cmd_str, &workspace.env_vars(), timeout)
+        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), timeout, Some(&pb))
         .await?;
+    pb.finish_and_clear();
 
     // Count failures
     let failed = results.iter().filter(|(_, success)| !success).count();

@@ -5,7 +5,7 @@ use colored::Colorize;
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
 use crate::package::filter::apply_filters_with_categories;
-use crate::runner::ProcessRunner;
+use crate::runner::{ProcessRunner, create_progress_bar};
 use crate::workspace::Workspace;
 
 /// Arguments for the `publish` command
@@ -132,10 +132,12 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         cmd.push_str(" --force");
     }
 
+    let pb = create_progress_bar(packages.len() as u64, "publishing");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages(&packages, &cmd, &workspace.env_vars(), None)
+        .run_in_packages_with_progress(&packages, &cmd, &workspace.env_vars(), None, Some(&pb))
         .await?;
+    pb.finish_and_clear();
 
     let failed = results.iter().filter(|(_, success)| !success).count();
     let succeeded: Vec<_> = results

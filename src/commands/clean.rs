@@ -4,7 +4,7 @@ use colored::Colorize;
 use crate::cli::CleanArgs;
 use crate::config::filter::PackageFilters;
 use crate::package::filter::apply_filters_with_categories;
-use crate::runner::ProcessRunner;
+use crate::runner::{ProcessRunner, create_progress_bar};
 use crate::workspace::Workspace;
 
 /// Paths removed during a deep clean
@@ -77,16 +77,18 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         .collect();
 
     let mut failed = 0u32;
+    let pb = create_progress_bar(all_filtered.len() as u64, "cleaning");
 
     if !flutter_packages.is_empty() {
-        println!("{}", "Running flutter clean...".dimmed());
+        pb.set_message("flutter clean...");
         let runner = ProcessRunner::new(1, false);
         let results = runner
-            .run_in_packages(
+            .run_in_packages_with_progress(
                 &flutter_packages,
                 "flutter clean",
                 &workspace.env_vars(),
                 None,
+                Some(&pb),
             )
             .await?;
 
@@ -102,6 +104,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
 
     // For pure Dart packages, remove build artifacts
     if !dart_packages.is_empty() {
+        pb.set_message("cleaning dart packages...");
         println!("{}", "Cleaning pure Dart packages...".dimmed());
         for pkg in &dart_packages {
             // Remove build/ directory if present
@@ -133,8 +136,11 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
             }
 
             println!("  {} {}", "CLEANED".green(), pkg.name);
+            pb.inc(1);
         }
     }
+
+    pb.finish_and_clear();
 
     // Deep clean: remove additional artifacts from ALL packages
     if args.deep {

@@ -12,7 +12,7 @@ use colored::Colorize;
 
 /// Built-in command names that can be overridden by scripts with the same name.
 const OVERRIDABLE_COMMANDS: &[&str] = &[
-    "analyze", "bootstrap", "bs", "clean", "exec", "format", "list", "pub", "publish", "run", "version",
+    "analyze", "bootstrap", "bs", "clean", "exec", "format", "health", "list", "pub", "publish", "run", "version",
 ];
 
 #[tokio::main]
@@ -110,6 +110,7 @@ async fn main() -> Result<()> {
             Commands::Completion(_) => unreachable!("completion handled above"),
             Commands::Exec(args) => commands::exec::run(&workspace, args).await,
             Commands::Format(args) => commands::format::run(&workspace, args).await,
+            Commands::Health(args) => commands::health::run(&workspace, args).await,
             Commands::Init(_) => unreachable!("init handled above"),
             Commands::List(args) => commands::list::run(&workspace, args).await,
             Commands::Pub(args) => commands::pub_cmds::run(&workspace, args).await,
@@ -142,6 +143,7 @@ fn get_overridable_command_name(command: &Commands) -> Option<&'static str> {
         Commands::Clean(_) => "clean",
         Commands::Exec(_) => "exec",
         Commands::Format(_) => "format",
+        Commands::Health(_) => "health",
         Commands::List(_) => "list",
         Commands::Pub(_) => "pub",
         Commands::Publish(_) => "publish",

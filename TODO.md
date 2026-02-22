@@ -225,19 +225,43 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 ## Known Gaps & Dead Code
 
 ### Dead code (parsed but not wired)
-- [ ] `BootstrapCommandConfig::enforce_versions_for_dependency_resolution` — parsed from config, has `#[allow(dead_code)]` at `src/config/mod.rs:669`. Needs to be consulted during bootstrap dependency resolution.
+- [x] `BootstrapCommandConfig::enforce_versions_for_dependency_resolution` — parsed from config, has `#[allow(dead_code)]` at `src/config/mod.rs:669`. Needs to be consulted during bootstrap dependency resolution.
 
 ### Missing commands / features
 - [ ] `build:android` / `build:ios` wrapper commands (flavor/environment support, artifact resolution, simulator/bundletool)
 - [ ] Release branch management (auto-create/merge release branches during `version`)
-- [ ] Progress bars with `indicatif` for more commands (only bootstrap has one currently)
+- [x] Progress bars with `indicatif` for more commands (only bootstrap has one currently)
 - [ ] Watch mode for development (`--watch` flag on exec/run)
 
 ## Phase 4: Parity & Beyond
 
-- [ ] Full Melos CLI flag compatibility audit
+- [x] Full Melos CLI flag compatibility audit
 - [ ] Migration guide from Melos to melos-rs
 - [ ] Performance benchmarks vs Melos
 - [ ] Plugin system for custom commands
 - [ ] GitHub Actions integration helpers
-- [ ] Monorepo health checks (unused deps, version drift)
+- [x] Monorepo health checks (unused deps, version drift)
+
+## Batch 17: Health, Progress & CLI Parity
+
+- [x] Wire `enforce_versions_for_dependency_resolution` in bootstrap (dead code → functional)
+  - Added `dependency_versions: HashMap<String, String>` field to `Package` struct
+  - Added `extract_version_constraint()` helper for YAML value parsing
+  - `enforce_versions()` validates workspace sibling version constraints using `semver`
+  - Removed `#[allow(dead_code)]` from config field
+- [x] Add progress bars (`indicatif`) to exec, clean, format, analyze, publish
+  - Added `create_progress_bar()` helper in `runner/mod.rs` for consistent style
+  - Used `run_in_packages_with_progress()` for real-time progress tracking
+  - Refactored bootstrap to use shared helper
+- [x] Melos CLI flag compatibility audit
+  - Fixed format `--concurrency` default: 5 → 1 (matching Melos)
+  - Added `--no-enforce-lockfile` flag to bootstrap
+  - Added list shorthand flags: `-r` (relative), `-p` (parsable), `--graph`, `--gviz`, `--mermaid`
+  - Renamed version `--no-git-tag` to `--no-git-tag-version` (with alias for backward compat)
+  - Added version `--changelog / -c` positive toggle and `--git-tag-version / -t`
+- [x] Monorepo health checks command (`melos-rs health`)
+  - `--version-drift`: detects same external dep at different constraint versions
+  - `--missing-fields`: checks public packages for description, homepage/repository, version
+  - `--sdk-consistency`: checks Dart/Flutter SDK constraints are consistent across packages
+  - `--all / -a`: runs all checks (default if none selected)
+  - Includes filtering support via `GlobalFilterArgs`

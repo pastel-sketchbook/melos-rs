@@ -45,8 +45,24 @@ pub struct ListArgs {
     pub format: ListFormat,
 
     /// Show relative paths instead of absolute
-    #[arg(long)]
+    #[arg(short, long)]
     pub relative: bool,
+
+    /// Output as parsable list (shorthand for --format=parsable)
+    #[arg(short, long)]
+    pub parsable: bool,
+
+    /// Show dependency graph (shorthand for --format=graph)
+    #[arg(long)]
+    pub graph: bool,
+
+    /// Show dependency graph in Graphviz DOT language (shorthand for --format=gviz)
+    #[arg(long)]
+    pub gviz: bool,
+
+    /// Show dependency graph in Mermaid diagram format (shorthand for --format=mermaid)
+    #[arg(long)]
+    pub mermaid: bool,
 
     /// Detect and report dependency cycles
     #[arg(long)]
@@ -71,9 +87,17 @@ pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
         return detect_and_report_cycles(&packages);
     }
 
-    // Determine effective format (--json flag overrides --format)
+    // Determine effective format (shorthand flags override --format)
     let format = if args.json {
         ListFormat::Json
+    } else if args.parsable {
+        ListFormat::Parsable
+    } else if args.graph {
+        ListFormat::Graph
+    } else if args.gviz {
+        ListFormat::Gviz
+    } else if args.mermaid {
+        ListFormat::Mermaid
     } else {
         args.format
     };
@@ -336,6 +360,7 @@ mod tests {
             publish_to: None,
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
         }
     }
 

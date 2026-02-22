@@ -42,9 +42,17 @@ pub struct VersionArgs {
     #[arg(long)]
     pub no_changelog: bool,
 
+    /// Generate changelogs (default: true). Alias for the positive side of --[no-]changelog.
+    #[arg(short = 'c', long, conflicts_with = "no_changelog")]
+    pub changelog: bool,
+
     /// Skip git tag creation
-    #[arg(long)]
-    pub no_git_tag: bool,
+    #[arg(long, alias = "no-git-tag")]
+    pub no_git_tag_version: bool,
+
+    /// Create git tags (default: true). Short flag for --[no-]git-tag-version.
+    #[arg(short = 't', long, conflicts_with = "no_git_tag_version")]
+    pub git_tag_version: bool,
 
     /// Skip pushing commits and tags to remote
     #[arg(long)]
@@ -999,7 +1007,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     } else {
         version_config.is_none_or(|c| c.should_changelog())
     };
-    let should_tag = if args.no_git_tag {
+    let should_tag = if args.no_git_tag_version {
         false
     } else {
         version_config.is_none_or(|c| c.should_tag())
@@ -2603,6 +2611,7 @@ dependencies:
                 is_flutter: false,
                 dependencies: vec!["core_lib".to_string()],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
                 publish_to: None,
             },
         ];
@@ -2639,6 +2648,7 @@ dependencies:
                 is_flutter: false,
                 dependencies: vec!["core_lib".to_string()],
                 dev_dependencies: vec![],
+                dependency_versions: HashMap::new(),
                 publish_to: None,
             },
         ];

@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod clean;
 pub mod exec;
 pub mod format;
+pub mod health;
 pub mod init;
 pub mod list;
 pub mod pub_cmds;

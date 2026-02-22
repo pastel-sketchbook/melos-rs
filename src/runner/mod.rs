@@ -3,9 +3,26 @@ use std::time::Duration;
 
 use anyhow::Result;
 use colored::{Color, Colorize};
+use indicatif::{ProgressBar, ProgressStyle};
 use tokio::sync::Semaphore;
 
 use crate::package::Package;
+
+/// Create a styled progress bar for package processing.
+///
+/// Uses a consistent style across all commands:
+/// `{spinner} [{bar}] {pos}/{len} {msg}`
+pub fn create_progress_bar(total: u64, message: &str) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=> "),
+    );
+    pb.set_message(message.to_string());
+    pb
+}
 
 /// Colors assigned to packages for distinguishing concurrent output
 const PKG_COLORS: &[Color] = &[
@@ -54,6 +71,20 @@ impl ProcessRunner {
         env_vars: &HashMap<String, String>,
         timeout: Option<Duration>,
     ) -> Result<Vec<(String, bool)>> {
+        self.run_in_packages_with_progress(packages, command, env_vars, timeout, None)
+            .await
+    }
+
+    /// Like [`run_in_packages`] but accepts an optional [`ProgressBar`] that is
+    /// incremented in real time as each package command completes.
+    pub async fn run_in_packages_with_progress(
+        &self,
+        packages: &[Package],
+        command: &str,
+        env_vars: &HashMap<String, String>,
+        timeout: Option<Duration>,
+        progress: Option<&ProgressBar>,
+    ) -> Result<Vec<(String, bool)>> {
         let semaphore = std::sync::Arc::new(Semaphore::new(self.concurrency));
         let results = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -77,6 +108,7 @@ impl ProcessRunner {
 
             // Build per-package env vars merged with workspace vars
             let env = build_package_env(env_vars, pkg);
+            let pb = progress.cloned();
 
             let handle = tokio::spawn(async move {
                 let _permit = sem.acquire().await.unwrap();
@@ -144,6 +176,9 @@ impl ProcessRunner {
                 }
 
                 results.lock().await.push((pkg_name, success));
+                if let Some(ref pb) = pb {
+                    pb.inc(1);
+                }
             });
 
             handles.push(handle);

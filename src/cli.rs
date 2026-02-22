@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use clap_complete::Shell;
 
 use crate::commands::{
-    analyze::AnalyzeArgs, exec::ExecArgs, format::FormatArgs, init::InitArgs, list::ListArgs,
-    pub_cmds::PubArgs, publish::PublishArgs, run::RunArgs, version::VersionArgs,
+    analyze::AnalyzeArgs, exec::ExecArgs, format::FormatArgs, health::HealthArgs, init::InitArgs,
+    list::ListArgs, pub_cmds::PubArgs, publish::PublishArgs, run::RunArgs, version::VersionArgs,
 };
 
 /// melos-rs: A Rust CLI for Flutter/Dart monorepo management
@@ -173,6 +173,9 @@ pub enum Commands {
     /// Format Dart code across packages using `dart format`
     Format(FormatArgs),
 
+    /// Run workspace health checks (version drift, missing fields, SDK consistency)
+    Health(HealthArgs),
+
     /// Initialize a new Melos workspace
     Init(InitArgs),
 
@@ -202,6 +205,10 @@ pub struct BootstrapArgs {
     /// Enforce the pubspec.lock file (pass --enforce-lockfile to pub get)
     #[arg(long)]
     pub enforce_lockfile: bool,
+
+    /// Disable enforce-lockfile even if configured in melos.yaml
+    #[arg(long, conflicts_with = "enforce_lockfile")]
+    pub no_enforce_lockfile: bool,
 
     /// Skip resolving dependencies in example apps
     #[arg(long)]

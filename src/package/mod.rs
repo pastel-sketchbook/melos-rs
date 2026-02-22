@@ -29,6 +29,13 @@ pub struct Package {
 
     /// Dev dependencies listed in pubspec.yaml
     pub dev_dependencies: Vec<String>,
+
+    /// Version constraints for dependencies (dep name -> constraint string, e.g. "^1.0.0").
+    ///
+    /// Only populated for dependencies that specify a version constraint (string or
+    /// mapping with a `version` key). SDK deps, path-only deps, and git-only deps
+    /// are excluded.
+    pub dependency_versions: HashMap<String, String>,
 }
 
 /// Minimal pubspec.yaml structure for parsing
@@ -74,6 +81,16 @@ impl Package {
             .map(|deps| deps.keys().cloned().collect())
             .unwrap_or_default();
 
+        // Extract version constraints from both deps and dev_deps
+        let mut dependency_versions = HashMap::new();
+        for deps_map in [&pubspec.dependencies, &pubspec.dev_dependencies].iter().copied().flatten() {
+            for (name, value) in deps_map {
+                if let Some(constraint) = extract_version_constraint(value) {
+                    dependency_versions.insert(name.clone(), constraint);
+                }
+            }
+        }
+
         // A package is a Flutter package if it has a `flutter` key at the top level
         // or depends on the `flutter` SDK
         let is_flutter = pubspec.flutter.is_some()
@@ -97,6 +114,7 @@ impl Package {
             publish_to: pubspec.publish_to,
             dependencies,
             dev_dependencies,
+            dependency_versions,
         })
     }
 
@@ -121,6 +139,37 @@ impl Package {
     /// Check if a directory exists relative to this package's directory
     pub fn dir_exists(&self, relative_path: &str) -> bool {
         self.path.join(relative_path).is_dir()
+    }
+}
+
+/// Extract a version constraint string from a YAML dependency value.
+///
+/// Supports:
+///   - String value: `"^1.0.0"` -> `Some("^1.0.0")`
+///   - Mapping with `version` key: `{version: "^1.0.0", path: "../core"}` -> `Some("^1.0.0")`
+///   - SDK/path-only/git-only deps: -> `None`
+fn extract_version_constraint(value: &yaml_serde::Value) -> Option<String> {
+    match value {
+        yaml_serde::Value::String(s) => {
+            let trimmed = s.trim();
+            // Skip "any" — it's not a real constraint
+            if trimmed.is_empty() || trimmed == "any" {
+                return None;
+            }
+            Some(trimmed.to_string())
+        }
+        yaml_serde::Value::Mapping(map) => {
+            // Check for a "version" key in the mapping
+            let version_key = yaml_serde::Value::String("version".to_string());
+            if let Some(yaml_serde::Value::String(v)) = map.get(&version_key) {
+                let trimmed = v.trim();
+                if !trimmed.is_empty() && trimmed != "any" {
+                    return Some(trimmed.to_string());
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -228,6 +277,7 @@ mod tests {
             publish_to: Some("NONE".to_string()),
             dependencies: vec![],
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
         };
         assert!(pkg.is_private());
     }
@@ -242,6 +292,7 @@ mod tests {
             publish_to: Some("https://pub.dev".to_string()),
             dependencies: vec![],
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
         };
         assert!(!pkg.is_private());
     }
@@ -256,6 +307,7 @@ mod tests {
             publish_to: None,
             dependencies: vec![],
             dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
         };
         assert!(!pkg.is_private());
     }
@@ -270,6 +322,7 @@ mod tests {
             publish_to: None,
             dependencies: vec!["http".to_string()],
             dev_dependencies: vec!["test".to_string()],
+            dependency_versions: HashMap::new(),
         };
         assert!(pkg.has_dependency("http"));
         assert!(pkg.has_dependency("test"));
@@ -299,5 +352,62 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let result = Package::from_path(dir.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dependency_versions_parsed() {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: pkg\nversion: 1.0.0\ndependencies:\n  http: ^0.13.0\n  core:\n    version: ^2.0.0\n    path: ../core\n  flutter:\n    sdk: flutter\ndev_dependencies:\n  test: ^1.0.0\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        assert_eq!(pkg.dependency_versions.get("http").map(|s| s.as_str()), Some("^0.13.0"));
+        assert_eq!(pkg.dependency_versions.get("core").map(|s| s.as_str()), Some("^2.0.0"));
+        assert_eq!(pkg.dependency_versions.get("test").map(|s| s.as_str()), Some("^1.0.0"));
+        // flutter SDK dep should have no version constraint
+        assert!(pkg.dependency_versions.get("flutter").is_none());
+    }
+
+    #[test]
+    fn test_extract_version_constraint_string() {
+        let val = yaml_serde::Value::String("^1.0.0".to_string());
+        assert_eq!(extract_version_constraint(&val), Some("^1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_version_constraint_any() {
+        let val = yaml_serde::Value::String("any".to_string());
+        assert_eq!(extract_version_constraint(&val), None);
+    }
+
+    #[test]
+    fn test_extract_version_constraint_mapping_with_version() {
+        let mut map = yaml_serde::Mapping::new();
+        map.insert(
+            yaml_serde::Value::String("version".to_string()),
+            yaml_serde::Value::String("^2.0.0".to_string()),
+        );
+        map.insert(
+            yaml_serde::Value::String("path".to_string()),
+            yaml_serde::Value::String("../core".to_string()),
+        );
+        let val = yaml_serde::Value::Mapping(map);
+        assert_eq!(extract_version_constraint(&val), Some("^2.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_version_constraint_sdk_dep() {
+        let mut map = yaml_serde::Mapping::new();
+        map.insert(
+            yaml_serde::Value::String("sdk".to_string()),
+            yaml_serde::Value::String("flutter".to_string()),
+        );
+        let val = yaml_serde::Value::Mapping(map);
+        assert_eq!(extract_version_constraint(&val), None);
     }
 }

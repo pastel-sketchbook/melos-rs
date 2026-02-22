@@ -5,7 +5,7 @@ use colored::Colorize;
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
 use crate::package::filter::apply_filters_with_categories;
-use crate::runner::ProcessRunner;
+use crate::runner::{ProcessRunner, create_progress_bar};
 use crate::workspace::Workspace;
 
 /// Arguments for the `analyze` command
@@ -77,10 +77,12 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
 
     let cmd_str = cmd_parts.join(" ");
 
+    let pb = create_progress_bar(packages.len() as u64, "analyzing");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages(&packages, &cmd_str, &workspace.env_vars(), None)
+        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), None, Some(&pb))
         .await?;
+    pb.finish_and_clear();
 
     let failed = results.iter().filter(|(_, success)| !success).count();
 
