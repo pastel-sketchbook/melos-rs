@@ -1,11 +1,15 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
+use crate::package::Package;
 use crate::package::filter::{apply_filters_with_categories, topological_sort};
 use crate::runner::{ProcessRunner, create_progress_bar};
+use crate::watcher;
 use crate::workspace::Workspace;
 
 /// Arguments for the `exec` command
@@ -35,6 +39,10 @@ pub struct ExecArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// Watch for file changes and re-run on change
+    #[arg(long)]
+    pub watch: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -42,11 +50,7 @@ pub struct ExecArgs {
 /// Execute a command across all matching packages
 pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     let cmd_str = args.command.join(" ");
-    println!(
-        "\n{} Running '{}' in packages...\n",
-        "$".cyan(),
-        cmd_str.bold()
-    );
+    let watch_mode = args.watch;
 
     // Apply filters from CLI flags
     let filters: PackageFilters = (&args.filters).into();
@@ -60,6 +64,36 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     // Apply topological sort if requested
     if args.order_dependents {
         packages = topological_sort(&packages);
+    }
+
+    // Initial run
+    run_exec_once(&cmd_str, &packages, &args, workspace).await?;
+
+    // If watch mode, start watching and re-run on changes
+    if watch_mode {
+        run_watch_loop(&cmd_str, &packages, &args, workspace).await?;
+    }
+
+    Ok(())
+}
+
+/// Execute the command once across the given packages.
+///
+/// Returns Ok(()) even if some packages fail (the error count is printed).
+/// Only returns Err if watch mode is NOT active and packages failed.
+async fn run_exec_once(
+    cmd_str: &str,
+    packages: &[Package],
+    args: &ExecArgs,
+    workspace: &Workspace,
+) -> Result<()> {
+    println!(
+        "\n{} Running '{}' in packages...\n",
+        "$".cyan(),
+        cmd_str.bold()
+    );
+
+    if args.order_dependents {
         println!(
             "{} Packages ordered by dependencies (topological sort)\n",
             "i".blue()
@@ -79,7 +113,7 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
         timeout_display,
     );
 
-    for pkg in &packages {
+    for pkg in packages {
         println!("  {} {}", "->".cyan(), pkg.name);
     }
     println!();
@@ -101,7 +135,7 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     let pb = create_progress_bar(packages.len() as u64, "exec");
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let results = runner
-        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), timeout, Some(&pb))
+        .run_in_packages_with_progress(packages, cmd_str, &workspace.env_vars(), timeout, Some(&pb))
         .await?;
     pb.finish_and_clear();
 
@@ -109,8 +143,190 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     let failed = results.iter().filter(|(_, success)| !success).count();
 
     if failed > 0 {
-        anyhow::bail!("{} package(s) failed", failed);
+        if args.watch {
+            // In watch mode, don't bail — just report and keep watching
+            eprintln!(
+                "\n{} {} package(s) failed. Watching for changes...",
+                "!".yellow().bold(),
+                failed
+            );
+        } else {
+            anyhow::bail!("{} package(s) failed", failed);
+        }
     }
 
     Ok(())
+}
+
+/// Run the watch loop: wait for file changes, then re-execute in affected packages.
+async fn run_watch_loop(
+    cmd_str: &str,
+    packages: &[Package],
+    args: &ExecArgs,
+    workspace: &Workspace,
+) -> Result<()> {
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    // Clone packages for the watcher thread
+    let watch_packages: Vec<Package> = packages.to_vec();
+
+    // Spawn the file watcher on a blocking thread (it uses std::sync channels)
+    let watcher_handle = tokio::task::spawn_blocking(move || {
+        watcher::start_watching(&watch_packages, 0, event_tx, shutdown_rx)
+    });
+
+    // Set up Ctrl+C handler
+    let shutdown_tx_ctrlc = shutdown_tx.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            println!("\n{} Stopping watcher...", "!".yellow());
+            let _ = shutdown_tx_ctrlc.send(()).await;
+        }
+    });
+
+    // Watch loop: collect change events and re-run
+    loop {
+        // Wait for the first change event
+        let first_event = match event_rx.recv().await {
+            Some(e) => e,
+            None => break, // Watcher stopped
+        };
+
+        // Collect all pending events (drain the channel for batch processing)
+        let mut changed_packages = HashSet::new();
+        changed_packages.insert(first_event.package_name);
+
+        // Drain any additional events that arrived during the debounce window
+        while let Ok(event) = event_rx.try_recv() {
+            changed_packages.insert(event.package_name);
+        }
+
+        // Filter to only the packages that changed
+        let affected: Vec<Package> = packages
+            .iter()
+            .filter(|p| changed_packages.contains(&p.name))
+            .cloned()
+            .collect();
+
+        if affected.is_empty() {
+            continue;
+        }
+
+        println!(
+            "\n{} Changes detected in: {}\n",
+            "↻".cyan().bold(),
+            watcher::format_changed_packages(&changed_packages).bold(),
+        );
+
+        // Re-run the command in affected packages
+        // Build timeout Duration
+        let timeout = if args.timeout > 0 {
+            Some(std::time::Duration::from_secs(args.timeout))
+        } else {
+            None
+        };
+
+        let pb = create_progress_bar(affected.len() as u64, "exec");
+        let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
+        let results = runner
+            .run_in_packages_with_progress(&affected, cmd_str, &workspace.env_vars(), timeout, Some(&pb))
+            .await;
+        pb.finish_and_clear();
+
+        match results {
+            Ok(ref r) => {
+                let failed = r.iter().filter(|(_, success)| !success).count();
+                if failed > 0 {
+                    eprintln!(
+                        "\n{} {} package(s) failed. Watching for changes...",
+                        "!".yellow().bold(),
+                        failed
+                    );
+                } else {
+                    println!(
+                        "\n{} All packages succeeded. Watching for changes...",
+                        "✓".green().bold(),
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "\n{} Execution error: {}. Watching for changes...",
+                    "!".red().bold(),
+                    e,
+                );
+            }
+        }
+    }
+
+    // Signal watcher to stop and wait for it
+    let _ = shutdown_tx.send(()).await;
+    let _ = watcher_handle.await;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exec_args_defaults() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: ExecArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "flutter", "test"]);
+        assert_eq!(cli.args.command, vec!["flutter", "test"]);
+        assert_eq!(cli.args.concurrency, 5);
+        assert!(!cli.args.fail_fast);
+        assert!(!cli.args.order_dependents);
+        assert_eq!(cli.args.timeout, 0);
+        assert!(!cli.args.dry_run);
+        assert!(!cli.args.watch);
+    }
+
+    #[test]
+    fn test_exec_args_watch_flag() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: ExecArgs,
+        }
+
+        let cli = TestCli::parse_from(["test", "--watch", "flutter", "test"]);
+        assert!(cli.args.watch);
+        assert_eq!(cli.args.command, vec!["flutter", "test"]);
+    }
+
+    #[test]
+    fn test_exec_args_all_flags() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            args: ExecArgs,
+        }
+
+        let cli = TestCli::parse_from([
+            "test", "--watch", "--fail-fast", "--order-dependents",
+            "--dry-run", "-c", "3", "--timeout", "60",
+            "dart", "analyze", ".",
+        ]);
+        assert!(cli.args.watch);
+        assert!(cli.args.fail_fast);
+        assert!(cli.args.order_dependents);
+        assert!(cli.args.dry_run);
+        assert_eq!(cli.args.concurrency, 3);
+        assert_eq!(cli.args.timeout, 60);
+        assert_eq!(cli.args.command, vec!["dart", "analyze", "."]);
+    }
 }

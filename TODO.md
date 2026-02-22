@@ -190,10 +190,10 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 ### Developer Experience
 - [x] `melos-rs init` - scaffold new 7.x workspace (with `--legacy` for 6.x)
 - [x] Tab completion for bash/zsh/fish (`completion` subcommand via `clap_complete`)
-- [ ] Progress bars with `indicatif` for more commands _(see "Known Gaps" section below)_
+- [x] Progress bars with `indicatif` for more commands _(see "Known Gaps" section below)_
 - [x] Verbose/quiet log levels (`--verbose` / `--quiet` global flags)
 - [x] Config validation and helpful warning messages
-- [ ] Watch mode for development (`--watch`) _(see "Known Gaps" section below)_
+- [x] Watch mode for development (`--watch`) _(see "Known Gaps" section below)_
 
 ## Batch 14: Bootstrap Maturity & Version Polish
 
@@ -231,7 +231,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [ ] `build:android` / `build:ios` wrapper commands (flavor/environment support, artifact resolution, simulator/bundletool)
 - [ ] Release branch management (auto-create/merge release branches during `version`)
 - [x] Progress bars with `indicatif` for more commands (only bootstrap has one currently)
-- [ ] Watch mode for development (`--watch` flag on exec/run)
+- [x] Watch mode for development (`--watch` flag on exec/run)
 
 ## Phase 4: Parity & Beyond
 
@@ -265,3 +265,24 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - `--sdk-consistency`: checks Dart/Flutter SDK constraints are consistent across packages
   - `--all / -a`: runs all checks (default if none selected)
   - Includes filtering support via `GlobalFilterArgs`
+
+## Batch 18: Watch Mode
+
+- [x] File watcher module (`src/watcher/mod.rs`) using `notify` + `notify-debouncer-mini`
+  - Watches package directories recursively for `.dart`, `.yaml`, `.json`, `.arb`, `.g.dart` files
+  - Filters out build artifacts (`.dart_tool/`, `build/`, `.symlinks/`, `.fvm/`, IDE dirs)
+  - 500ms debounce window to coalesce rapid changes
+  - Identifies which package owns each changed file
+  - Graceful shutdown via channel signal
+- [x] `--watch` flag on `exec` command
+  - Runs command initially across all matched packages
+  - Watches for file changes and re-runs only in affected packages
+  - In watch mode, failures are reported but don't stop watching
+  - Ctrl+C cleanly stops the watcher
+- [x] `--watch` flag on `run` command
+  - Runs named script initially, then watches for changes
+  - Watches packages matching script's `packageFilters` (or all packages)
+  - Re-runs the entire script on any change
+  - Works with all script modes: steps, exec config, and shell commands
+- [x] `PackageFilters::is_empty()` helper for detecting unfiltered state
+- [x] Tests: 29 new tests (watcher unit tests, integration tests, CLI flag parsing, filter tests)

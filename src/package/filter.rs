@@ -10,13 +10,28 @@ use crate::package::Package;
 ///
 /// Convenience wrapper for `apply_filters_with_categories` when categories
 /// are not available (e.g., in tests or when filtering without a full config).
+///
+/// IMPORTANT: This acquires `ENV_MUTEX` and temporarily removes `MELOS_PACKAGES`
+/// so that concurrent env-var tests don't pollute filter results.
 #[cfg(test)]
 pub fn apply_filters(
     packages: &[Package],
     filters: &PackageFilters,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<Package>> {
-    apply_filters_with_categories(packages, filters, workspace_root, &HashMap::new())
+    let _guard = tests::ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    // Save and remove MELOS_PACKAGES to prevent env-var pollution from parallel tests
+    let saved = std::env::var("MELOS_PACKAGES").ok();
+    if saved.is_some() {
+        // SAFETY: test-only code; protected by ENV_MUTEX
+        unsafe { std::env::remove_var("MELOS_PACKAGES") };
+    }
+    let result = apply_filters_with_categories(packages, filters, workspace_root, &HashMap::new());
+    // Restore if it was set
+    if let Some(val) = saved {
+        unsafe { std::env::set_var("MELOS_PACKAGES", &val) };
+    }
+    result
 }
 
 /// Apply package filters with category definitions from melos.yaml.
@@ -400,6 +415,12 @@ fn expand_with_dependents(matched: &[Package], all_packages: &[Package]) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guard to serialize tests that mutate the `MELOS_PACKAGES` environment variable.
+    /// Any test that sets/removes this env var MUST hold this lock for the
+    /// duration of the mutation + assertions, otherwise parallel tests that read
+    /// the env var (via `apply_filters`) may see stale/unexpected values.
+    pub(super) static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use std::path::PathBuf;
 
     fn make_package(name: &str, is_flutter: bool, deps: Vec<&str>) -> Package {
@@ -850,13 +871,15 @@ mod tests {
 
     #[test]
     fn test_melos_packages_env_overrides_scope() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
         let packages = vec![
             make_package("app_main", false, vec![]),
             make_package("core_lib", false, vec![]),
             make_package("utils", false, vec![]),
         ];
 
-        // SAFETY: test-only, tests run with --test-threads=1 for env var isolation
+        // SAFETY: test-only, protected by ENV_MUTEX
         unsafe { std::env::set_var("MELOS_PACKAGES", "core_lib,utils") };
 
         // Even though filters have no scope, MELOS_PACKAGES acts as scope
@@ -874,13 +897,15 @@ mod tests {
 
     #[test]
     fn test_melos_packages_env_overrides_existing_scope() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
         let packages = vec![
             make_package("app_main", false, vec![]),
             make_package("core_lib", false, vec![]),
             make_package("utils", false, vec![]),
         ];
 
-        // SAFETY: test-only, tests run with --test-threads=1 for env var isolation
+        // SAFETY: test-only, protected by ENV_MUTEX
         unsafe { std::env::set_var("MELOS_PACKAGES", "app_main") };
 
         // Filters have a different scope, but MELOS_PACKAGES overrides it
@@ -899,12 +924,14 @@ mod tests {
 
     #[test]
     fn test_melos_packages_env_empty_string_no_effect() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
         let packages = vec![
             make_package("app_main", false, vec![]),
             make_package("core_lib", false, vec![]),
         ];
 
-        // SAFETY: test-only, tests run with --test-threads=1 for env var isolation
+        // SAFETY: test-only, protected by ENV_MUTEX
         unsafe { std::env::set_var("MELOS_PACKAGES", "") };
 
         let filters = PackageFilters::default();

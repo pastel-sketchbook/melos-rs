@@ -12,12 +12,12 @@ path = "src/main.rs"
 [dependencies]
 # CLI
 clap = { version = "4.5.60", features = ["derive"] }
-clap_complete = "4.5"
+clap_complete = "4.5.66"
 
 # Serialization / Config
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
-yaml_serde = "0.10"
+serde_json = "1.0.149"
+yaml_serde = "0.10.3"
 
 # File system
 glob = "0.3.3"
@@ -40,7 +40,11 @@ regex = "1.12.3"
 semver = "1.0.27"
 
 # Path utilities
-pathdiff = "0.2"
+pathdiff = "0.2.3"
+
+# File watching
+notify = "8.2.0"
+notify-debouncer-mini = "0.7.0"
 
 [dev-dependencies]
-tempfile = "3.19"
+tempfile = "3.25.0"

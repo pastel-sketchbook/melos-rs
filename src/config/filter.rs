@@ -121,6 +121,23 @@ impl From<&GlobalFilterArgs> for PackageFilters {
 }
 
 impl PackageFilters {
+    /// Returns true if no filter criteria are set (everything is default/empty).
+    pub fn is_empty(&self) -> bool {
+        self.flutter.is_none()
+            && self.dir_exists.is_none()
+            && self.file_exists.is_none()
+            && self.depends_on.is_none()
+            && self.no_depends_on.is_none()
+            && self.ignore.is_none()
+            && self.scope.is_none()
+            && !self.no_private
+            && self.diff.is_none()
+            && self.category.is_none()
+            && !self.include_dependencies
+            && !self.include_dependents
+            && self.published.is_none()
+    }
+
     /// Merge another set of filters into this one. Values from `other` take precedence
     /// when both are set (non-None / non-empty).
     ///
@@ -347,5 +364,37 @@ mod tests {
         let b = PackageFilters::default();
         let merged = a.merge(&b);
         assert_eq!(merged.published, Some(true));
+    }
+
+    #[test]
+    fn test_is_empty_default() {
+        assert!(PackageFilters::default().is_empty());
+    }
+
+    #[test]
+    fn test_is_empty_with_scope() {
+        let f = PackageFilters {
+            scope: Some(vec!["app*".to_string()]),
+            ..Default::default()
+        };
+        assert!(!f.is_empty());
+    }
+
+    #[test]
+    fn test_is_empty_with_flutter() {
+        let f = PackageFilters {
+            flutter: Some(true),
+            ..Default::default()
+        };
+        assert!(!f.is_empty());
+    }
+
+    #[test]
+    fn test_is_empty_with_no_private() {
+        let f = PackageFilters {
+            no_private: true,
+            ..Default::default()
+        };
+        assert!(!f.is_empty());
     }
 }

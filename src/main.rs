@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod package;
 mod runner;
+mod watcher;
 mod workspace;
 
 use anyhow::Result;
@@ -99,6 +100,7 @@ async fn main() -> Result<()> {
             json: false,
             include_private: false,
             group: vec![],
+            watch: false,
             filters: cli::GlobalFilterArgs::default(),
         };
         commands::run::run(&workspace, run_args).await

@@ -9,8 +9,10 @@ use colored::Colorize;
 use crate::cli::GlobalFilterArgs;
 use crate::config::ScriptEntry;
 use crate::config::filter::PackageFilters;
+use crate::package::Package;
 use crate::package::filter::{apply_filters_with_categories, topological_sort};
 use crate::runner::ProcessRunner;
+use crate::watcher;
 use crate::workspace::Workspace;
 
 /// Maximum recursion depth for nested script references
@@ -42,6 +44,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub group: Vec<String>,
 
+    /// Watch for file changes and re-run the script on change
+    #[arg(long)]
+    pub watch: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -61,9 +67,137 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
         None => select_script_interactive(workspace, args.include_private, &args.group)?,
     };
 
+    let watch_mode = args.watch;
     let cli_filters: PackageFilters = (&args.filters).into();
+
+    // Initial run
     let mut visited = HashSet::new();
-    run_script_recursive(workspace, &script_name, &cli_filters, &mut visited, 0).await
+    let result = run_script_recursive(workspace, &script_name, &cli_filters, &mut visited, 0).await;
+
+    if let Err(e) = &result {
+        if watch_mode {
+            eprintln!(
+                "\n{} Script failed: {}. Watching for changes...",
+                "!".yellow().bold(),
+                e,
+            );
+        } else {
+            return result;
+        }
+    }
+
+    // If watch mode, start watching and re-run on changes
+    if watch_mode {
+        run_watch_loop(workspace, &script_name, &cli_filters).await?;
+    }
+
+    Ok(())
+}
+
+/// Run the watch loop for a named script: wait for file changes, then re-execute.
+///
+/// Watches all workspace packages (or just filtered ones if the script has packageFilters)
+/// and re-runs the entire script on any change.
+async fn run_watch_loop(
+    workspace: &Workspace,
+    script_name: &str,
+    cli_filters: &PackageFilters,
+) -> Result<()> {
+    // Determine which packages to watch:
+    // If the script has packageFilters, watch only those packages.
+    // Otherwise watch all workspace packages.
+    let script = workspace
+        .config
+        .scripts
+        .get(script_name)
+        .ok_or_else(|| anyhow::anyhow!("Script '{}' not found in config", script_name))?;
+
+    let watch_packages = if let Some(script_filters) = script.package_filters() {
+        let merged = script_filters.merge(cli_filters);
+        apply_filters_with_categories(
+            &workspace.packages,
+            &merged,
+            Some(&workspace.root_path),
+            &workspace.config.categories,
+        )?
+    } else if !cli_filters.is_empty() {
+        apply_filters_with_categories(
+            &workspace.packages,
+            cli_filters,
+            Some(&workspace.root_path),
+            &workspace.config.categories,
+        )?
+    } else {
+        workspace.packages.clone()
+    };
+
+    if watch_packages.is_empty() {
+        println!("{}", "No packages to watch.".yellow());
+        return Ok(());
+    }
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    let watch_pkgs_clone: Vec<Package> = watch_packages.to_vec();
+
+    let watcher_handle = tokio::task::spawn_blocking(move || {
+        watcher::start_watching(&watch_pkgs_clone, 0, event_tx, shutdown_rx)
+    });
+
+    // Set up Ctrl+C handler
+    let shutdown_tx_ctrlc = shutdown_tx.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            println!("\n{} Stopping watcher...", "!".yellow());
+            let _ = shutdown_tx_ctrlc.send(()).await;
+        }
+    });
+
+    // Watch loop
+    loop {
+        let first_event = match event_rx.recv().await {
+            Some(e) => e,
+            None => break,
+        };
+
+        let mut changed_packages = HashSet::new();
+        changed_packages.insert(first_event.package_name);
+        while let Ok(event) = event_rx.try_recv() {
+            changed_packages.insert(event.package_name);
+        }
+
+        println!(
+            "\n{} Changes detected in: {}\n",
+            "\u{21bb}".cyan().bold(),
+            watcher::format_changed_packages(&changed_packages).bold(),
+        );
+
+        // Re-run the entire script
+        let mut visited = HashSet::new();
+        match run_script_recursive(workspace, script_name, cli_filters, &mut visited, 0).await {
+            Ok(()) => {
+                println!(
+                    "\n{} Script '{}' succeeded. Watching for changes...",
+                    "\u{2713}".green().bold(),
+                    script_name,
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "\n{} Script '{}' failed: {}. Watching for changes...",
+                    "!".yellow().bold(),
+                    script_name,
+                    e,
+                );
+            }
+        }
+    }
+
+    let _ = shutdown_tx.send(()).await;
+    let _ = watcher_handle.await;
+
+    Ok(())
 }
 
 /// List available scripts.
