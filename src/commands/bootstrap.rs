@@ -29,6 +29,9 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     // otherwise CLI `-c N` (default 5) applies.
     let concurrency = effective_concurrency(workspace, args.concurrency);
 
+    // Merge CLI flags with config flags to determine extra pub get arguments.
+    let enforce_lockfile = args.enforce_lockfile || config_enforce_lockfile(workspace);
+
     println!(
         "\n{} Bootstrapping {} packages (concurrency: {}, dependency order)...\n",
         "$".cyan(),
@@ -47,10 +50,17 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     }
     println!();
 
+    // Run pre-bootstrap hook if configured
+    run_hook(workspace, HookPhase::Pre).await?;
+
     // In 6.x mode, generate pubspec_overrides.yaml for local package linking
     if workspace.config_source.is_legacy() {
         generate_pubspec_overrides(&packages, &workspace.packages)?;
     }
+
+    // Build the pub get command with extra flags
+    let flutter_cmd = build_pub_get_command("flutter", enforce_lockfile, args.no_example, args.offline);
+    let dart_cmd = build_pub_get_command("dart", enforce_lockfile, args.no_example, args.offline);
 
     let flutter_packages: Vec<_> = packages.iter().filter(|p| p.is_flutter).cloned().collect();
     let dart_packages: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
@@ -71,7 +81,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         let results = runner
             .run_in_packages(
                 &flutter_packages,
-                "flutter pub get",
+                &flutter_cmd,
                 &workspace.env_vars(),
                 None,
             )
@@ -91,7 +101,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         pb.set_message("dart pub get...");
         let runner = ProcessRunner::new(concurrency, true);
         let results = runner
-            .run_in_packages(&dart_packages, "dart pub get", &workspace.env_vars(), None)
+            .run_in_packages(&dart_packages, &dart_cmd, &workspace.env_vars(), None)
             .await?;
 
         for (name, success) in &results {
@@ -104,6 +114,10 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     }
 
     pb.finish_and_clear();
+
+    // Run post-bootstrap hook if configured
+    run_hook(workspace, HookPhase::Post).await?;
+
     println!("\n{}", "All packages bootstrapped.".green());
     Ok(())
 }
@@ -124,6 +138,77 @@ fn effective_concurrency(workspace: &Workspace, cli_concurrency: usize) -> usize
         Some(false) => 1,
         _ => cli_concurrency,
     }
+}
+
+/// Check if `enforce_lockfile` is set in bootstrap config.
+fn config_enforce_lockfile(workspace: &Workspace) -> bool {
+    workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref())
+        .and_then(|b| b.enforce_lockfile)
+        .unwrap_or(false)
+}
+
+/// Build the `pub get` command string with optional flags.
+fn build_pub_get_command(sdk: &str, enforce_lockfile: bool, no_example: bool, offline: bool) -> String {
+    let mut cmd = format!("{} pub get", sdk);
+    if enforce_lockfile {
+        cmd.push_str(" --enforce-lockfile");
+    }
+    if no_example {
+        cmd.push_str(" --no-example");
+    }
+    if offline {
+        cmd.push_str(" --offline");
+    }
+    cmd
+}
+
+/// Hook phase for bootstrap lifecycle hooks
+enum HookPhase {
+    Pre,
+    Post,
+}
+
+/// Run a bootstrap lifecycle hook if configured.
+async fn run_hook(workspace: &Workspace, phase: HookPhase) -> Result<()> {
+    let hook_cmd = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref())
+        .and_then(|b| b.hooks.as_ref())
+        .and_then(|h| match phase {
+            HookPhase::Pre => h.pre.as_deref(),
+            HookPhase::Post => h.post.as_deref(),
+        });
+
+    if let Some(hook) = hook_cmd {
+        let label = match phase {
+            HookPhase::Pre => "pre-bootstrap",
+            HookPhase::Post => "post-bootstrap",
+        };
+        println!(
+            "\n{} Running {} hook: {}",
+            "$".cyan(),
+            label,
+            hook
+        );
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(hook)
+            .current_dir(&workspace.root_path)
+            .status()
+            .await?;
+
+        if !status.success() {
+            anyhow::bail!("{} hook failed with exit code: {}", label, status.code().unwrap_or(-1));
+        }
+    }
+
+    Ok(())
 }
 
 /// Generate `pubspec_overrides.yaml` files for local package linking (Melos 6.x mode).
@@ -313,6 +398,8 @@ mod tests {
         let ws = make_workspace(Some(BootstrapCommandConfig {
             run_pub_get_in_parallel: Some(false),
             enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: None,
+            hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 5), 1);
     }
@@ -322,6 +409,8 @@ mod tests {
         let ws = make_workspace(Some(BootstrapCommandConfig {
             run_pub_get_in_parallel: Some(true),
             enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: None,
+            hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 8), 8);
     }
@@ -331,7 +420,75 @@ mod tests {
         let ws = make_workspace(Some(BootstrapCommandConfig {
             run_pub_get_in_parallel: None,
             enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: None,
+            hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 3), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_pub_get_command tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_pub_get_command_default() {
+        let cmd = build_pub_get_command("flutter", false, false, false);
+        assert_eq!(cmd, "flutter pub get");
+    }
+
+    #[test]
+    fn test_build_pub_get_command_enforce_lockfile() {
+        let cmd = build_pub_get_command("dart", true, false, false);
+        assert_eq!(cmd, "dart pub get --enforce-lockfile");
+    }
+
+    #[test]
+    fn test_build_pub_get_command_no_example() {
+        let cmd = build_pub_get_command("flutter", false, true, false);
+        assert_eq!(cmd, "flutter pub get --no-example");
+    }
+
+    #[test]
+    fn test_build_pub_get_command_offline() {
+        let cmd = build_pub_get_command("dart", false, false, true);
+        assert_eq!(cmd, "dart pub get --offline");
+    }
+
+    #[test]
+    fn test_build_pub_get_command_all_flags() {
+        let cmd = build_pub_get_command("flutter", true, true, true);
+        assert_eq!(cmd, "flutter pub get --enforce-lockfile --no-example --offline");
+    }
+
+    // -----------------------------------------------------------------------
+    // config_enforce_lockfile tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_config_enforce_lockfile_true() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: None,
+            enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: Some(true),
+            hooks: None,
+        }));
+        assert!(config_enforce_lockfile(&ws));
+    }
+
+    #[test]
+    fn test_config_enforce_lockfile_false() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: None,
+            enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: Some(false),
+            hooks: None,
+        }));
+        assert!(!config_enforce_lockfile(&ws));
+    }
+
+    #[test]
+    fn test_config_enforce_lockfile_none() {
+        let ws = make_workspace(None);
+        assert!(!config_enforce_lockfile(&ws));
     }
 }

@@ -151,6 +151,7 @@ impl GlobalFilterArgs {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Initialize the workspace by linking packages and running `pub get`
+    #[command(alias = "bs")]
     Bootstrap(BootstrapArgs),
 
     /// Clean all packages (runs `flutter clean` in each)
@@ -190,6 +191,18 @@ pub struct BootstrapArgs {
     /// Number of concurrent pub get processes
     #[arg(short = 'c', long, default_value_t = 5)]
     pub concurrency: usize,
+
+    /// Enforce the pubspec.lock file (pass --enforce-lockfile to pub get)
+    #[arg(long)]
+    pub enforce_lockfile: bool,
+
+    /// Skip resolving dependencies in example apps
+    #[arg(long)]
+    pub no_example: bool,
+
+    /// Use cached packages only; do not access the network
+    #[arg(long)]
+    pub offline: bool,
 
     #[command(flatten)]
     pub filters: GlobalFilterArgs,

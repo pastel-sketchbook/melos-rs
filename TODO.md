@@ -28,8 +28,10 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `--category=<cat>` flag (resolved via `apply_filters_with_categories()` using `MelosConfig.categories`)
 - [x] `--include-dependencies` transitive dependency expansion
 - [x] `--include-dependents` transitive dependent expansion
+- [x] `--published` / `--no-published` filter (publishable vs private packages)
 - [x] `PackageFilters::merge()` for combining CLI + script-level filters
 - [x] `Package.publish_to` field, `Package.is_private()` method
+- [x] Top-level `ignore` config field (workspace-wide glob exclusions applied at package discovery)
 
 ## Phase 2: Command Implementations
 
@@ -152,6 +154,11 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Recursive `melos run X` expansion (handle nested script references, cycle detection, max depth 16)
 - [x] Timeout support for long-running commands (`--timeout <seconds>` on exec)
 - [x] Dry-run mode (`--dry-run` on exec)
+- [x] Script `exec:` object syntax (`ExecEntry` enum: string shorthand vs options with concurrency/fail-fast/order-dependents)
+- [x] Script `steps:` multi-step sequential workflows
+- [x] Script `private` field (hidden from interactive selection and `--list`)
+- [x] `run --list` / `run --list --json` (show available scripts)
+- [x] `--include-private` flag for `run --list`
 
 ### Package Management
 - [x] Topological sort for dependency-ordered execution (Kahn's algorithm, wired to bootstrap + exec)
@@ -175,6 +182,8 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Dependent constraint auto-updates (`--dependent-constraints`, `--dependent-versions`)
 - [x] Custom commit message (`--message`/`-m` with `{new_package_versions}` placeholder)
 - [x] Repository config for changelog commit links (`repository:` URL string or object form)
+- [ ] `fetchTags` config option (run `git fetch --tags` before conventional commit analysis)
+- [ ] Aggregate `changelogs` config (filter which commit types appear in changelogs)
 - [ ] Release branch management
 
 ### Developer Experience
@@ -184,6 +193,16 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Verbose/quiet log levels (`--verbose` / `--quiet` global flags)
 - [x] Config validation and helpful warning messages
 - [ ] Watch mode for development (`--watch`)
+
+## Batch 14: Bootstrap Maturity & Version Polish
+
+- [ ] `--enforce-lockfile` CLI flag for bootstrap (pass through to `pub get`)
+- [ ] Bootstrap lifecycle hooks (pre/post hooks, matching clean/version pattern)
+- [ ] Clean pre-hook support (`command.clean.hooks.pre`)
+- [ ] `--no-example` / `--offline` flags for bootstrap (pass through to `pub get`)
+- [ ] `fetchTags` config option for version command (`git fetch --tags` before analysis)
+- [ ] Changelog commit type filtering (include/exclude conventional commit types)
+- [ ] `bs` alias for bootstrap command
 
 ## Phase 4: Parity & Beyond
 

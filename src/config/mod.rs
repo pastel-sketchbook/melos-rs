@@ -392,6 +392,10 @@ pub struct VersionCommandConfig {
     #[serde(default = "default_true_opt")]
     pub git_push: Option<bool>,
 
+    /// Whether to fetch tags from remote before versioning (ensures accurate tag-based analysis)
+    #[serde(default)]
+    pub fetch_tags: Option<bool>,
+
     /// Coordinated versioning: keep all packages at the same version
     #[serde(default)]
     pub coordinated: Option<bool>,
@@ -429,6 +433,11 @@ impl VersionCommandConfig {
     pub fn is_coordinated(&self) -> bool {
         self.coordinated.unwrap_or(false)
     }
+
+    /// Whether to fetch tags from remote before versioning
+    pub fn should_fetch_tags(&self) -> bool {
+        self.fetch_tags.unwrap_or(false)
+    }
 }
 
 /// Changelog-specific configuration
@@ -442,6 +451,18 @@ pub struct ChangelogConfig {
     /// Include commit IDs (short hash) in changelog entries
     #[serde(default)]
     pub include_commit_id: Option<bool>,
+
+    /// Only include these conventional commit types in the changelog.
+    /// If set, commits with types not in this list are excluded.
+    /// Example: ["feat", "fix", "perf"]
+    #[serde(default)]
+    pub include_types: Option<Vec<String>>,
+
+    /// Exclude these conventional commit types from the changelog.
+    /// Applied after include_types (if both set, include_types takes precedence).
+    /// Example: ["chore", "ci", "build"]
+    #[serde(default)]
+    pub exclude_types: Option<Vec<String>>,
 }
 
 /// Hooks for versioning
@@ -467,6 +488,14 @@ pub struct BootstrapCommandConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub enforce_versions_for_dependency_resolution: Option<bool>,
+
+    /// Pass --enforce-lockfile to pub get
+    #[serde(default)]
+    pub enforce_lockfile: Option<bool>,
+
+    /// Lifecycle hooks (pre/post)
+    #[serde(default)]
+    pub hooks: Option<BootstrapHooks>,
 }
 
 /// Configuration for the `clean` command
@@ -481,7 +510,21 @@ pub struct CleanCommandConfig {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanHooks {
+    /// Script to run before cleaning
+    pub pre: Option<String>,
+
     /// Script to run after cleaning
+    pub post: Option<String>,
+}
+
+/// Hooks for the bootstrap command
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapHooks {
+    /// Script to run before bootstrapping
+    pub pre: Option<String>,
+
+    /// Script to run after bootstrapping
     pub post: Option<String>,
 }
 

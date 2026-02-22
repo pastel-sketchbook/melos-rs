@@ -32,6 +32,32 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Run pre-clean hook if configured
+    if let Some(clean_config) = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.clean.as_ref())
+        && let Some(hooks) = &clean_config.hooks
+        && let Some(ref pre_hook) = hooks.pre
+    {
+        println!(
+            "\n{} Running pre-clean hook: {}",
+            "$".cyan(),
+            pre_hook
+        );
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(pre_hook)
+            .current_dir(&workspace.root_path)
+            .status()
+            .await?;
+
+        if !status.success() {
+            anyhow::bail!("Pre-clean hook failed with exit code: {}", status.code().unwrap_or(-1));
+        }
+    }
+
     // In 6.x mode, remove generated pubspec_overrides.yaml files
     if workspace.config_source.is_legacy() {
         remove_pubspec_overrides(&all_filtered);

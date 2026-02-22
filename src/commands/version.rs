@@ -290,19 +290,50 @@ pub fn highest_bump(commits: &[ConventionalCommit]) -> BumpType {
 // CHANGELOG generation
 // ---------------------------------------------------------------------------
 
+/// Options controlling changelog entry generation.
+pub struct ChangelogOptions<'a> {
+    pub include_body: bool,
+    pub include_hash: bool,
+    pub include_scopes: bool,
+    pub repository: Option<&'a RepositoryConfig>,
+    pub include_types: Option<&'a [String]>,
+    pub exclude_types: Option<&'a [String]>,
+}
+
+impl Default for ChangelogOptions<'_> {
+    fn default() -> Self {
+        Self {
+            include_body: false,
+            include_hash: false,
+            include_scopes: true,
+            repository: None,
+            include_types: None,
+            exclude_types: None,
+        }
+    }
+}
+
 /// Generate a CHANGELOG.md entry for a package version
 pub fn generate_changelog_entry(
     version: &str,
     commits: &[ConventionalCommit],
-    include_body: bool,
-    include_hash: bool,
-    include_scopes: bool,
-    repository: Option<&RepositoryConfig>,
+    opts: &ChangelogOptions<'_>,
 ) -> String {
     let mut sections: HashMap<&str, Vec<String>> = HashMap::new();
 
     // Group commits by type -> human-readable section
     for commit in commits {
+        // Apply type filtering
+        if let Some(included) = opts.include_types
+            && !included.iter().any(|t| t == &commit.commit_type)
+        {
+            continue;
+        }
+        if let Some(excluded) = opts.exclude_types
+            && excluded.iter().any(|t| t == &commit.commit_type)
+        {
+            continue;
+        }
         let section = match commit.commit_type.as_str() {
             "feat" => "Features",
             "fix" => "Bug Fixes",
@@ -317,7 +348,7 @@ pub fn generate_changelog_entry(
             _ => "Other Changes",
         };
 
-        let scope_prefix = if include_scopes {
+        let scope_prefix = if opts.include_scopes {
             commit
                 .scope
                 .as_ref()
@@ -327,8 +358,8 @@ pub fn generate_changelog_entry(
             String::new()
         };
 
-        let hash_suffix = if include_hash {
-            if let Some(repo) = repository {
+        let hash_suffix = if opts.include_hash {
+            if let Some(repo) = opts.repository {
                 // Link the commit hash to the repository commit URL
                 let url = repo.commit_url(&commit.hash);
                 format!(" ([{}]({}))", commit.hash, url)
@@ -341,7 +372,7 @@ pub fn generate_changelog_entry(
 
         let mut entry = format!("- {}{}{}", scope_prefix, commit.description, hash_suffix);
 
-        if include_body
+        if opts.include_body
             && let Some(ref body) = commit.body
         {
             entry.push_str(&format!("\n  {}", body.replace('\n', "\n  ")));
@@ -533,6 +564,24 @@ pub fn git_push(root: &Path, include_tags: bool) -> Result<()> {
         if !tag_status.success() {
             bail!("git push --tags failed");
         }
+    }
+
+    Ok(())
+}
+
+/// Fetch tags from the remote repository.
+///
+/// Used when `command.version.fetchTags: true` to ensure local tag data is
+/// up-to-date before analyzing conventional commits relative to tags.
+pub fn git_fetch_tags(root: &Path) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .args(["fetch", "--tags"])
+        .current_dir(root)
+        .status()
+        .context("Failed to fetch tags")?;
+
+    if !status.success() {
+        bail!("git fetch --tags failed");
     }
 
     Ok(())
@@ -807,6 +856,16 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         println!("  {} Branch validation passed ({})", "OK".green(), branch);
     }
 
+    // Fetch tags from remote if configured
+    if version_config
+        .map(|c| c.should_fetch_tags())
+        .unwrap_or(false)
+    {
+        println!("  {} Fetching tags from remote...", "$".cyan());
+        git_fetch_tags(&workspace.root_path)?;
+        println!("  {} Tags fetched", "OK".green());
+    }
+
     // Determine changelog/tag settings from config + CLI flags
     let should_changelog = if args.no_changelog {
         false
@@ -831,6 +890,14 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     let include_scopes = version_config
         .and_then(|c| c.include_scopes)
         .unwrap_or(true); // Melos includes scopes by default
+
+    // Changelog commit type filtering
+    let changelog_include_types: Option<Vec<String>> = version_config
+        .and_then(|c| c.changelog_config.as_ref())
+        .and_then(|cc| cc.include_types.clone());
+    let changelog_exclude_types: Option<Vec<String>> = version_config
+        .and_then(|c| c.changelog_config.as_ref())
+        .and_then(|cc| cc.exclude_types.clone());
 
     // Collect conventional commits if requested
     let conventional_commits = if args.conventional_commits {
@@ -1105,8 +1172,15 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .find(|(n, _)| n == &pkg.name)
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("unknown");
-                    let entry =
-                        generate_changelog_entry(new_ver, commits, include_body, include_hash, include_scopes, repo);
+                    let changelog_opts = ChangelogOptions {
+                        include_body,
+                        include_hash,
+                        include_scopes,
+                        repository: repo,
+                        include_types: changelog_include_types.as_deref(),
+                        exclude_types: changelog_exclude_types.as_deref(),
+                    };
+                    let entry = generate_changelog_entry(new_ver, commits, &changelog_opts);
                     write_changelog(&pkg.path, &entry)?;
                     println!(
                         "  {} Updated CHANGELOG.md for {}",
@@ -1128,13 +1202,18 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .first()
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("0.0.0");
-                    let entry = generate_changelog_entry(
-                        summary_version,
-                        &all_commits,
+                    let changelog_opts = ChangelogOptions {
                         include_body,
                         include_hash,
                         include_scopes,
-                        repo,
+                        repository: repo,
+                        include_types: changelog_include_types.as_deref(),
+                        exclude_types: changelog_exclude_types.as_deref(),
+                    };
+                    let entry = generate_changelog_entry(
+                        summary_version,
+                        &all_commits,
+                        &changelog_opts,
                     );
                     write_changelog(&workspace.root_path, &entry)?;
                     println!(
@@ -1356,7 +1435,7 @@ mod tests {
             parse_conventional_commit("def5678", "fix: handle null").unwrap(),
             parse_conventional_commit("ghi9012", "chore: update deps").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.2.0", &commits, false, false, true, None);
+        let entry = generate_changelog_entry("1.2.0", &commits, &ChangelogOptions::default());
         assert!(entry.contains("## 1.2.0"));
         assert!(entry.contains("### Features"));
         assert!(entry.contains("- add login"));
@@ -1371,7 +1450,10 @@ mod tests {
         let commits = vec![
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
         ];
-        let entry = generate_changelog_entry("2.0.0", &commits, false, true, true, None);
+        let entry = generate_changelog_entry("2.0.0", &commits, &ChangelogOptions {
+            include_hash: true,
+            ..ChangelogOptions::default()
+        });
         assert!(entry.contains("(abc1234)"));
         assert!(entry.contains("**ui**: new button"));
     }
@@ -1414,7 +1496,10 @@ mod tests {
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
             parse_conventional_commit("def5678", "fix(auth): handle token").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.0.0", &commits, false, false, false, None);
+        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
+            include_scopes: false,
+            ..ChangelogOptions::default()
+        });
         // With include_scopes=false, scope prefix should NOT appear
         assert!(!entry.contains("**ui**"), "Scope should not be included");
         assert!(
@@ -1431,7 +1516,7 @@ mod tests {
         let commits = vec![
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.0.0", &commits, false, false, true, None);
+        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions::default());
         assert!(entry.contains("**ui**: new button"));
     }
 
@@ -1644,7 +1729,11 @@ mod tests {
         let commits = vec![
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
         ];
-        let entry = generate_changelog_entry("2.0.0", &commits, false, true, true, Some(&repo));
+        let entry = generate_changelog_entry("2.0.0", &commits, &ChangelogOptions {
+            include_hash: true,
+            repository: Some(&repo),
+            ..ChangelogOptions::default()
+        });
         // Should contain a markdown link instead of bare hash
         assert!(entry.contains("[abc1234](https://github.com/org/repo/commit/abc1234)"));
         assert!(!entry.contains(" (abc1234)"), "Should not have bare hash");
@@ -1655,7 +1744,10 @@ mod tests {
         let commits = vec![
             parse_conventional_commit("abc1234", "feat: something").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.0.0", &commits, false, true, true, None);
+        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
+            include_hash: true,
+            ..ChangelogOptions::default()
+        });
         // Without repository, should be bare hash in parens
         assert!(entry.contains("(abc1234)"));
         assert!(!entry.contains("[abc1234]"));
@@ -1681,5 +1773,195 @@ mod tests {
         assert!(result.contains(" - pkg_a @ 1.2.0"));
         assert!(result.contains(" - pkg_b @ 3.0.0"));
         assert!(result.starts_with("chore(release): publish"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Changelog commit type filtering tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_changelog_include_types() {
+        let commits = vec![
+            parse_conventional_commit("a1", "feat: new feature").unwrap(),
+            parse_conventional_commit("b2", "fix: bug fix").unwrap(),
+            parse_conventional_commit("c3", "chore: update deps").unwrap(),
+            parse_conventional_commit("d4", "ci: update pipeline").unwrap(),
+        ];
+        let include = vec!["feat".to_string(), "fix".to_string()];
+        let entry = generate_changelog_entry(
+            "1.0.0", &commits, &ChangelogOptions {
+                include_types: Some(&include),
+                ..ChangelogOptions::default()
+            },
+        );
+        assert!(entry.contains("new feature"));
+        assert!(entry.contains("bug fix"));
+        assert!(!entry.contains("update deps"), "chore should be excluded");
+        assert!(!entry.contains("update pipeline"), "ci should be excluded");
+    }
+
+    #[test]
+    fn test_changelog_exclude_types() {
+        let commits = vec![
+            parse_conventional_commit("a1", "feat: new feature").unwrap(),
+            parse_conventional_commit("b2", "chore: update deps").unwrap(),
+            parse_conventional_commit("c3", "ci: update pipeline").unwrap(),
+        ];
+        let exclude = vec!["chore".to_string(), "ci".to_string()];
+        let entry = generate_changelog_entry(
+            "1.0.0", &commits, &ChangelogOptions {
+                exclude_types: Some(&exclude),
+                ..ChangelogOptions::default()
+            },
+        );
+        assert!(entry.contains("new feature"));
+        assert!(!entry.contains("update deps"), "chore should be excluded");
+        assert!(!entry.contains("update pipeline"), "ci should be excluded");
+    }
+
+    #[test]
+    fn test_changelog_include_takes_precedence_over_exclude() {
+        let commits = vec![
+            parse_conventional_commit("a1", "feat: new feature").unwrap(),
+            parse_conventional_commit("b2", "fix: bug fix").unwrap(),
+            parse_conventional_commit("c3", "chore: update deps").unwrap(),
+        ];
+        // include only feat, but also exclude chore
+        // include should be the primary filter
+        let include = vec!["feat".to_string()];
+        let exclude = vec!["chore".to_string()];
+        let entry = generate_changelog_entry(
+            "1.0.0", &commits, &ChangelogOptions {
+                include_types: Some(&include),
+                exclude_types: Some(&exclude),
+                ..ChangelogOptions::default()
+            },
+        );
+        assert!(entry.contains("new feature"));
+        assert!(!entry.contains("bug fix"), "fix not in include list");
+        assert!(!entry.contains("update deps"), "chore excluded");
+    }
+
+    #[test]
+    fn test_changelog_no_filters() {
+        let commits = vec![
+            parse_conventional_commit("a1", "feat: new feature").unwrap(),
+            parse_conventional_commit("b2", "chore: update deps").unwrap(),
+        ];
+        let entry = generate_changelog_entry(
+            "1.0.0", &commits, &ChangelogOptions::default(),
+        );
+        // All types should be included
+        assert!(entry.contains("new feature"));
+        assert!(entry.contains("update deps"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Config parsing tests for new fields
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_changelog_config_with_type_filters() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    changelogConfig:
+      includeCommitBody: true
+      includeCommitId: true
+      includeTypes:
+        - feat
+        - fix
+      excludeTypes:
+        - chore
+        - ci
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        let changelog_config = version_config.changelog_config.unwrap();
+        assert_eq!(
+            changelog_config.include_types,
+            Some(vec!["feat".to_string(), "fix".to_string()])
+        );
+        assert_eq!(
+            changelog_config.exclude_types,
+            Some(vec!["chore".to_string(), "ci".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_parse_fetch_tags_config() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    fetchTags: true
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(version_config.should_fetch_tags());
+    }
+
+    #[test]
+    fn test_parse_fetch_tags_default_false() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(!version_config.should_fetch_tags());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bootstrap config parsing tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_bootstrap_config_with_hooks() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  bootstrap:
+    enforceLockfile: true
+    hooks:
+      pre: echo pre-bootstrap
+      post: echo post-bootstrap
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let bootstrap_config = config.command.unwrap().bootstrap.unwrap();
+        assert_eq!(bootstrap_config.enforce_lockfile, Some(true));
+        let hooks = bootstrap_config.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("echo pre-bootstrap"));
+        assert_eq!(hooks.post.as_deref(), Some("echo post-bootstrap"));
+    }
+
+    #[test]
+    fn test_parse_clean_config_with_pre_hook() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  clean:
+    hooks:
+      pre: echo pre-clean
+      post: echo post-clean
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let clean_config = config.command.unwrap().clean.unwrap();
+        let hooks = clean_config.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("echo pre-clean"));
+        assert_eq!(hooks.post.as_deref(), Some("echo post-clean"));
     }
 }
