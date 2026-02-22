@@ -1,0 +1,148 @@
+use anyhow::Result;
+use clap::Args;
+use colored::Colorize;
+
+use crate::cli::GlobalFilterArgs;
+use crate::config::filter::PackageFilters;
+use crate::package::filter::apply_filters;
+use crate::runner::ProcessRunner;
+use crate::workspace::Workspace;
+
+/// Arguments for the `publish` command
+#[derive(Args, Debug)]
+pub struct PublishArgs {
+    /// Perform a dry run (default: true). Use --no-dry-run to actually publish.
+    #[arg(long, default_value = "true", action = clap::ArgAction::Set)]
+    pub dry_run: bool,
+
+    /// Create a git tag for each published package version
+    #[arg(short = 't', long)]
+    pub git_tag_version: bool,
+
+    /// Maximum number of concurrent publish operations
+    #[arg(short = 'c', long, default_value = "1")]
+    pub concurrency: usize,
+
+    /// Skip confirmation prompt
+    #[arg(long)]
+    pub yes: bool,
+
+    #[command(flatten)]
+    pub filters: GlobalFilterArgs,
+}
+
+/// Publish packages to pub.dev
+pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
+    // Start with global filters, then also exclude private packages by default
+    let mut filters: PackageFilters = (&args.filters).into();
+    // Publishing only makes sense for non-private packages
+    filters.no_private = true;
+
+    let packages = apply_filters(&workspace.packages, &filters, Some(&workspace.root_path))?;
+
+    if packages.is_empty() {
+        println!(
+            "{}",
+            "No publishable packages found (private packages are excluded).".yellow()
+        );
+        return Ok(());
+    }
+
+    let dry_run_label = if args.dry_run {
+        " (dry run)".yellow()
+    } else {
+        "".normal()
+    };
+
+    println!(
+        "\n{} Publishing {} packages{}...\n",
+        "$".cyan(),
+        packages.len(),
+        dry_run_label
+    );
+
+    for pkg in &packages {
+        let version = pkg.version.as_deref().unwrap_or("unknown");
+        println!("  {} {} {}", "->".cyan(), pkg.name.bold(), version.dimmed());
+    }
+    println!();
+
+    if args.dry_run {
+        println!(
+            "{}",
+            "Dry run mode: no packages will actually be published.".dimmed()
+        );
+        println!(
+            "{}",
+            "Use --dry-run=false to publish for real.\n".dimmed()
+        );
+    }
+
+    if !args.yes && !args.dry_run {
+        println!(
+            "{} Use --yes to skip confirmation (interactive prompt not yet implemented)",
+            "NOTE:".yellow()
+        );
+        return Ok(());
+    }
+
+    // Build the publish command
+    let mut cmd = String::from("dart pub publish");
+    if args.dry_run {
+        cmd.push_str(" --dry-run");
+    } else {
+        // --force skips the pub.dev confirmation prompt
+        cmd.push_str(" --force");
+    }
+
+    let runner = ProcessRunner::new(args.concurrency, false);
+    let results = runner
+        .run_in_packages(&packages, &cmd, &workspace.env_vars())
+        .await?;
+
+    let failed = results.iter().filter(|(_, success)| !success).count();
+    let succeeded: Vec<_> = results
+        .iter()
+        .filter(|(_, success)| *success)
+        .map(|(name, _)| name.clone())
+        .collect();
+
+    // Git tag creation for successfully published packages
+    if args.git_tag_version && !args.dry_run && !succeeded.is_empty() {
+        println!("\n{} Creating git tags...\n", "$".cyan());
+        for pkg_name in &succeeded {
+            if let Some(pkg) = packages.iter().find(|p| &p.name == pkg_name) {
+                let version = pkg.version.as_deref().unwrap_or("0.0.0");
+                let tag = format!("{}-v{}", pkg_name, version);
+                let tag_result = std::process::Command::new("git")
+                    .args(["tag", "-a", &tag, "-m", &format!("Release {} v{}", pkg_name, version)])
+                    .current_dir(&workspace.root_path)
+                    .status();
+
+                match tag_result {
+                    Ok(status) if status.success() => {
+                        println!("  {} {}", "TAG".green(), tag);
+                    }
+                    Ok(_) => {
+                        eprintln!("  {} Failed to create tag {}", "WARN".yellow(), tag);
+                    }
+                    Err(e) => {
+                        eprintln!("  {} Git tag error for {}: {}", "WARN".yellow(), tag, e);
+                    }
+                }
+            }
+        }
+    }
+
+    if failed > 0 {
+        anyhow::bail!("{} package(s) failed to publish", failed);
+    }
+
+    let action = if args.dry_run {
+        "validated"
+    } else {
+        "published"
+    };
+    println!("\n{}", format!("All packages {}.", action).green());
+    Ok(())
+}

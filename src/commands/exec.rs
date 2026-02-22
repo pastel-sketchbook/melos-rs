@@ -16,7 +16,7 @@ pub struct ExecArgs {
     pub command: Vec<String>,
 
     /// Maximum number of concurrent processes
-    #[arg(short = 'c', long, default_value = "1")]
+    #[arg(short = 'c', long, default_value = "5")]
     pub concurrency: usize,
 
     /// Stop execution on first failure
@@ -56,22 +56,14 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     }
     println!();
 
-    // Execute command in each package
+    // Execute command in each package (runner handles per-package env vars + colored output)
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let results = runner
         .run_in_packages(&packages, &cmd_str, &workspace.env_vars())
         .await?;
 
-    // Report results
-    let mut failed = 0;
-    for (pkg_name, success) in &results {
-        if *success {
-            println!("  {} {}", "SUCCESS".green(), pkg_name);
-        } else {
-            println!("  {} {}", "FAILED".red(), pkg_name);
-            failed += 1;
-        }
-    }
+    // Count failures
+    let failed = results.iter().filter(|(_, success)| !success).count();
 
     if failed > 0 {
         anyhow::bail!("{} package(s) failed", failed);

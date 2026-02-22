@@ -1,6 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 
-use crate::commands::{exec::ExecArgs, list::ListArgs, version::VersionArgs};
+use crate::commands::{
+    exec::ExecArgs, format::FormatArgs, list::ListArgs, publish::PublishArgs, run::RunArgs,
+    version::VersionArgs,
+};
 
 /// melos-rs: A Rust CLI for Flutter/Dart monorepo management
 ///
@@ -104,14 +107,17 @@ pub enum Commands {
     /// Execute a command in each package
     Exec(ExecArgs),
 
+    /// Format Dart code across packages using `dart format`
+    Format(FormatArgs),
+
     /// List packages in the workspace
     List(ListArgs),
 
+    /// Publish packages to pub.dev
+    Publish(PublishArgs),
+
     /// Run a script defined in melos.yaml
-    Run {
-        /// Name of the script to run
-        script: String,
-    },
+    Run(RunArgs),
 
     /// Manage package versions
     Version(VersionArgs),

@@ -38,8 +38,10 @@ async fn main() -> Result<()> {
         Commands::Bootstrap(args) => commands::bootstrap::run(&workspace, args).await,
         Commands::Clean(args) => commands::clean::run(&workspace, args).await,
         Commands::Exec(args) => commands::exec::run(&workspace, args).await,
+        Commands::Format(args) => commands::format::run(&workspace, args).await,
         Commands::List(args) => commands::list::run(&workspace, args).await,
-        Commands::Run { script } => commands::run::run(&workspace, &script).await,
+        Commands::Publish(args) => commands::publish::run(&workspace, args).await,
+        Commands::Run(args) => commands::run::run(&workspace, args).await,
         Commands::Version(args) => commands::version::run(&workspace, args).await,
     };
 
