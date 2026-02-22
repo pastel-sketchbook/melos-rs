@@ -2,6 +2,7 @@ pub mod filter;
 pub mod script;
 
 use std::collections::HashMap;
+use std::fmt;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -17,6 +18,10 @@ pub struct MelosConfig {
 
     /// Package glob patterns
     pub packages: Vec<String>,
+
+    /// Repository URL or object for changelog commit links
+    #[serde(default)]
+    pub repository: Option<RepositoryConfig>,
 
     /// Command-level configuration (version hooks, etc.)
     #[serde(default)]
@@ -146,6 +151,95 @@ impl ScriptEntry {
             ScriptEntry::Simple(_) => &EMPTY,
             ScriptEntry::Full(config) => &config.env,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Repository configuration
+// ---------------------------------------------------------------------------
+
+/// Repository URL or structured config for changelog commit links.
+///
+/// Supports two forms:
+///   - Simple URL string: `repository: https://github.com/org/repo`
+///   - Object form: `repository: { type: github, origin: ..., owner: ..., name: ... }`
+#[derive(Debug, Clone)]
+pub struct RepositoryConfig {
+    /// The full URL to the repository (e.g., https://github.com/invertase/melos)
+    pub url: String,
+}
+
+impl RepositoryConfig {
+    /// Get the commit URL for a given commit hash.
+    /// Returns a URL like `https://github.com/org/repo/commit/<hash>`.
+    pub fn commit_url(&self, hash: &str) -> String {
+        let base = self.url.trim_end_matches('/');
+        // GitHub/GitLab/Bitbucket all use /commit/<hash>
+        format!("{}/commit/{}", base, hash)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for RepositoryConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        struct RepoVisitor;
+
+        impl<'de> de::Visitor<'de> for RepoVisitor {
+            type Value = RepositoryConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a repository URL string or an object with type/origin/owner/name")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+                Ok(RepositoryConfig {
+                    url: v.to_string(),
+                })
+            }
+
+            fn visit_map<M: de::MapAccess<'de>>(self, mut map: M) -> std::result::Result<Self::Value, M::Error> {
+                let mut repo_type: Option<String> = None;
+                let mut origin: Option<String> = None;
+                let mut owner: Option<String> = None;
+                let mut name: Option<String> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "type" => repo_type = Some(map.next_value()?),
+                        "origin" => origin = Some(map.next_value()?),
+                        "owner" => owner = Some(map.next_value()?),
+                        "name" => name = Some(map.next_value()?),
+                        _ => { let _: yaml_serde::Value = map.next_value()?; }
+                    }
+                }
+
+                let owner = owner.ok_or_else(|| de::Error::missing_field("owner"))?;
+                let name = name.ok_or_else(|| de::Error::missing_field("name"))?;
+
+                let base_url = match origin {
+                    Some(ref o) => o.trim_end_matches('/').to_string(),
+                    None => {
+                        let host = match repo_type.as_deref() {
+                            Some("gitlab") => "https://gitlab.com",
+                            Some("bitbucket") => "https://bitbucket.org",
+                            Some("azure") => "https://dev.azure.com",
+                            _ => "https://github.com", // default to github
+                        };
+                        host.to_string()
+                    }
+                };
+
+                Ok(RepositoryConfig {
+                    url: format!("{}/{}/{}", base_url, owner, name),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(RepoVisitor)
     }
 }
 
@@ -330,6 +424,10 @@ struct MelosSection {
     #[serde(default)]
     packages: Option<Vec<String>>,
 
+    /// Repository URL or object for changelog commit links
+    #[serde(default)]
+    repository: Option<RepositoryConfig>,
+
     /// Command-level configuration
     #[serde(default)]
     command: Option<CommandConfig>,
@@ -391,6 +489,7 @@ pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
             Ok(MelosConfig {
                 name,
                 packages,
+                repository: wrapper.melos.repository,
                 command: wrapper.melos.command,
                 scripts: wrapper.melos.scripts,
                 categories: wrapper.melos.categories,
@@ -618,6 +717,7 @@ melos:
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec![],
+            repository: None,
             command: None,
             scripts: HashMap::new(),
             categories: HashMap::new(),
@@ -637,6 +737,7 @@ melos:
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
+            repository: None,
             command: None,
             scripts,
             categories: HashMap::new(),
@@ -656,6 +757,7 @@ melos:
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
+            repository: None,
             command: None,
             scripts,
             categories: HashMap::new(),
@@ -674,6 +776,7 @@ melos:
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
+            repository: None,
             command: None,
             scripts,
             categories: HashMap::new(),
@@ -701,6 +804,7 @@ melos:
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
+            repository: None,
             command: None,
             scripts,
             categories: HashMap::new(),
@@ -728,5 +832,132 @@ categories:
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let warnings = config.validate();
         assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+    }
+
+    // -----------------------------------------------------------------------
+    // RepositoryConfig tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_repository_config_from_url_string() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+repository: https://github.com/invertase/melos
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let repo = config.repository.unwrap();
+        assert_eq!(repo.url, "https://github.com/invertase/melos");
+    }
+
+    #[test]
+    fn test_repository_config_from_object_github() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+repository:
+  type: github
+  owner: invertase
+  name: melos
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let repo = config.repository.unwrap();
+        assert_eq!(repo.url, "https://github.com/invertase/melos");
+    }
+
+    #[test]
+    fn test_repository_config_from_object_gitlab() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+repository:
+  type: gitlab
+  owner: myorg
+  name: myrepo
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let repo = config.repository.unwrap();
+        assert_eq!(repo.url, "https://gitlab.com/myorg/myrepo");
+    }
+
+    #[test]
+    fn test_repository_config_from_object_custom_origin() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+repository:
+  type: github
+  origin: https://git.internal.io
+  owner: team
+  name: project
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let repo = config.repository.unwrap();
+        assert_eq!(repo.url, "https://git.internal.io/team/project");
+    }
+
+    #[test]
+    fn test_repository_config_default_type_is_github() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+repository:
+  owner: myowner
+  name: myrepo
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let repo = config.repository.unwrap();
+        assert_eq!(repo.url, "https://github.com/myowner/myrepo");
+    }
+
+    #[test]
+    fn test_repository_config_commit_url() {
+        let repo = RepositoryConfig {
+            url: "https://github.com/org/repo".to_string(),
+        };
+        assert_eq!(
+            repo.commit_url("abc1234"),
+            "https://github.com/org/repo/commit/abc1234"
+        );
+    }
+
+    #[test]
+    fn test_repository_config_commit_url_trailing_slash() {
+        let repo = RepositoryConfig {
+            url: "https://github.com/org/repo/".to_string(),
+        };
+        assert_eq!(
+            repo.commit_url("def5678"),
+            "https://github.com/org/repo/commit/def5678"
+        );
+    }
+
+    #[test]
+    fn test_repository_config_absent() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert!(config.repository.is_none());
+    }
+
+    #[test]
+    fn test_repository_config_7x_pubspec() {
+        // Verify the MelosSection correctly parses the repository field,
+        // which is what the 7.x config path uses
+        let section: MelosSection = yaml_serde::from_str(r#"
+repository: https://github.com/myorg/myapp
+packages:
+  - packages/**
+"#).unwrap();
+        assert!(section.repository.is_some());
+        assert_eq!(section.repository.unwrap().url, "https://github.com/myorg/myapp");
     }
 }

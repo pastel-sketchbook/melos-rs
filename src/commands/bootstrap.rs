@@ -256,6 +256,7 @@ mod tests {
             config: MelosConfig {
                 name: "test".to_string(),
                 packages: vec!["packages/**".to_string()],
+                repository: None,
                 command: Some(CommandConfig {
                     version: None,
                     bootstrap: bootstrap_config,

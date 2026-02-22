@@ -353,6 +353,7 @@ mod tests {
                 config: crate::config::MelosConfig {
                     name: "test".to_string(),
                     packages: vec![],
+                    repository: None,
                     command: None,
                     scripts: Default::default(),
                     categories: Default::default(),

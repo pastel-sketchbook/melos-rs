@@ -5,8 +5,9 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use colored::Colorize;
-use semver::Version;
+use semver::{Prerelease, Version};
 
+use crate::config::RepositoryConfig;
 use crate::package::Package;
 use crate::workspace::Workspace;
 
@@ -18,7 +19,7 @@ pub struct VersionArgs {
     pub bump: String,
 
     /// Apply to all packages
-    #[arg(long)]
+    #[arg(long, short = 'a')]
     pub all: bool,
 
     /// Per-package version overrides (e.g., -Vanmobile:patch -Vadapter:build)
@@ -52,6 +53,36 @@ pub struct VersionArgs {
     /// Coordinated versioning: bump all packages to the same version
     #[arg(long)]
     pub coordinated: bool,
+
+    /// Version as prerelease (e.g., 1.0.0-dev.0). Cannot combine with --graduate.
+    #[arg(long, short = 'p', conflicts_with = "graduate")]
+    pub prerelease: bool,
+
+    /// Graduate prerelease packages to stable (e.g., 1.0.0-dev.3 -> 1.0.0).
+    /// Cannot combine with --prerelease.
+    #[arg(long, short = 'g', conflicts_with = "prerelease")]
+    pub graduate: bool,
+
+    /// Prerelease identifier (e.g., beta -> 1.0.0-beta.0). Used with --prerelease.
+    #[arg(long, default_value = "dev")]
+    pub preid: String,
+
+    /// Prerelease identifier for dependents only (falls back to --preid if not set)
+    #[arg(long)]
+    pub dependent_preid: Option<String>,
+
+    /// Override the release commit message. Use {new_package_versions} as placeholder.
+    #[arg(long, short = 'm')]
+    pub message: Option<String>,
+
+    /// Update dependency constraints in dependent packages (default: true)
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub dependent_constraints: bool,
+
+    /// Patch-bump dependents when their constraints change (default: true).
+    /// Only effective with --dependent-constraints and --conventional-commits.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub dependent_versions: bool,
 }
 
 /// Parse a version override flag like "anmobile:patch"
@@ -266,6 +297,7 @@ pub fn generate_changelog_entry(
     include_body: bool,
     include_hash: bool,
     include_scopes: bool,
+    repository: Option<&RepositoryConfig>,
 ) -> String {
     let mut sections: HashMap<&str, Vec<String>> = HashMap::new();
 
@@ -296,7 +328,13 @@ pub fn generate_changelog_entry(
         };
 
         let hash_suffix = if include_hash {
-            format!(" ({})", commit.hash)
+            if let Some(repo) = repository {
+                // Link the commit hash to the repository commit URL
+                let url = repo.commit_url(&commit.hash);
+                format!(" ([{}]({}))", commit.hash, url)
+            } else {
+                format!(" ({})", commit.hash)
+            }
         } else {
             String::new()
         };
@@ -546,6 +584,91 @@ pub fn compute_next_version(current: &str, bump: &str) -> Result<Version> {
     Ok(version)
 }
 
+/// Compute the next prerelease version.
+///
+/// If the current version is already a prerelease with the same base bump and
+/// preid, increment the prerelease counter. Otherwise, bump to the next base
+/// version and start at `<preid>.0`.
+///
+/// Examples (bump = "minor", preid = "dev"):
+///   - "1.0.0"         -> "1.1.0-dev.0"
+///   - "1.1.0-dev.0"   -> "1.1.0-dev.1"
+///   - "1.1.0-dev.5"   -> "1.1.0-dev.6"
+///   - "1.1.0-beta.0"  -> "1.1.0-dev.0"  (different preid, reset)
+///   - "2.0.0-dev.0" with bump "major" -> "2.0.0-dev.1" (already at major prerelease)
+pub fn compute_next_prerelease(current: &str, bump: &str, preid: &str) -> Result<Version> {
+    let current_ver = Version::parse(current)
+        .or_else(|_| {
+            let cleaned = current.split('+').next().unwrap_or(current);
+            Version::parse(cleaned)
+        })
+        .unwrap_or_else(|_| Version::new(0, 0, 0));
+
+    let current_base = Version::new(current_ver.major, current_ver.minor, current_ver.patch);
+    let pre_str = current_ver.pre.as_str();
+
+    // If current is already a prerelease with the same preid, just increment the counter
+    if !pre_str.is_empty() {
+        let prefix = format!("{}.", preid);
+        if let Some(counter_str) = pre_str.strip_prefix(&prefix)
+            && let Ok(counter) = counter_str.parse::<u64>()
+        {
+            // Same preid — increment counter, keep the same base
+            let new_pre = format!("{}.{}", preid, counter + 1);
+            let mut result = current_base;
+            result.pre = Prerelease::new(&new_pre)
+                .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+            return Ok(result);
+        }
+
+        // Different preid — reset counter to 0 but keep the same base
+        let new_pre = format!("{}.0", preid);
+        let mut result = current_base;
+        result.pre = Prerelease::new(&new_pre)
+            .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+        return Ok(result);
+    }
+
+    // Current is stable — bump the base, then add prerelease suffix
+    let base = compute_next_version(
+        &format!("{}.{}.{}", current_ver.major, current_ver.minor, current_ver.patch),
+        bump,
+    )?;
+    let new_pre = format!("{}.0", preid);
+    let mut result = base;
+    result.pre = Prerelease::new(&new_pre)
+        .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+    Ok(result)
+}
+
+/// Graduate a prerelease version to stable by stripping the prerelease suffix.
+///
+/// Examples:
+///   - "1.1.0-dev.3"  -> "1.1.0"
+///   - "2.0.0-beta.1" -> "2.0.0"
+///   - "1.0.0"        -> "1.0.0" (already stable, no change)
+pub fn graduate_version(current: &str) -> Result<Version> {
+    let ver = Version::parse(current)
+        .or_else(|_| {
+            let cleaned = current.split('+').next().unwrap_or(current);
+            Version::parse(cleaned)
+        })
+        .unwrap_or_else(|_| Version::new(0, 0, 0));
+
+    Ok(Version::new(ver.major, ver.minor, ver.patch))
+}
+
+/// Check whether a version string is a prerelease
+pub fn is_prerelease(version_str: &str) -> bool {
+    Version::parse(version_str)
+        .or_else(|_| {
+            let cleaned = version_str.split('+').next().unwrap_or(version_str);
+            Version::parse(cleaned)
+        })
+        .map(|v| !v.pre.is_empty())
+        .unwrap_or(false)
+}
+
 /// Extract build number from a Flutter version string like "1.2.3+42"
 fn extract_build_number(version_str: &str) -> Option<u64> {
     version_str
@@ -592,6 +715,65 @@ fn apply_version_bump(pkg: &Package, bump: &str) -> Result<String> {
     );
 
     Ok(next_version_str)
+}
+
+/// Update a dependent package's pubspec.yaml to use the new version constraint
+/// for a bumped dependency. Returns true if any changes were made.
+fn update_dependency_constraint(
+    dependent_pkg: &Package,
+    dep_name: &str,
+    new_version: &str,
+) -> Result<bool> {
+    let pubspec_path = dependent_pkg.path.join("pubspec.yaml");
+    let content = std::fs::read_to_string(&pubspec_path)
+        .with_context(|| format!("Failed to read {}", pubspec_path.display()))?;
+
+    // Parse the new version to build a caret constraint like ^1.2.0
+    let ver = Version::parse(new_version)
+        .or_else(|_| {
+            let cleaned = new_version.split('+').next().unwrap_or(new_version);
+            Version::parse(cleaned)
+        })
+        .unwrap_or_else(|_| Version::new(0, 0, 0));
+
+    let constraint = format!("^{}", ver);
+
+    // Match patterns like:
+    //   dep_name: ^1.0.0
+    //   dep_name: "^1.0.0"
+    //   dep_name: '>=1.0.0 <2.0.0'
+    //   dep_name: any
+    // But NOT dep_name with a map value (path/git/sdk dependency)
+    let pattern = format!(
+        r#"(?m)^(\s+{dep}:\s*)(?:["']?)[<>=^~\d][^"\n]*(?:["']?)"#,
+        dep = regex::escape(dep_name)
+    );
+    let re = regex::Regex::new(&pattern)?;
+
+    if !re.is_match(&content) {
+        return Ok(false);
+    }
+
+    let new_content = re
+        .replace(&content, format!("${{1}}{}", constraint))
+        .to_string();
+
+    if new_content == content {
+        return Ok(false);
+    }
+
+    std::fs::write(&pubspec_path, new_content)
+        .with_context(|| format!("Failed to write {}", pubspec_path.display()))?;
+
+    println!(
+        "  {} Updated {} dependency on {} to {}",
+        "OK".green(),
+        dependent_pkg.name.bold(),
+        dep_name,
+        constraint
+    );
+
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -664,15 +846,47 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         None
     };
 
-    // Check if coordinated versioning is enabled (CLI flag or config)
+    // Determine whether coordinated versioning is enabled (CLI flag or config)
     let is_coordinated = args.coordinated
-        || version_config.is_some_and(|c| c.is_coordinated());
+        || version_config
+            .map(|c| c.is_coordinated())
+            .unwrap_or(false);
 
-    // Determine which packages to version and how
-    let packages_to_version: Vec<(&Package, String)> = if is_coordinated {
+    // Determine which packages to version and how.
+    //
+    // The result is a Vec of (package, target_version_string) where the target
+    // is either a bump type ("patch", "minor") or an explicit version ("1.2.0-dev.0").
+    let packages_to_version: Vec<(&Package, String)> = if args.graduate {
+        // Graduate mode: strip prerelease suffix from all prerelease packages
+        let graduated: Vec<_> = workspace
+            .packages
+            .iter()
+            .filter(|p| {
+                let v = p.version.as_deref().unwrap_or("0.0.0");
+                is_prerelease(v)
+            })
+            .map(|p| {
+                let current = p.version.as_deref().unwrap_or("0.0.0");
+                let stable = graduate_version(current)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|_| current.to_string());
+                (p, stable)
+            })
+            .collect();
+
+        if graduated.is_empty() {
+            println!("{}", "No prerelease packages to graduate.".yellow());
+            return Ok(());
+        }
+
+        println!(
+            "  {} Graduating {} prerelease package(s) to stable",
+            "INFO".blue(),
+            graduated.len()
+        );
+        graduated
+    } else if is_coordinated {
         // Coordinated versioning: bump ALL packages to the same version.
-        // Find the highest current version, apply the bump once, then set
-        // every package to the resulting version.
         let highest_current = workspace
             .packages
             .iter()
@@ -688,10 +902,12 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             .max()
             .unwrap_or_else(|| Version::new(0, 0, 0));
 
-        let coordinated_version = compute_next_version(
-            &format!("{}.{}.{}", highest_current.major, highest_current.minor, highest_current.patch),
-            &args.bump,
-        )?;
+        let base_str = format!("{}.{}.{}", highest_current.major, highest_current.minor, highest_current.patch);
+        let coordinated_version = if args.prerelease {
+            compute_next_prerelease(&base_str, &args.bump, &args.preid)?
+        } else {
+            compute_next_version(&base_str, &args.bump)?
+        };
         let explicit = coordinated_version.to_string();
 
         println!(
@@ -706,7 +922,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             .map(|p| (p, explicit.clone()))
             .collect()
     } else if !args.overrides.is_empty() {
-        // Use per-package overrides
+        // Per-package overrides (prerelease modifier applied if --prerelease)
         args.overrides
             .iter()
             .filter_map(|(name, bump)| {
@@ -714,7 +930,17 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                     .packages
                     .iter()
                     .find(|p| p.name.contains(name))
-                    .map(|p| (p, bump.clone()))
+                    .map(|p| {
+                        if args.prerelease {
+                            let current = p.version.as_deref().unwrap_or("0.0.0");
+                            let v = compute_next_prerelease(current, bump, &args.preid)
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|_| bump.clone());
+                            (p, v)
+                        } else {
+                            (p, bump.clone())
+                        }
+                    })
             })
             .collect()
     } else if args.conventional_commits {
@@ -728,6 +954,12 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                 let bump = highest_bump(commits);
                 if bump == BumpType::None {
                     None
+                } else if args.prerelease {
+                    let current = p.version.as_deref().unwrap_or("0.0.0");
+                    let v = compute_next_prerelease(current, &bump.to_string(), &args.preid)
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|_| bump.to_string());
+                    Some((p, v))
                 } else {
                     Some((p, bump.to_string()))
                 }
@@ -735,15 +967,29 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             .collect()
     } else if args.all {
         // Apply to all packages with the default bump type
-        workspace
-            .packages
-            .iter()
-            .map(|p| (p, args.bump.clone()))
-            .collect()
+        if args.prerelease {
+            workspace
+                .packages
+                .iter()
+                .map(|p| {
+                    let current = p.version.as_deref().unwrap_or("0.0.0");
+                    let v = compute_next_prerelease(current, &args.bump, &args.preid)
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|_| args.bump.clone());
+                    (p, v)
+                })
+                .collect()
+        } else {
+            workspace
+                .packages
+                .iter()
+                .map(|p| (p, args.bump.clone()))
+                .collect()
+        }
     } else {
         println!(
             "{}",
-            "Specify --all, --conventional-commits, or use -V overrides to select packages."
+            "Specify --all, --conventional-commits, --graduate, or use -V overrides to select packages."
                 .yellow()
         );
         return Ok(());
@@ -791,9 +1037,64 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         versioned.push((pkg.name.clone(), new_version));
     }
 
+    // Update dependent package constraints (--dependent-constraints, default: on)
+    if args.dependent_constraints && !versioned.is_empty() {
+        let versioned_names: HashMap<&str, &str> = versioned
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+
+        // Find packages that depend on any bumped package but were not themselves bumped
+        let mut dependents_to_bump: Vec<(&Package, String)> = Vec::new();
+
+        for pkg in &workspace.packages {
+            if versioned_names.contains_key(pkg.name.as_str()) {
+                continue; // Already bumped
+            }
+
+            let mut was_updated = false;
+            for dep_name in pkg.dependencies.iter().chain(pkg.dev_dependencies.iter()) {
+                if let Some(&new_ver) = versioned_names.get(dep_name.as_str()) {
+                    let updated = update_dependency_constraint(pkg, dep_name, new_ver)?;
+                    if updated {
+                        was_updated = true;
+                    }
+                }
+            }
+
+            if was_updated && args.dependent_versions {
+                // Determine the version for the dependent
+                let dependent_ver = if args.prerelease {
+                    let preid = args.dependent_preid.as_deref().unwrap_or(&args.preid);
+                    let current = pkg.version.as_deref().unwrap_or("0.0.0");
+                    compute_next_prerelease(current, "patch", preid)
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|_| "patch".to_string())
+                } else {
+                    "patch".to_string()
+                };
+                dependents_to_bump.push((pkg, dependent_ver));
+            }
+        }
+
+        // Apply patch bumps to dependents
+        if !dependents_to_bump.is_empty() {
+            println!(
+                "\n{} Bumping {} dependent package(s)...",
+                "$".cyan(),
+                dependents_to_bump.len()
+            );
+            for (pkg, bump) in &dependents_to_bump {
+                let new_version = apply_version_bump(pkg, bump)?;
+                versioned.push((pkg.name.clone(), new_version));
+            }
+        }
+    }
+
     // Generate changelogs
     if should_changelog {
         if let Some(ref mapped) = conventional_commits {
+            let repo = workspace.config.repository.as_ref();
             println!("\n{} Generating changelogs...", "$".cyan());
             for (pkg, _bump) in &packages_to_version {
                 if let Some(commits) = mapped.get(&pkg.name)
@@ -805,7 +1106,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("unknown");
                     let entry =
-                        generate_changelog_entry(new_ver, commits, include_body, include_hash, include_scopes);
+                        generate_changelog_entry(new_ver, commits, include_body, include_hash, include_scopes, repo);
                     write_changelog(&pkg.path, &entry)?;
                     println!(
                         "  {} Updated CHANGELOG.md for {}",
@@ -833,6 +1134,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         include_body,
                         include_hash,
                         include_scopes,
+                        repo,
                     );
                     write_changelog(&workspace.root_path, &entry)?;
                     println!(
@@ -872,10 +1174,22 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     }
 
     // Git commit
-    let commit_message = version_config
-        .map(|c| c.message_template().to_string())
-        .unwrap_or_else(|| "chore(release): publish packages".to_string());
-    println!("\n{} Committing: {}", "$".cyan(), commit_message.dimmed());
+    let new_package_versions = versioned
+        .iter()
+        .map(|(name, ver)| format!(" - {} @ {}", name, ver))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let commit_message = if let Some(ref msg) = args.message {
+        // CLI --message overrides everything
+        msg.replace("{new_package_versions}", &new_package_versions)
+    } else {
+        let template = version_config
+            .map(|c| c.message_template().to_string())
+            .unwrap_or_else(|| "chore(release): publish packages\n\n{new_package_versions}".to_string());
+        template.replace("{new_package_versions}", &new_package_versions)
+    };
+    println!("\n{} Committing: {}", "$".cyan(), commit_message.lines().next().unwrap_or(&commit_message).dimmed());
     git_commit(&workspace.root_path, &commit_message)?;
     println!("  {} Committed version changes", "OK".green());
 
@@ -1042,7 +1356,7 @@ mod tests {
             parse_conventional_commit("def5678", "fix: handle null").unwrap(),
             parse_conventional_commit("ghi9012", "chore: update deps").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.2.0", &commits, false, false, true);
+        let entry = generate_changelog_entry("1.2.0", &commits, false, false, true, None);
         assert!(entry.contains("## 1.2.0"));
         assert!(entry.contains("### Features"));
         assert!(entry.contains("- add login"));
@@ -1057,7 +1371,7 @@ mod tests {
         let commits = vec![
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
         ];
-        let entry = generate_changelog_entry("2.0.0", &commits, false, true, true);
+        let entry = generate_changelog_entry("2.0.0", &commits, false, true, true, None);
         assert!(entry.contains("(abc1234)"));
         assert!(entry.contains("**ui**: new button"));
     }
@@ -1100,7 +1414,7 @@ mod tests {
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
             parse_conventional_commit("def5678", "fix(auth): handle token").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.0.0", &commits, false, false, false);
+        let entry = generate_changelog_entry("1.0.0", &commits, false, false, false, None);
         // With include_scopes=false, scope prefix should NOT appear
         assert!(!entry.contains("**ui**"), "Scope should not be included");
         assert!(
@@ -1117,7 +1431,7 @@ mod tests {
         let commits = vec![
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.0.0", &commits, false, false, true);
+        let entry = generate_changelog_entry("1.0.0", &commits, false, false, true, None);
         assert!(entry.contains("**ui**: new button"));
     }
 
@@ -1219,5 +1533,153 @@ mod tests {
         let base = format!("{}.{}.{}", highest.major, highest.minor, highest.patch);
         let next = compute_next_version(&base, "minor").unwrap();
         assert_eq!(next.to_string(), "2.1.0");
+    }
+
+    // -----------------------------------------------------------------------
+    // Prerelease versioning tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_compute_next_prerelease_fresh() {
+        // Stable version -> first prerelease
+        let v = compute_next_prerelease("1.0.0", "minor", "dev").unwrap();
+        assert_eq!(v.to_string(), "1.1.0-dev.0");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_increment() {
+        // Already a prerelease with same preid + base -> increment counter
+        let v = compute_next_prerelease("1.1.0-dev.0", "minor", "dev").unwrap();
+        assert_eq!(v.to_string(), "1.1.0-dev.1");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_increment_high() {
+        let v = compute_next_prerelease("1.1.0-dev.5", "minor", "dev").unwrap();
+        assert_eq!(v.to_string(), "1.1.0-dev.6");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_different_preid() {
+        // Different preid -> reset to 0
+        let v = compute_next_prerelease("1.1.0-beta.3", "minor", "dev").unwrap();
+        assert_eq!(v.to_string(), "1.1.0-dev.0");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_different_base() {
+        // Current is dev.3 at 1.1.0, bump type is "major" but since already a
+        // prerelease with the same preid, it just increments the counter
+        let v = compute_next_prerelease("1.1.0-dev.3", "major", "dev").unwrap();
+        assert_eq!(v.to_string(), "1.1.0-dev.4");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_patch() {
+        let v = compute_next_prerelease("2.0.0", "patch", "alpha").unwrap();
+        assert_eq!(v.to_string(), "2.0.1-alpha.0");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_major_already_at_major() {
+        // Already at major prerelease -> increment
+        let v = compute_next_prerelease("2.0.0-dev.0", "major", "dev").unwrap();
+        assert_eq!(v.to_string(), "2.0.0-dev.1");
+    }
+
+    // -----------------------------------------------------------------------
+    // Graduate versioning tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_graduate_version_dev() {
+        let v = graduate_version("1.1.0-dev.3").unwrap();
+        assert_eq!(v.to_string(), "1.1.0");
+    }
+
+    #[test]
+    fn test_graduate_version_beta() {
+        let v = graduate_version("2.0.0-beta.1").unwrap();
+        assert_eq!(v.to_string(), "2.0.0");
+    }
+
+    #[test]
+    fn test_graduate_version_already_stable() {
+        let v = graduate_version("1.0.0").unwrap();
+        assert_eq!(v.to_string(), "1.0.0");
+    }
+
+    // -----------------------------------------------------------------------
+    // is_prerelease tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_prerelease_true() {
+        assert!(is_prerelease("1.0.0-dev.0"));
+        assert!(is_prerelease("2.3.1-beta.5"));
+        assert!(is_prerelease("0.1.0-alpha.0"));
+    }
+
+    #[test]
+    fn test_is_prerelease_false() {
+        assert!(!is_prerelease("1.0.0"));
+        assert!(!is_prerelease("2.3.1"));
+        assert!(!is_prerelease("0.0.0"));
+    }
+
+    #[test]
+    fn test_is_prerelease_invalid() {
+        assert!(!is_prerelease("not-a-version"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Changelog with repository commit links
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_generate_changelog_with_commit_links() {
+        let repo = RepositoryConfig {
+            url: "https://github.com/org/repo".to_string(),
+        };
+        let commits = vec![
+            parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
+        ];
+        let entry = generate_changelog_entry("2.0.0", &commits, false, true, true, Some(&repo));
+        // Should contain a markdown link instead of bare hash
+        assert!(entry.contains("[abc1234](https://github.com/org/repo/commit/abc1234)"));
+        assert!(!entry.contains(" (abc1234)"), "Should not have bare hash");
+    }
+
+    #[test]
+    fn test_generate_changelog_hash_no_repo() {
+        let commits = vec![
+            parse_conventional_commit("abc1234", "feat: something").unwrap(),
+        ];
+        let entry = generate_changelog_entry("1.0.0", &commits, false, true, true, None);
+        // Without repository, should be bare hash in parens
+        assert!(entry.contains("(abc1234)"));
+        assert!(!entry.contains("[abc1234]"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Commit message template with {new_package_versions} placeholder
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_message_placeholder_replacement() {
+        let template = "chore(release): publish\n\n{new_package_versions}";
+        let versions = vec![
+            ("pkg_a".to_string(), "1.2.0".to_string()),
+            ("pkg_b".to_string(), "3.0.0".to_string()),
+        ];
+        let new_package_versions = versions
+            .iter()
+            .map(|(name, ver)| format!(" - {} @ {}", name, ver))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = template.replace("{new_package_versions}", &new_package_versions);
+        assert!(result.contains(" - pkg_a @ 1.2.0"));
+        assert!(result.contains(" - pkg_b @ 3.0.0"));
+        assert!(result.starts_with("chore(release): publish"));
     }
 }

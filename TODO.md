@@ -170,6 +170,11 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `version:set` command (works via `melos-rs version 2.0.0 --all`)
 - [x] Coordinated versioning (`--coordinated` flag / `command.version.coordinated` config)
 - [x] Git push after version bump (`--no-git-push` flag / `command.version.gitPush` config)
+- [x] Prerelease versioning (`--prerelease`/`-p`, `--preid`, `--dependent-preid`)
+- [x] Graduate prerelease to stable (`--graduate`/`-g`)
+- [x] Dependent constraint auto-updates (`--dependent-constraints`, `--dependent-versions`)
+- [x] Custom commit message (`--message`/`-m` with `{new_package_versions}` placeholder)
+- [x] Repository config for changelog commit links (`repository:` URL string or object form)
 - [ ] Release branch management
 
 ### Developer Experience
