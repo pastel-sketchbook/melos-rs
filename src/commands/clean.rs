@@ -162,6 +162,33 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
     }
 
     println!("\n{}", "All packages cleaned.".green());
+
+    // Run post-clean hook if configured
+    if let Some(clean_config) = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.clean.as_ref())
+        && let Some(hooks) = &clean_config.hooks
+        && let Some(ref post_hook) = hooks.post
+    {
+        println!(
+            "\n{} Running post-clean hook: {}",
+            "$".cyan(),
+            post_hook
+        );
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(post_hook)
+            .current_dir(&workspace.root_path)
+            .status()
+            .await?;
+
+        if !status.success() {
+            anyhow::bail!("Post-clean hook failed with exit code: {}", status.code().unwrap_or(-1));
+        }
+    }
+
     Ok(())
 }
 

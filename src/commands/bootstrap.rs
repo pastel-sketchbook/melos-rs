@@ -25,11 +25,15 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     // Topological sort ensures dependencies are bootstrapped before dependents
     let packages = topological_sort(&filtered);
 
+    // Determine effective concurrency: config `run_pub_get_in_parallel: false` forces 1,
+    // otherwise CLI `-c N` (default 5) applies.
+    let concurrency = effective_concurrency(workspace, args.concurrency);
+
     println!(
         "\n{} Bootstrapping {} packages (concurrency: {}, dependency order)...\n",
         "$".cyan(),
         packages.len(),
-        args.concurrency
+        concurrency
     );
 
     if packages.is_empty() {
@@ -63,7 +67,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     // Bootstrap Flutter packages in parallel
     if !flutter_packages.is_empty() {
         pb.set_message("flutter pub get...");
-        let runner = ProcessRunner::new(args.concurrency, true);
+        let runner = ProcessRunner::new(concurrency, true);
         let results = runner
             .run_in_packages(
                 &flutter_packages,
@@ -84,7 +88,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     // Bootstrap Dart packages in parallel
     if !dart_packages.is_empty() {
         pb.set_message("dart pub get...");
-        let runner = ProcessRunner::new(args.concurrency, true);
+        let runner = ProcessRunner::new(concurrency, true);
         let results = runner
             .run_in_packages(&dart_packages, "dart pub get", &workspace.env_vars())
             .await?;
@@ -101,6 +105,24 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     pb.finish_and_clear();
     println!("\n{}", "All packages bootstrapped.".green());
     Ok(())
+}
+
+/// Determine effective concurrency for bootstrap.
+///
+/// If the config has `command.bootstrap.run_pub_get_in_parallel: false`,
+/// concurrency is forced to 1. Otherwise, the CLI `-c N` value is used.
+fn effective_concurrency(workspace: &Workspace, cli_concurrency: usize) -> usize {
+    let parallel = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref())
+        .and_then(|b| b.run_pub_get_in_parallel);
+
+    match parallel {
+        Some(false) => 1,
+        _ => cli_concurrency,
+    }
 }
 
 /// Generate `pubspec_overrides.yaml` files for local package linking (Melos 6.x mode).
@@ -207,6 +229,12 @@ fn build_pubspec_overrides_content(local_deps: &[&Package], pkg_path: &Path) -> 
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::collections::HashMap;
+
+    use crate::config::{
+        BootstrapCommandConfig, CommandConfig, MelosConfig,
+    };
+    use crate::workspace::{ConfigSource, Workspace};
 
     fn make_package(name: &str, path: &str, deps: Vec<&str>) -> Package {
         Package {
@@ -217,6 +245,25 @@ mod tests {
             publish_to: None,
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
+        }
+    }
+
+    fn make_workspace(bootstrap_config: Option<BootstrapCommandConfig>) -> Workspace {
+        Workspace {
+            root_path: PathBuf::from("/workspace"),
+            config_source: ConfigSource::MelosYaml(PathBuf::from("/workspace/melos.yaml")),
+            config: MelosConfig {
+                name: "test".to_string(),
+                packages: vec!["packages/**".to_string()],
+                command: Some(CommandConfig {
+                    version: None,
+                    bootstrap: bootstrap_config,
+                    clean: None,
+                }),
+                scripts: HashMap::new(),
+                categories: HashMap::new(),
+            },
+            packages: vec![],
         }
     }
 
@@ -250,5 +297,38 @@ mod tests {
         let alpha_pos = content.find("alpha:").unwrap();
         let zebra_pos = content.find("zebra:").unwrap();
         assert!(alpha_pos < zebra_pos, "Dependencies should be sorted by name");
+    }
+
+    #[test]
+    fn test_effective_concurrency_default() {
+        let ws = make_workspace(None);
+        assert_eq!(effective_concurrency(&ws, 5), 5);
+    }
+
+    #[test]
+    fn test_effective_concurrency_parallel_false_forces_one() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: Some(false),
+            enforce_versions_for_dependency_resolution: None,
+        }));
+        assert_eq!(effective_concurrency(&ws, 5), 1);
+    }
+
+    #[test]
+    fn test_effective_concurrency_parallel_true_uses_cli() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: Some(true),
+            enforce_versions_for_dependency_resolution: None,
+        }));
+        assert_eq!(effective_concurrency(&ws, 8), 8);
+    }
+
+    #[test]
+    fn test_effective_concurrency_parallel_none_uses_cli() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: None,
+            enforce_versions_for_dependency_resolution: None,
+        }));
+        assert_eq!(effective_concurrency(&ws, 3), 3);
     }
 }

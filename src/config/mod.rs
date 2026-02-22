@@ -84,11 +84,9 @@ pub struct CommandConfig {
     pub version: Option<VersionCommandConfig>,
 
     /// Bootstrap command config
-    #[allow(dead_code)]
     pub bootstrap: Option<BootstrapCommandConfig>,
 
     /// Clean command config
-    #[allow(dead_code)]
     pub clean: Option<CleanCommandConfig>,
 }
 
@@ -104,7 +102,6 @@ pub struct VersionCommandConfig {
 
     /// Whether to include scopes in conventional commit changelogs
     #[serde(default)]
-    #[allow(dead_code)]
     pub include_scopes: Option<bool>,
 
     /// Whether to create a tag for the versioned commit
@@ -123,7 +120,6 @@ pub struct VersionCommandConfig {
 
     /// Link to packages on pub.dev in changelogs
     #[serde(default)]
-    #[allow(dead_code)]
     pub link_to_commits: Option<bool>,
 
     /// Workspace-level changelog (aggregates all package changes)
@@ -182,7 +178,6 @@ pub struct VersionHooks {
 /// Configuration for the `bootstrap` command
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct BootstrapCommandConfig {
     /// Run `pub get` in parallel
     #[serde(default)]
@@ -190,13 +185,13 @@ pub struct BootstrapCommandConfig {
 
     /// Enforce versions for dependency resolution
     #[serde(default)]
+    #[allow(dead_code)]
     pub enforce_versions_for_dependency_resolution: Option<bool>,
 }
 
 /// Configuration for the `clean` command
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct CleanCommandConfig {
     /// Additional hooks
     pub hooks: Option<CleanHooks>,
@@ -205,7 +200,6 @@ pub struct CleanCommandConfig {
 /// Hooks for the clean command
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct CleanHooks {
     /// Script to run after cleaning
     pub post: Option<String>,
@@ -293,18 +287,9 @@ pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
             let packages = if let Some(pkgs) = wrapper.melos.packages {
                 pkgs
             } else if let Some(ws_paths) = wrapper.workspace {
+                // Dart workspace lists explicit package paths, not globs.
+                // Keep them as-is — discover_packages will match the directory.
                 ws_paths
-                    .into_iter()
-                    .map(|p| {
-                        if p.contains('*') || p.contains('?') || p.contains('[') {
-                            p
-                        } else {
-                            // Dart workspace lists explicit package paths, not globs.
-                            // Keep them as-is — discover_packages will match the directory.
-                            p
-                        }
-                    })
-                    .collect()
             } else {
                 anyhow::bail!(
                     "No package paths found in pubspec.yaml: neither `melos.packages` nor `workspace:` is set.\n\

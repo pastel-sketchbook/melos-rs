@@ -160,3 +160,144 @@ pub fn discover_packages(root: &Path, patterns: &[String]) -> Result<Vec<Package
 
     Ok(packages)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_from_path_dart_package() {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("my_package");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: my_package\nversion: 1.2.3\ndependencies:\n  http: ^0.13.0\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        assert_eq!(pkg.name, "my_package");
+        assert_eq!(pkg.version, Some("1.2.3".to_string()));
+        assert!(!pkg.is_flutter);
+        assert!(!pkg.is_private());
+        assert!(pkg.dependencies.contains(&"http".to_string()));
+    }
+
+    #[test]
+    fn test_from_path_flutter_package() {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("flutter_app");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: flutter_app\nversion: 2.0.0\ndependencies:\n  flutter:\n    sdk: flutter\nflutter:\n  uses-material-design: true\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        assert_eq!(pkg.name, "flutter_app");
+        assert!(pkg.is_flutter);
+    }
+
+    #[test]
+    fn test_from_path_private_package() {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("private_pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: private_pkg\nversion: 0.0.1\npublish_to: none\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        assert!(pkg.is_private());
+        assert_eq!(pkg.publish_to, Some("none".to_string()));
+    }
+
+    #[test]
+    fn test_is_private_case_insensitive() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: Some("NONE".to_string()),
+            dependencies: vec![],
+            dev_dependencies: vec![],
+        };
+        assert!(pkg.is_private());
+    }
+
+    #[test]
+    fn test_is_private_not_none() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: Some("https://pub.dev".to_string()),
+            dependencies: vec![],
+            dev_dependencies: vec![],
+        };
+        assert!(!pkg.is_private());
+    }
+
+    #[test]
+    fn test_is_private_no_publish_to() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+        };
+        assert!(!pkg.is_private());
+    }
+
+    #[test]
+    fn test_has_dependency() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["http".to_string()],
+            dev_dependencies: vec!["test".to_string()],
+        };
+        assert!(pkg.has_dependency("http"));
+        assert!(pkg.has_dependency("test"));
+        assert!(!pkg.has_dependency("dio"));
+    }
+
+    #[test]
+    fn test_from_path_with_dev_dependencies() {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("pkg_with_devdeps");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: pkg_with_devdeps\nversion: 1.0.0\ndependencies:\n  http: ^0.13.0\ndev_dependencies:\n  test: ^1.0.0\n  mockito: ^5.0.0\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        assert_eq!(pkg.dependencies.len(), 1);
+        assert_eq!(pkg.dev_dependencies.len(), 2);
+        assert!(pkg.has_dependency("test"));
+        assert!(pkg.has_dependency("mockito"));
+    }
+
+    #[test]
+    fn test_from_path_missing_pubspec() {
+        let dir = TempDir::new().unwrap();
+        let result = Package::from_path(dir.path());
+        assert!(result.is_err());
+    }
+}

@@ -116,7 +116,6 @@ impl PackageFilters {
     /// when both are set (non-None / non-empty).
     ///
     /// Used when combining global CLI filters with script-level packageFilters.
-    #[allow(dead_code)]
     pub fn merge(&self, other: &PackageFilters) -> PackageFilters {
         PackageFilters {
             flutter: other.flutter.or(self.flutter),
@@ -149,5 +148,147 @@ fn merge_opt_vec(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> Option<Vec
         (Some(a), None) => Some(a.clone()),
         (None, Some(b)) => Some(b.clone()),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_merge_both_none() {
+        let a = PackageFilters::default();
+        let b = PackageFilters::default();
+        let merged = a.merge(&b);
+        assert!(merged.flutter.is_none());
+        assert!(merged.scope.is_none());
+        assert!(merged.ignore.is_none());
+        assert!(!merged.no_private);
+    }
+
+    #[test]
+    fn test_merge_other_takes_precedence() {
+        let a = PackageFilters {
+            flutter: Some(true),
+            dir_exists: Some("test".to_string()),
+            ..Default::default()
+        };
+        let b = PackageFilters {
+            flutter: Some(false),
+            ..Default::default()
+        };
+        let merged = a.merge(&b);
+        // `other` (b) takes precedence for flutter
+        assert_eq!(merged.flutter, Some(false));
+        // `self` (a) dir_exists survives since b has None
+        assert_eq!(merged.dir_exists, Some("test".to_string()));
+    }
+
+    #[test]
+    fn test_merge_scope_concatenation() {
+        let a = PackageFilters {
+            scope: Some(vec!["app_*".to_string()]),
+            ..Default::default()
+        };
+        let b = PackageFilters {
+            scope: Some(vec!["core_*".to_string()]),
+            ..Default::default()
+        };
+        let merged = a.merge(&b);
+        let scope = merged.scope.unwrap();
+        assert_eq!(scope, vec!["app_*", "core_*"]);
+    }
+
+    #[test]
+    fn test_merge_no_private_or() {
+        let a = PackageFilters {
+            no_private: true,
+            ..Default::default()
+        };
+        let b = PackageFilters::default();
+        let merged = a.merge(&b);
+        assert!(
+            merged.no_private,
+            "no_private should be true if either is true"
+        );
+    }
+
+    #[test]
+    fn test_merge_include_dependencies_or() {
+        let a = PackageFilters::default();
+        let b = PackageFilters {
+            include_dependencies: true,
+            ..Default::default()
+        };
+        let merged = a.merge(&b);
+        assert!(merged.include_dependencies);
+    }
+
+    #[test]
+    fn test_merge_diff_other_wins() {
+        let a = PackageFilters {
+            diff: Some("HEAD~5".to_string()),
+            ..Default::default()
+        };
+        let b = PackageFilters {
+            diff: Some("main".to_string()),
+            ..Default::default()
+        };
+        let merged = a.merge(&b);
+        assert_eq!(merged.diff, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_from_global_filter_args() {
+        let args = GlobalFilterArgs {
+            scope: vec!["app*".to_string()],
+            ignore: vec!["test*".to_string()],
+            diff: Some("main".to_string()),
+            since: None,
+            dir_exists: Some("lib".to_string()),
+            file_exists: None,
+            flutter: true,
+            no_flutter: false,
+            depends_on: vec!["core".to_string()],
+            no_depends_on: vec![],
+            no_private: true,
+            category: vec!["apps".to_string()],
+            include_dependencies: true,
+            include_dependents: false,
+        };
+        let filters: PackageFilters = (&args).into();
+        assert_eq!(filters.flutter, Some(true));
+        assert_eq!(filters.scope, Some(vec!["app*".to_string()]));
+        assert_eq!(filters.ignore, Some(vec!["test*".to_string()]));
+        assert_eq!(filters.diff, Some("main".to_string()));
+        assert_eq!(filters.dir_exists, Some("lib".to_string()));
+        assert!(filters.file_exists.is_none());
+        assert_eq!(filters.depends_on, Some(vec!["core".to_string()]));
+        assert!(filters.no_depends_on.is_none());
+        assert!(filters.no_private);
+        assert_eq!(filters.category, Some(vec!["apps".to_string()]));
+        assert!(filters.include_dependencies);
+        assert!(!filters.include_dependents);
+    }
+
+    #[test]
+    fn test_from_global_filter_args_no_flutter() {
+        let args = GlobalFilterArgs {
+            flutter: false,
+            no_flutter: true,
+            ..Default::default()
+        };
+        let filters: PackageFilters = (&args).into();
+        assert_eq!(filters.flutter, Some(false));
+    }
+
+    #[test]
+    fn test_from_global_filter_args_since_alias() {
+        let args = GlobalFilterArgs {
+            since: Some("v1.0.0".to_string()),
+            ..Default::default()
+        };
+        let filters: PackageFilters = (&args).into();
+        assert_eq!(filters.diff, Some("v1.0.0".to_string()));
     }
 }

@@ -79,11 +79,19 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     }
 
     if !args.yes && !args.dry_run {
-        println!(
-            "{} Use --yes to skip confirmation (interactive prompt not yet implemented)",
-            "NOTE:".yellow()
+        print!(
+            "\n{} Publish these packages to pub.dev? [y/N] ",
+            "CONFIRM:".yellow()
         );
-        return Ok(());
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let mut input = String::new();
+        std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut input)?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("{}", "Aborted.".yellow());
+            return Ok(());
+        }
     }
 
     // Build the publish command

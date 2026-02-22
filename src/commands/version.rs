@@ -257,6 +257,7 @@ pub fn generate_changelog_entry(
     commits: &[ConventionalCommit],
     include_body: bool,
     include_hash: bool,
+    include_scopes: bool,
 ) -> String {
     let mut sections: HashMap<&str, Vec<String>> = HashMap::new();
 
@@ -276,11 +277,15 @@ pub fn generate_changelog_entry(
             _ => "Other Changes",
         };
 
-        let scope_prefix = commit
-            .scope
-            .as_ref()
-            .map(|s| format!("**{}**: ", s))
-            .unwrap_or_default();
+        let scope_prefix = if include_scopes {
+            commit
+                .scope
+                .as_ref()
+                .map(|s| format!("**{}**: ", s))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         let hash_suffix = if include_hash {
             format!(" ({})", commit.hash)
@@ -333,15 +338,31 @@ pub fn generate_changelog_entry(
     output
 }
 
-/// Get today's date as YYYY-MM-DD without pulling in the chrono crate
+/// Get today's date as YYYY-MM-DD using Rust's SystemTime (no external process)
 fn chrono_date_today() -> String {
-    let output = std::process::Command::new("date")
-        .arg("+%Y-%m-%d")
-        .output();
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(_) => "unknown-date".to_string(),
-    }
+    let now = std::time::SystemTime::now();
+    let duration = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = duration.as_secs();
+
+    // Simple date calculation from Unix timestamp
+    // Days since epoch
+    let days = (total_secs / 86400) as i64;
+
+    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64; // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // year of era [0, 399]
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // day [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // month [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
 /// Write or prepend a CHANGELOG entry to a package's CHANGELOG.md
@@ -587,7 +608,12 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     let include_hash = version_config
         .and_then(|c| c.changelog_config.as_ref())
         .and_then(|cc| cc.include_commit_id)
+        // link_to_commits is an alias/override for including commit IDs
+        .or_else(|| version_config.and_then(|c| c.link_to_commits))
         .unwrap_or(false);
+    let include_scopes = version_config
+        .and_then(|c| c.include_scopes)
+        .unwrap_or(true); // Melos includes scopes by default
 
     // Collect conventional commits if requested
     let conventional_commits = if args.conventional_commits {
@@ -668,11 +694,19 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     }
 
     if !args.yes {
-        println!(
-            "\n{} Use --yes to skip confirmation (interactive prompt not yet implemented)",
-            "NOTE:".yellow()
+        print!(
+            "\n{} Apply these version changes? [y/N] ",
+            "CONFIRM:".yellow()
         );
-        return Ok(());
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let mut input = String::new();
+        std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut input)?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("{}", "Aborted.".yellow());
+            return Ok(());
+        }
     }
 
     // Apply version changes and collect new versions for tagging
@@ -696,7 +730,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("unknown");
                     let entry =
-                        generate_changelog_entry(new_ver, commits, include_body, include_hash);
+                        generate_changelog_entry(new_ver, commits, include_body, include_hash, include_scopes);
                     write_changelog(&pkg.path, &entry)?;
                     println!(
                         "  {} Updated CHANGELOG.md for {}",
@@ -723,6 +757,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         &all_commits,
                         include_body,
                         include_hash,
+                        include_scopes,
                     );
                     write_changelog(&workspace.root_path, &entry)?;
                     println!(
@@ -919,7 +954,7 @@ mod tests {
             parse_conventional_commit("def5678", "fix: handle null").unwrap(),
             parse_conventional_commit("ghi9012", "chore: update deps").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.2.0", &commits, false, false);
+        let entry = generate_changelog_entry("1.2.0", &commits, false, false, true);
         assert!(entry.contains("## 1.2.0"));
         assert!(entry.contains("### Features"));
         assert!(entry.contains("- add login"));
@@ -934,7 +969,7 @@ mod tests {
         let commits = vec![
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
         ];
-        let entry = generate_changelog_entry("2.0.0", &commits, false, true);
+        let entry = generate_changelog_entry("2.0.0", &commits, false, true, true);
         assert!(entry.contains("(abc1234)"));
         assert!(entry.contains("**ui**: new button"));
     }
@@ -945,5 +980,56 @@ mod tests {
         assert_eq!(BumpType::Patch.to_string(), "patch");
         assert_eq!(BumpType::Minor.to_string(), "minor");
         assert_eq!(BumpType::Major.to_string(), "major");
+    }
+
+    #[test]
+    fn test_chrono_date_today_format() {
+        let date = chrono_date_today();
+        // Should match YYYY-MM-DD format
+        let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
+        assert!(
+            re.is_match(&date),
+            "Date '{}' doesn't match YYYY-MM-DD format",
+            date
+        );
+
+        // Year should be reasonable (2020-2099)
+        let year: u32 = date[..4].parse().unwrap();
+        assert!(year >= 2020 && year <= 2099, "Year {} out of range", year);
+
+        // Month should be 01-12
+        let month: u32 = date[5..7].parse().unwrap();
+        assert!(month >= 1 && month <= 12, "Month {} out of range", month);
+
+        // Day should be 01-31
+        let day: u32 = date[8..10].parse().unwrap();
+        assert!(day >= 1 && day <= 31, "Day {} out of range", day);
+    }
+
+    #[test]
+    fn test_generate_changelog_without_scopes() {
+        let commits = vec![
+            parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
+            parse_conventional_commit("def5678", "fix(auth): handle token").unwrap(),
+        ];
+        let entry = generate_changelog_entry("1.0.0", &commits, false, false, false);
+        // With include_scopes=false, scope prefix should NOT appear
+        assert!(!entry.contains("**ui**"), "Scope should not be included");
+        assert!(
+            !entry.contains("**auth**"),
+            "Scope should not be included"
+        );
+        // But the descriptions should still be present
+        assert!(entry.contains("new button"));
+        assert!(entry.contains("handle token"));
+    }
+
+    #[test]
+    fn test_generate_changelog_with_scopes() {
+        let commits = vec![
+            parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
+        ];
+        let entry = generate_changelog_entry("1.0.0", &commits, false, false, true);
+        assert!(entry.contains("**ui**: new button"));
     }
 }

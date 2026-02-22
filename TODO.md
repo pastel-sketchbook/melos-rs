@@ -42,16 +42,6 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Colored per-package output prefixing (10 rotating colors)
 - [x] `--order-dependents` flag (topological sort for dependency-ordered execution)
 
-### `run` Command
-- [x] Basic run: execute named scripts from config
-- [x] `melos run` -> `melos-rs run` self-reference expansion
-- [x] `&&` chain splitting for sequential execution
-- [x] Script-level `packageFilters` applied before exec
-- [x] `$MELOS_ROOT_PATH` and env var substitution in commands (`$VAR` and `${VAR}`)
-- [x] Interactive script selection when no script name given
-- [x] `--no-select` flag support
-- [x] Exec-style script detection and execution (parses `-c`, `--fail-fast`, `--` separator)
-
 ### `version` Command
 - [x] Version bump types: build, patch, minor, major
 - [x] Per-package overrides with `-V package:bump` syntax
@@ -71,6 +61,21 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Configurable changelog options (include body, include commit ID)
 - [x] Configurable commit message template
 - [x] `--no-changelog` flag to skip changelog generation
+- [x] `include_scopes` config wired to changelog generation
+- [x] `link_to_commits` config wired to changelog commit ID inclusion
+- [x] Interactive y/n confirmation prompt (replaces `--yes` requirement)
+- [x] Pure-Rust date formatting (no shell-out to `date`)
+
+### `run` Command
+- [x] Basic run: execute named scripts from config
+- [x] `melos run` -> `melos-rs run` self-reference expansion
+- [x] `&&` chain splitting for sequential execution
+- [x] Script-level `packageFilters` applied before exec
+- [x] CLI global filters merged with script-level `packageFilters` via `merge()`
+- [x] `$MELOS_ROOT_PATH` and env var substitution in commands (`$VAR` and `${VAR}`)
+- [x] Interactive script selection when no script name given
+- [x] `--no-select` flag support
+- [x] Exec-style script detection and execution (parses `-c`, `--fail-fast`, `--` separator)
 
 ### `bootstrap` Command
 - [x] Run `flutter pub get` / `dart pub get` in each package
@@ -78,6 +83,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Parallel bootstrapping with configurable concurrency (`-c N`)
 - [x] Progress bar with `indicatif`
 - [x] Link local package dependencies (pubspec_overrides.yaml for 6.x mode)
+- [x] Config-driven `run_pub_get_in_parallel: false` forces sequential execution
 
 ### `clean` Command
 - [x] Run `flutter clean` in Flutter packages
@@ -85,6 +91,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Global filters support
 - [x] `--deep` flag to also delete `.dart_tool/`, `build/`, `pubspec.lock`
 - [x] Remove `pubspec_overrides.yaml` files (6.x mode cleanup)
+- [x] Post-clean hook execution (`command.clean.hooks.post`)
 
 ### `list` Command
 - [x] List all packages
@@ -113,6 +120,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `--yes` flag to skip confirmation
 - [x] `-c N` concurrency control
 - [x] Automatic private package exclusion
+- [x] Interactive y/n confirmation prompt
 
 ## Phase 2.5: Config Extensions
 

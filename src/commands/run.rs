@@ -5,7 +5,9 @@ use anyhow::{bail, Result};
 use clap::Args;
 use colored::Colorize;
 
+use crate::cli::GlobalFilterArgs;
 use crate::config::ScriptEntry;
+use crate::config::filter::PackageFilters;
 use crate::package::filter::apply_filters_with_categories;
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
@@ -19,6 +21,9 @@ pub struct RunArgs {
     /// Skip interactive selection (fail if script not found)
     #[arg(long)]
     pub no_select: bool,
+
+    #[command(flatten)]
+    pub filters: GlobalFilterArgs,
 }
 
 /// Execute a named script from the melos.yaml scripts section
@@ -59,7 +64,8 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
 
     // Check if this script has an exec-style command (runs in each package)
     if is_exec_command(&substituted) {
-        run_exec_script(workspace, script, &substituted, &env_vars).await?;
+        let cli_filters: PackageFilters = (&args.filters).into();
+        run_exec_script(workspace, script, &substituted, &env_vars, &cli_filters).await?;
     } else {
         // Parse the run command, expanding melos -> melos-rs references
         let expanded = expand_command(&substituted)?;
@@ -91,19 +97,29 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
 
 /// Run a script that uses `melos exec` style execution across packages.
 ///
-/// If the script has `packageFilters`, they are applied to narrow down packages.
+/// If the script has `packageFilters`, they are merged with CLI filters.
+/// CLI filters take precedence when both are set (e.g. `--scope` narrows
+/// down even if the script already specifies a scope).
 async fn run_exec_script(
     workspace: &Workspace,
     script: &ScriptEntry,
     command: &str,
     env_vars: &HashMap<String, String>,
+    cli_filters: &PackageFilters,
 ) -> Result<()> {
-    // Apply script-level packageFilters if present
-    let packages = if let Some(filters) = script.package_filters() {
-            apply_filters_with_categories(&workspace.packages, filters, Some(&workspace.root_path), &workspace.config.categories)?
+    // Merge script-level packageFilters with CLI filters
+    let filters = if let Some(script_filters) = script.package_filters() {
+        script_filters.merge(cli_filters)
     } else {
-        workspace.packages.clone()
+        cli_filters.clone()
     };
+
+    let packages = apply_filters_with_categories(
+        &workspace.packages,
+        &filters,
+        Some(&workspace.root_path),
+        &workspace.config.categories,
+    )?;
 
     if packages.is_empty() {
         println!("{}", "No packages matched the script's filters.".yellow());
