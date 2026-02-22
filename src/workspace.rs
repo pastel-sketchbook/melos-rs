@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use colored::Colorize;
 
 use crate::config::{self, MelosConfig};
 use crate::package::{self, Package};
@@ -60,6 +61,13 @@ impl Workspace {
             .to_path_buf();
 
         let config = config::parse_config(&config_source)?;
+
+        // Run post-parse validation and print warnings
+        let warnings = config.validate();
+        for warning in &warnings {
+            eprintln!("{} {}", "WARNING:".yellow().bold(), warning);
+        }
+
         let packages = package::discover_packages(&root_path, &config.packages)?;
 
         Ok(Workspace {

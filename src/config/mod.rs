@@ -31,6 +31,78 @@ pub struct MelosConfig {
     pub categories: HashMap<String, Vec<String>>,
 }
 
+impl MelosConfig {
+    /// Validate the config and return a list of warnings for suspicious patterns.
+    ///
+    /// This is a post-parse validation step — the config has already been
+    /// successfully deserialized. These warnings help catch typos and
+    /// misconfiguration that serde silently accepts.
+    pub fn validate(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        // Check for empty packages list
+        if self.packages.is_empty() {
+            warnings.push(
+                "No package paths configured. No packages will be discovered. \
+                 Add glob patterns to the `packages` field."
+                    .to_string(),
+            );
+        }
+
+        // Check scripts for common issues
+        for (name, entry) in &self.scripts {
+            let cmd = entry.run_command();
+
+            // Warn about exec-style scripts missing `--` separator
+            if is_exec_style(cmd) && !cmd.contains(" -- ") {
+                warnings.push(format!(
+                    "Script '{}' looks like an exec command but has no `--` separator. \
+                     The command may not be parsed correctly. \
+                     Expected format: `melos exec [flags] -- <command>`",
+                    name
+                ));
+            }
+
+            // Warn about empty run commands
+            if cmd.trim().is_empty() {
+                warnings.push(format!(
+                    "Script '{}' has an empty `run` command.",
+                    name
+                ));
+            }
+
+            // Check for references to categories that don't exist
+            if let Some(filters) = entry.package_filters()
+                && let Some(ref cats) = filters.category
+            {
+                for cat in cats {
+                    if !self.categories.contains_key(cat) {
+                        warnings.push(format!(
+                            "Script '{}' references category '{}' which is not defined in `categories`. \
+                             Available categories: {}",
+                            name,
+                            cat,
+                            if self.categories.is_empty() {
+                                "(none)".to_string()
+                            } else {
+                                self.categories.keys().cloned().collect::<Vec<_>>().join(", ")
+                            }
+                        ));
+                    }
+                }
+            }
+        }
+
+        warnings
+    }
+}
+
+/// Check if a command string looks like an exec-style command
+fn is_exec_style(cmd: &str) -> bool {
+    let trimmed = cmd.trim();
+    trimmed.contains("melos exec") || trimmed.contains("melos-rs exec")
+}
+
 /// A script entry can be either a simple string or a full config object
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -125,6 +197,14 @@ pub struct VersionCommandConfig {
     /// Workspace-level changelog (aggregates all package changes)
     #[serde(default = "default_true_opt")]
     pub workspace_changelog: Option<bool>,
+
+    /// Whether to push commits and tags to remote after versioning
+    #[serde(default = "default_true_opt")]
+    pub git_push: Option<bool>,
+
+    /// Coordinated versioning: keep all packages at the same version
+    #[serde(default)]
+    pub coordinated: Option<bool>,
 }
 
 impl VersionCommandConfig {
@@ -148,6 +228,16 @@ impl VersionCommandConfig {
     /// Whether a workspace-level CHANGELOG should be generated
     pub fn should_workspace_changelog(&self) -> bool {
         self.workspace_changelog.unwrap_or(true)
+    }
+
+    /// Whether to push commits and tags to remote
+    pub fn should_git_push(&self) -> bool {
+        self.git_push.unwrap_or(true)
+    }
+
+    /// Whether coordinated versioning is enabled
+    pub fn is_coordinated(&self) -> bool {
+        self.coordinated.unwrap_or(false)
     }
 }
 
@@ -519,5 +609,124 @@ melos:
             wrapper.melos.packages,
             Some(vec!["packages/**".to_string(), "tools/**".to_string()])
         );
+    }
+
+    // ── Config validation tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_validate_empty_packages() {
+        let config = MelosConfig {
+            name: "test".to_string(),
+            packages: vec![],
+            command: None,
+            scripts: HashMap::new(),
+            categories: HashMap::new(),
+        };
+        let warnings = config.validate();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("No package paths configured"));
+    }
+
+    #[test]
+    fn test_validate_exec_missing_separator() {
+        let mut scripts = HashMap::new();
+        scripts.insert(
+            "test".to_string(),
+            ScriptEntry::Simple("melos exec flutter test".to_string()),
+        );
+        let config = MelosConfig {
+            name: "test".to_string(),
+            packages: vec!["packages/**".to_string()],
+            command: None,
+            scripts,
+            categories: HashMap::new(),
+        };
+        let warnings = config.validate();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no `--` separator"));
+    }
+
+    #[test]
+    fn test_validate_exec_with_separator_ok() {
+        let mut scripts = HashMap::new();
+        scripts.insert(
+            "test".to_string(),
+            ScriptEntry::Simple("melos exec -- flutter test".to_string()),
+        );
+        let config = MelosConfig {
+            name: "test".to_string(),
+            packages: vec!["packages/**".to_string()],
+            command: None,
+            scripts,
+            categories: HashMap::new(),
+        };
+        let warnings = config.validate();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_validate_empty_run_command() {
+        let mut scripts = HashMap::new();
+        scripts.insert(
+            "empty".to_string(),
+            ScriptEntry::Simple("  ".to_string()),
+        );
+        let config = MelosConfig {
+            name: "test".to_string(),
+            packages: vec!["packages/**".to_string()],
+            command: None,
+            scripts,
+            categories: HashMap::new(),
+        };
+        let warnings = config.validate();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("empty `run` command"));
+    }
+
+    #[test]
+    fn test_validate_undefined_category_reference() {
+        let mut scripts = HashMap::new();
+        scripts.insert(
+            "test".to_string(),
+            ScriptEntry::Full(Box::new(ScriptConfig {
+                run: "flutter test".to_string(),
+                description: None,
+                package_filters: Some(filter::PackageFilters {
+                    category: Some(vec!["nonexistent".to_string()]),
+                    ..Default::default()
+                }),
+                env: HashMap::new(),
+            })),
+        );
+        let config = MelosConfig {
+            name: "test".to_string(),
+            packages: vec!["packages/**".to_string()],
+            command: None,
+            scripts,
+            categories: HashMap::new(),
+        };
+        let warnings = config.validate();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("category 'nonexistent'"));
+        assert!(warnings[0].contains("not defined"));
+    }
+
+    #[test]
+    fn test_validate_valid_config_no_warnings() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+scripts:
+  test: flutter test
+  build:
+    run: melos exec -- dart build
+categories:
+  apps:
+    - app_*
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let warnings = config.validate();
+        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
     }
 }

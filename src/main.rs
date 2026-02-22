@@ -83,6 +83,7 @@ async fn main() -> Result<()> {
         Commands::Format(args) => commands::format::run(&workspace, args).await,
         Commands::Init(_) => unreachable!("init handled above"),
         Commands::List(args) => commands::list::run(&workspace, args).await,
+        Commands::Pub(args) => commands::pub_cmds::run(&workspace, args).await,
         Commands::Publish(args) => commands::publish::run(&workspace, args).await,
         Commands::Run(args) => commands::run::run(&workspace, args).await,
         Commands::Version(args) => commands::version::run(&workspace, args).await,

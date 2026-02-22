@@ -147,7 +147,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 ## Phase 3: Advanced Features
 
 ### Script Execution Engine
-- [ ] Full `melos exec` flag parsing when invoked from `run` command
+- [x] Full `melos exec` flag parsing when invoked from `run` command (unified `ExecFlags` struct)
 - [x] Script-level `env` field support (merged into run command environment)
 - [x] Recursive `melos run X` expansion (handle nested script references, cycle detection, max depth 16)
 - [x] Timeout support for long-running commands (`--timeout <seconds>` on exec)
@@ -158,7 +158,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Circular dependency detection (`list --cycles`)
 - [x] Category-based package filtering (`categories` config field)
 - [x] Workspace-level pubspec overrides (pubspec_overrides.yaml for 6.x local linking)
-- [ ] `pub:get`, `pub:outdated`, `pub:upgrade` built-in commands
+- [x] `pub get`, `pub outdated`, `pub upgrade` subcommands (groups by SDK, `--major-versions` flag)
 
 ### Build Commands (from melos.yaml scripts)
 - [ ] `build:android` / `build:ios` wrapper commands
@@ -167,9 +167,9 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [ ] Simulator build + bundletool integration
 
 ### Versioning & Release
-- [ ] `version:set` command (set explicit version across all packages)
-- [ ] Coordinated versioning (keep all packages in sync)
-- [ ] Git integration (push after version bump)
+- [x] `version:set` command (works via `melos-rs version 2.0.0 --all`)
+- [x] Coordinated versioning (`--coordinated` flag / `command.version.coordinated` config)
+- [x] Git push after version bump (`--no-git-push` flag / `command.version.gitPush` config)
 - [ ] Release branch management
 
 ### Developer Experience
@@ -177,7 +177,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Tab completion for bash/zsh/fish (`completion` subcommand via `clap_complete`)
 - [ ] Progress bars with `indicatif` for more commands
 - [x] Verbose/quiet log levels (`--verbose` / `--quiet` global flags)
-- [ ] Config validation and helpful error messages
+- [x] Config validation and helpful warning messages
 - [ ] Watch mode for development (`--watch`)
 
 ## Phase 4: Parity & Beyond

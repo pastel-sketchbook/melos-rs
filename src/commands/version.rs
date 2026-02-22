@@ -44,6 +44,14 @@ pub struct VersionArgs {
     /// Skip git tag creation
     #[arg(long)]
     pub no_git_tag: bool,
+
+    /// Skip pushing commits and tags to remote
+    #[arg(long)]
+    pub no_git_push: bool,
+
+    /// Coordinated versioning: bump all packages to the same version
+    #[arg(long)]
+    pub coordinated: bool,
 }
 
 /// Parse a version override flag like "anmobile:patch"
@@ -465,6 +473,33 @@ pub fn git_commit(root: &Path, message: &str) -> Result<()> {
     Ok(())
 }
 
+/// Push commits and tags to the remote repository
+pub fn git_push(root: &Path, include_tags: bool) -> Result<()> {
+    let push_status = std::process::Command::new("git")
+        .args(["push"])
+        .current_dir(root)
+        .status()
+        .context("Failed to push commits")?;
+
+    if !push_status.success() {
+        bail!("git push failed");
+    }
+
+    if include_tags {
+        let tag_status = std::process::Command::new("git")
+            .args(["push", "--tags"])
+            .current_dir(root)
+            .status()
+            .context("Failed to push tags")?;
+
+        if !tag_status.success() {
+            bail!("git push --tags failed");
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Version computation
 // ---------------------------------------------------------------------------
@@ -629,8 +664,48 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         None
     };
 
+    // Check if coordinated versioning is enabled (CLI flag or config)
+    let is_coordinated = args.coordinated
+        || version_config.is_some_and(|c| c.is_coordinated());
+
     // Determine which packages to version and how
-    let packages_to_version: Vec<(&Package, String)> = if !args.overrides.is_empty() {
+    let packages_to_version: Vec<(&Package, String)> = if is_coordinated {
+        // Coordinated versioning: bump ALL packages to the same version.
+        // Find the highest current version, apply the bump once, then set
+        // every package to the resulting version.
+        let highest_current = workspace
+            .packages
+            .iter()
+            .filter_map(|p| {
+                let v_str = p.version.as_deref().unwrap_or("0.0.0");
+                Version::parse(v_str)
+                    .or_else(|_| {
+                        let cleaned = v_str.split('+').next().unwrap_or(v_str);
+                        Version::parse(cleaned)
+                    })
+                    .ok()
+            })
+            .max()
+            .unwrap_or_else(|| Version::new(0, 0, 0));
+
+        let coordinated_version = compute_next_version(
+            &format!("{}.{}.{}", highest_current.major, highest_current.minor, highest_current.patch),
+            &args.bump,
+        )?;
+        let explicit = coordinated_version.to_string();
+
+        println!(
+            "  {} Coordinated versioning: all packages -> {}",
+            "INFO".blue(),
+            explicit.green()
+        );
+
+        workspace
+            .packages
+            .iter()
+            .map(|p| (p, explicit.clone()))
+            .collect()
+    } else if !args.overrides.is_empty() {
         // Use per-package overrides
         args.overrides
             .iter()
@@ -834,6 +909,19 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         }
     }
 
+    // Push commits and tags to remote
+    let should_push = if args.no_git_push {
+        false
+    } else {
+        version_config.is_none_or(|c| c.should_git_push())
+    };
+    if should_push {
+        println!("\n{} Pushing to remote...", "$".cyan());
+        git_push(&workspace.root_path, should_tag)?;
+        println!("  {} Pushed commits{}", "OK".green(),
+            if should_tag { " and tags" } else { "" });
+    }
+
     Ok(())
 }
 
@@ -1031,5 +1119,105 @@ mod tests {
         ];
         let entry = generate_changelog_entry("1.0.0", &commits, false, false, true);
         assert!(entry.contains("**ui**: new button"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Coordinated versioning tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_coordinated_picks_highest_version() {
+        // Simulate the coordinated logic: find max version, bump once
+        let versions = vec!["1.0.0", "2.3.1", "1.5.0", "0.9.0"];
+        let highest = versions
+            .iter()
+            .filter_map(|v| Version::parse(v).ok())
+            .max()
+            .unwrap();
+        assert_eq!(highest, Version::new(2, 3, 1));
+
+        // Apply a patch bump to the highest
+        let next = compute_next_version(&highest.to_string(), "patch").unwrap();
+        assert_eq!(next.to_string(), "2.3.2");
+    }
+
+    #[test]
+    fn test_coordinated_minor_bump() {
+        let versions = vec!["1.0.0", "3.1.0", "2.0.0"];
+        let highest = versions
+            .iter()
+            .filter_map(|v| Version::parse(v).ok())
+            .max()
+            .unwrap();
+        assert_eq!(highest, Version::new(3, 1, 0));
+
+        let next = compute_next_version(&highest.to_string(), "minor").unwrap();
+        assert_eq!(next.to_string(), "3.2.0");
+    }
+
+    #[test]
+    fn test_coordinated_major_bump() {
+        let versions = vec!["1.0.0", "1.2.0", "1.2.3"];
+        let highest = versions
+            .iter()
+            .filter_map(|v| Version::parse(v).ok())
+            .max()
+            .unwrap();
+        assert_eq!(highest, Version::new(1, 2, 3));
+
+        let next = compute_next_version(&highest.to_string(), "major").unwrap();
+        assert_eq!(next.to_string(), "2.0.0");
+    }
+
+    #[test]
+    fn test_coordinated_explicit_version() {
+        // Coordinated with an explicit version string as bump
+        let next = compute_next_version("1.0.0", "5.0.0").unwrap();
+        assert_eq!(next.to_string(), "5.0.0");
+    }
+
+    #[test]
+    fn test_coordinated_all_same_version() {
+        // All packages already at the same version
+        let versions = vec!["2.0.0", "2.0.0", "2.0.0"];
+        let highest = versions
+            .iter()
+            .filter_map(|v| Version::parse(v).ok())
+            .max()
+            .unwrap();
+        assert_eq!(highest, Version::new(2, 0, 0));
+
+        let next = compute_next_version(&highest.to_string(), "patch").unwrap();
+        assert_eq!(next.to_string(), "2.0.1");
+    }
+
+    #[test]
+    fn test_coordinated_with_flutter_build_numbers() {
+        // Flutter versions like "1.2.3+4" — semver parses +N as build metadata.
+        // Build metadata is ignored in ordering so 2.0.0+5 == 2.0.0 for max().
+        // The coordinated logic strips build metadata via to_string() on the
+        // base version before bumping, so the result is a clean semver.
+        let versions = vec!["1.0.0", "2.0.0+5"];
+        let highest = versions
+            .iter()
+            .filter_map(|v| {
+                Version::parse(v)
+                    .or_else(|_| {
+                        let cleaned = v.split('+').next().unwrap_or(v);
+                        Version::parse(cleaned)
+                    })
+                    .ok()
+            })
+            .max()
+            .unwrap();
+        // major.minor.patch is 2.0.0 regardless of build metadata
+        assert_eq!(highest.major, 2);
+        assert_eq!(highest.minor, 0);
+        assert_eq!(highest.patch, 0);
+
+        // Bump using only the base version (stripping build metadata)
+        let base = format!("{}.{}.{}", highest.major, highest.minor, highest.patch);
+        let next = compute_next_version(&base, "minor").unwrap();
+        assert_eq!(next.to_string(), "2.1.0");
     }
 }

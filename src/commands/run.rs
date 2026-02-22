@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
+use std::time::Duration;
 
 use anyhow::{bail, Result};
 use clap::Args;
@@ -8,7 +9,7 @@ use colored::Colorize;
 use crate::cli::GlobalFilterArgs;
 use crate::config::ScriptEntry;
 use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters_with_categories;
+use crate::package::filter::{apply_filters_with_categories, topological_sort};
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
 
@@ -153,6 +154,69 @@ async fn run_script_recursive(
     Ok(())
 }
 
+/// Parsed exec flags extracted from a `melos exec [flags] -- <command>` string
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExecFlags {
+    concurrency: usize,
+    fail_fast: bool,
+    order_dependents: bool,
+    timeout: Option<Duration>,
+    dry_run: bool,
+}
+
+impl Default for ExecFlags {
+    fn default() -> Self {
+        Self {
+            concurrency: 5, // Melos default
+            fail_fast: false,
+            order_dependents: false,
+            timeout: None,
+            dry_run: false,
+        }
+    }
+}
+
+/// Parse all exec flags from a `melos exec [flags] -- <command>` string.
+///
+/// Recognizes: `-c N` / `--concurrency N`, `--fail-fast`, `--order-dependents`,
+/// `--timeout N`, `--dry-run`.
+fn parse_exec_flags(command: &str) -> ExecFlags {
+    let mut flags = ExecFlags::default();
+    let parts: Vec<&str> = command.split_whitespace().collect();
+
+    let mut i = 0;
+    while i < parts.len() {
+        match parts[i] {
+            "-c" | "--concurrency" => {
+                if i + 1 < parts.len() {
+                    if let Ok(n) = parts[i + 1].parse::<usize>() {
+                        flags.concurrency = n;
+                    }
+                    i += 1;
+                }
+            }
+            "--fail-fast" => flags.fail_fast = true,
+            "--order-dependents" => flags.order_dependents = true,
+            "--dry-run" => flags.dry_run = true,
+            "--timeout" => {
+                if i + 1 < parts.len() {
+                    if let Ok(secs) = parts[i + 1].parse::<u64>()
+                        && secs > 0
+                    {
+                        flags.timeout = Some(Duration::from_secs(secs));
+                    }
+                    i += 1;
+                }
+            }
+            "--" => break, // Stop parsing flags at separator
+            _ => {}
+        }
+        i += 1;
+    }
+
+    flags
+}
+
 /// Run a script that uses `melos exec` style execution across packages.
 ///
 /// If the script has `packageFilters`, they are merged with CLI filters.
@@ -172,7 +236,7 @@ async fn run_exec_script(
         cli_filters.clone()
     };
 
-    let packages = apply_filters_with_categories(
+    let mut packages = apply_filters_with_categories(
         &workspace.packages,
         &filters,
         Some(&workspace.root_path),
@@ -184,25 +248,46 @@ async fn run_exec_script(
         return Ok(());
     }
 
+    // Parse all exec flags from the command string
+    let flags = parse_exec_flags(command);
+
+    // Apply topological sort if requested
+    if flags.order_dependents {
+        packages = topological_sort(&packages);
+        println!(
+            "{} Packages ordered by dependencies (topological sort)\n",
+            "i".blue()
+        );
+    }
+
+    let timeout_display = flags
+        .timeout
+        .map(|d| format!(", timeout {}s", d.as_secs()))
+        .unwrap_or_default();
+
     println!(
-        "Running in {} package(s):\n",
-        packages.len().to_string().cyan()
+        "Running in {} package(s) with concurrency {}{}:\n",
+        packages.len().to_string().cyan(),
+        flags.concurrency.to_string().cyan(),
+        timeout_display,
     );
     for pkg in &packages {
         println!("  {} {}", "->".cyan(), pkg.name);
     }
     println!();
 
+    // Dry-run mode: show what would be executed without running
+    if flags.dry_run {
+        println!("{}", "DRY RUN — no commands were executed.".yellow().bold());
+        return Ok(());
+    }
+
     // Extract the actual command after `melos exec` / `melos-rs exec`
     let actual_cmd = extract_exec_command(command);
 
-    // Parse concurrency from exec flags (e.g., `-c 5`)
-    let concurrency = extract_exec_concurrency(command);
-    let fail_fast = command.contains("--fail-fast");
-
-    let runner = ProcessRunner::new(concurrency, fail_fast);
+    let runner = ProcessRunner::new(flags.concurrency, flags.fail_fast);
     let results = runner
-        .run_in_packages(&packages, &actual_cmd, env_vars, None)
+        .run_in_packages(&packages, &actual_cmd, env_vars, flags.timeout)
         .await?;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
@@ -269,18 +354,18 @@ fn is_exec_command(command: &str) -> bool {
 
 /// Extract the actual command from a `melos exec -- <command>` string
 fn extract_exec_command(command: &str) -> String {
-    // Look for `--` separator
-    if let Some(pos) = command.find("--") {
-        let after_separator = &command[pos + 2..];
-        return after_separator.trim().to_string();
+    // Look for standalone `--` separator (space-delimited token, not just any `--` prefix)
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    if let Some(pos) = parts.iter().position(|&p| p == "--") {
+        return parts[pos + 1..].join(" ");
     }
 
-    // Fallback: strip `melos exec` / `melos-rs exec` prefix and flags
+    // Fallback: strip `melos exec` / `melos-rs exec` prefix and all known flags
     let stripped = command
         .replace("melos-rs exec", "")
         .replace("melos exec", "");
 
-    // Remove known flags like -c N, --fail-fast
+    // Remove known flags like -c N, --fail-fast, --order-dependents, --timeout N, --dry-run
     let parts: Vec<&str> = stripped.split_whitespace().collect();
     let mut result = Vec::new();
     let mut skip_next = false;
@@ -290,31 +375,17 @@ fn extract_exec_command(command: &str) -> String {
             skip_next = false;
             continue;
         }
-        if *part == "-c" || *part == "--concurrency" {
+        if *part == "-c" || *part == "--concurrency" || *part == "--timeout" {
             skip_next = true;
             continue;
         }
-        if *part == "--fail-fast" {
+        if *part == "--fail-fast" || *part == "--order-dependents" || *part == "--dry-run" {
             continue;
         }
         result.push(*part);
     }
 
     result.join(" ").trim().to_string()
-}
-
-/// Extract concurrency value from exec flags (e.g., `-c 5`)
-fn extract_exec_concurrency(command: &str) -> usize {
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    for (i, part) in parts.iter().enumerate() {
-        if (*part == "-c" || *part == "--concurrency")
-            && i + 1 < parts.len()
-            && let Ok(n) = parts[i + 1].parse::<usize>()
-        {
-            return n;
-        }
-    }
-    5 // Melos default
 }
 
 /// Extract the script name from a `melos-rs run <name>` or `melos run <name>` command.
@@ -544,15 +615,49 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_exec_concurrency() {
+    fn test_extract_exec_command_strips_new_flags() {
+        // Fallback path (no -- separator): should strip all known flags
         assert_eq!(
-            extract_exec_concurrency("melos exec -c 3 -- flutter test"),
-            3
+            extract_exec_command("melos exec --order-dependents --dry-run --timeout 30 flutter test"),
+            "flutter test"
         );
-        assert_eq!(
-            extract_exec_concurrency("melos exec -- flutter test"),
-            5 // default
+    }
+
+    #[test]
+    fn test_parse_exec_flags_defaults() {
+        let flags = parse_exec_flags("melos exec -- flutter test");
+        assert_eq!(flags.concurrency, 5);
+        assert!(!flags.fail_fast);
+        assert!(!flags.order_dependents);
+        assert!(flags.timeout.is_none());
+        assert!(!flags.dry_run);
+    }
+
+    #[test]
+    fn test_parse_exec_flags_concurrency() {
+        let flags = parse_exec_flags("melos exec -c 3 -- flutter test");
+        assert_eq!(flags.concurrency, 3);
+
+        let flags2 = parse_exec_flags("melos exec --concurrency 10 -- dart test");
+        assert_eq!(flags2.concurrency, 10);
+    }
+
+    #[test]
+    fn test_parse_exec_flags_all() {
+        let flags = parse_exec_flags(
+            "melos exec -c 2 --fail-fast --order-dependents --timeout 60 --dry-run -- flutter test"
         );
+        assert_eq!(flags.concurrency, 2);
+        assert!(flags.fail_fast);
+        assert!(flags.order_dependents);
+        assert_eq!(flags.timeout, Some(Duration::from_secs(60)));
+        assert!(flags.dry_run);
+    }
+
+    #[test]
+    fn test_parse_exec_flags_timeout_zero() {
+        let flags = parse_exec_flags("melos exec --timeout 0 -- flutter test");
+        assert!(flags.timeout.is_none(), "timeout 0 means no timeout");
     }
 
     #[test]

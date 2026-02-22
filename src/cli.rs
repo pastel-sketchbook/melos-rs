@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand};
 use clap_complete::Shell;
 
 use crate::commands::{
-    exec::ExecArgs, format::FormatArgs, init::InitArgs, list::ListArgs, publish::PublishArgs,
-    run::RunArgs, version::VersionArgs,
+    exec::ExecArgs, format::FormatArgs, init::InitArgs, list::ListArgs, pub_cmds::PubArgs,
+    publish::PublishArgs, run::RunArgs, version::VersionArgs,
 };
 
 /// melos-rs: A Rust CLI for Flutter/Dart monorepo management
@@ -151,6 +151,9 @@ pub enum Commands {
 
     /// List packages in the workspace
     List(ListArgs),
+
+    /// Run pub commands (get, outdated, upgrade) across packages
+    Pub(PubArgs),
 
     /// Publish packages to pub.dev
     Publish(PublishArgs),

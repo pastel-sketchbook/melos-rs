@@ -4,6 +4,7 @@ pub mod exec;
 pub mod format;
 pub mod init;
 pub mod list;
+pub mod pub_cmds;
 pub mod publish;
 pub mod run;
 pub mod version;
