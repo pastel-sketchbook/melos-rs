@@ -21,6 +21,9 @@ pub struct Package {
     /// Whether this is a Flutter package (has flutter dependency)
     pub is_flutter: bool,
 
+    /// The `publish_to` field from pubspec.yaml (e.g. "none" for private packages)
+    pub publish_to: Option<String>,
+
     /// Dependencies listed in pubspec.yaml
     pub dependencies: Vec<String>,
 
@@ -35,6 +38,9 @@ pub struct PubspecYaml {
 
     #[serde(default)]
     pub version: Option<String>,
+
+    #[serde(default)]
+    pub publish_to: Option<String>,
 
     #[serde(default)]
     pub dependencies: Option<HashMap<String, yaml_serde::Value>>,
@@ -88,9 +94,17 @@ impl Package {
             path: path.to_path_buf(),
             version: pubspec.version,
             is_flutter,
+            publish_to: pubspec.publish_to,
             dependencies,
             dev_dependencies,
         })
+    }
+
+    /// Whether this package is private (publish_to: none)
+    pub fn is_private(&self) -> bool {
+        self.publish_to
+            .as_ref()
+            .is_some_and(|p| p.eq_ignore_ascii_case("none"))
     }
 
     /// Check if this package has a given dependency (in deps or dev_deps)

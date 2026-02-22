@@ -8,10 +8,29 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] CLI argument parsing with `clap` (commands: exec, run, version, bootstrap, clean, list)
 - [x] `melos.yaml` config parsing (name, packages, scripts, command hooks)
 - [x] Package discovery from glob patterns
-- [x] Pubspec.yaml parsing (name, version, dependencies, flutter detection)
+- [x] Pubspec.yaml parsing (name, version, dependencies, flutter detection, publish_to)
 - [x] Package filtering (flutter/dart, dir-exists, file-exists, depends-on, scope, ignore)
 - [x] Process runner with configurable concurrency and fail-fast
 - [x] Workspace environment variables (MELOS_ROOT_PATH, MELOS_PACKAGE_*)
+
+## Phase 1.5: Global Filters
+
+- [x] `GlobalFilterArgs` shared across all commands (flattened into each subcommand)
+- [x] `--scope=<glob>` filter (glob matching on package names, multiple allowed)
+- [x] `--ignore=<glob>` filter (glob exclusion on package names, multiple allowed)
+- [x] `--diff=<ref>` / `--since=<ref>` filter (git-based change detection)
+- [x] `--dir-exists=<path>` filter
+- [x] `--file-exists=<path>` filter
+- [x] `--flutter` / `--no-flutter` filter
+- [x] `--depends-on=<pkg>` filter (multiple allowed)
+- [x] `--no-depends-on=<pkg>` filter (multiple allowed)
+- [x] `--no-private` filter (exclude publish_to: none packages)
+- [x] `--category=<cat>` flag (parsed, not yet applied - needs melos.yaml categories config)
+- [x] `--include-dependencies` transitive dependency expansion
+- [x] `--include-dependents` transitive dependent expansion
+- [x] `PackageFilters::merge()` for combining CLI + script-level filters
+- [x] `Package.publish_to` field, `Package.is_private()` method
+- [x] 19 tests passing, clippy clean
 
 ## Phase 2: Command Implementations
 
@@ -19,9 +38,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Basic exec: run command in each package
 - [x] `-c N` concurrency control
 - [x] `--fail-fast` flag
-- [x] `--depends-on` filter
-- [x] `--flutter` / `--no-flutter` filter
-- [x] `--file-exists` / `--dir-exists` filter
+- [x] Global filters (`--scope`, `--ignore`, `--depends-on`, etc.) via flattened GlobalFilterArgs
 - [ ] Per-package env vars injected during exec (MELOS_PACKAGE_NAME, etc.)
 - [ ] `--no-select` flag (skip package selection prompt)
 - [ ] Colored per-package output prefixing
@@ -50,19 +67,21 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 
 ### `bootstrap` Command
 - [x] Run `flutter pub get` / `dart pub get` in each package
+- [x] Global filters support
 - [ ] Link local package dependencies (path overrides)
 - [ ] Parallel bootstrapping with progress indicator
 
 ### `clean` Command
 - [x] Run `flutter clean` in Flutter packages
+- [x] Global filters support
 - [ ] Clean build artifacts in pure Dart packages
 - [ ] `--deep` flag to also delete `.dart_tool/`, `pubspec.lock`
 
 ### `list` Command
 - [x] List all packages
-- [x] `--long` flag for detailed output
-- [x] `--json` flag for machine-readable output
-- [x] `--flutter` / `--no-flutter` filter
+- [x] `--long` flag for detailed output (now shows private tag)
+- [x] `--json` flag for machine-readable output (now includes private field)
+- [x] Global filters support (replaces per-command --flutter/--no-flutter)
 - [ ] Dependency graph visualization
 - [ ] `--graph` flag for tree output
 
@@ -103,6 +122,8 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 
 ## Phase 4: Parity & Beyond
 
+- [ ] `format` command (dart format across packages)
+- [ ] `publish` command (pub.dev publishing with dry-run)
 - [ ] Full Melos CLI flag compatibility
 - [ ] Migration guide from Melos to melos-rs
 - [ ] Performance benchmarks vs Melos

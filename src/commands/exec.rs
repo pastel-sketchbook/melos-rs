@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use colored::Colorize;
 
+use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
 use crate::package::filter::apply_filters;
 use crate::runner::ProcessRunner;
@@ -22,50 +23,8 @@ pub struct ExecArgs {
     #[arg(long)]
     pub fail_fast: bool,
 
-    /// Only include packages that depend on this package
-    #[arg(long = "depends-on")]
-    pub depends_on: Option<String>,
-
-    /// Only include Flutter packages
-    #[arg(long)]
-    pub flutter: bool,
-
-    /// Only include non-Flutter (Dart) packages
-    #[arg(long)]
-    pub no_flutter: bool,
-
-    /// Only include packages where this file exists
-    #[arg(long = "file-exists")]
-    pub file_exists: Option<String>,
-
-    /// Only include packages where this directory exists
-    #[arg(long = "dir-exists")]
-    pub dir_exists: Option<String>,
-}
-
-impl ExecArgs {
-    /// Convert CLI flags into PackageFilters
-    fn to_package_filters(&self) -> PackageFilters {
-        let flutter = if self.flutter {
-            Some(true)
-        } else if self.no_flutter {
-            Some(false)
-        } else {
-            None
-        };
-
-        PackageFilters {
-            flutter,
-            dir_exists: self.dir_exists.clone(),
-            file_exists: self.file_exists.clone(),
-            depends_on: self
-                .depends_on
-                .as_ref()
-                .map(|d| d.split(',').map(|s| s.trim().to_string()).collect()),
-            ignore: None,
-            scope: None,
-        }
-    }
+    #[command(flatten)]
+    pub filters: GlobalFilterArgs,
 }
 
 /// Execute a command across all matching packages
@@ -77,9 +36,9 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
         cmd_str.bold()
     );
 
-    // Apply filters
-    let filters = args.to_package_filters();
-    let packages = apply_filters(&workspace.packages, &filters);
+    // Apply filters from CLI flags
+    let filters: PackageFilters = (&args.filters).into();
+    let packages = apply_filters(&workspace.packages, &filters, Some(&workspace.root_path))?;
 
     if packages.is_empty() {
         println!("{}", "No packages matched the given filters.".yellow());

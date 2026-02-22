@@ -2,6 +2,9 @@ use anyhow::Result;
 use clap::Args;
 use colored::Colorize;
 
+use crate::cli::GlobalFilterArgs;
+use crate::config::filter::PackageFilters;
+use crate::package::filter::apply_filters;
 use crate::workspace::Workspace;
 
 /// Arguments for the `list` command
@@ -15,30 +18,14 @@ pub struct ListArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Only list Flutter packages
-    #[arg(long)]
-    pub flutter: bool,
-
-    /// Only list non-Flutter (Dart) packages
-    #[arg(long)]
-    pub no_flutter: bool,
+    #[command(flatten)]
+    pub filters: GlobalFilterArgs,
 }
 
 /// List packages in the workspace
 pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
-    let packages: Vec<_> = workspace
-        .packages
-        .iter()
-        .filter(|p| {
-            if args.flutter {
-                p.is_flutter
-            } else if args.no_flutter {
-                !p.is_flutter
-            } else {
-                true
-            }
-        })
-        .collect();
+    let filters: PackageFilters = (&args.filters).into();
+    let packages = apply_filters(&workspace.packages, &filters, Some(&workspace.root_path))?;
 
     if packages.is_empty() {
         println!("{}", "No packages found.".yellow());
@@ -69,6 +56,10 @@ pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
                     yaml_serde::Value::String("flutter".to_string()),
                     yaml_serde::Value::Bool(p.is_flutter),
                 );
+                map.insert(
+                    yaml_serde::Value::String("private".to_string()),
+                    yaml_serde::Value::Bool(p.is_private()),
+                );
                 yaml_serde::Value::Mapping(map)
             })
             .collect();
@@ -89,11 +80,17 @@ pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
             } else {
                 "dart".blue()
             };
+            let private_tag = if pkg.is_private() {
+                " (private)".dimmed()
+            } else {
+                "".dimmed()
+            };
             println!(
-                "  {} {} [{}] {}",
+                "  {} {} [{}]{} {}",
                 pkg.name.bold(),
                 version.dimmed(),
                 pkg_type,
+                private_tag,
                 pkg.path.display().to_string().dimmed()
             );
         }

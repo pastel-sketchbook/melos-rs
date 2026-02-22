@@ -33,8 +33,8 @@ pub struct MelosConfig {
 pub enum ScriptEntry {
     /// Simple string command
     Simple(String),
-    /// Full script configuration
-    Full(ScriptConfig),
+    /// Full script configuration (boxed to reduce enum size)
+    Full(Box<ScriptConfig>),
 }
 
 impl ScriptEntry {
