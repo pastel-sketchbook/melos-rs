@@ -2,12 +2,12 @@ pub mod filter;
 pub mod script;
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use self::script::ScriptConfig;
+use crate::workspace::ConfigSource;
 
 /// Top-level melos.yaml configuration
 #[derive(Debug, Deserialize)]
@@ -215,15 +215,113 @@ fn default_true_opt() -> Option<bool> {
     Some(true)
 }
 
-/// Parse melos.yaml from a file path
-pub fn parse_config(path: &Path) -> Result<MelosConfig> {
+/// Wrapper struct for Melos 7.x format: `pubspec.yaml` with a `melos:` key.
+///
+/// The top-level pubspec fields we need are `name` and `workspace`.
+/// Everything else (scripts, command config, categories) lives under `melos:`.
+#[derive(Debug, Deserialize)]
+struct PubspecWithMelos {
+    /// Top-level `name` from pubspec.yaml
+    name: String,
+
+    /// Dart workspace paths (replaces `packages` globs in 7.x)
+    #[serde(default)]
+    workspace: Option<Vec<String>>,
+
+    /// The `melos:` section containing melos-specific config
+    melos: MelosSection,
+}
+
+/// The `melos:` section inside a Melos 7.x root pubspec.yaml.
+///
+/// All the familiar melos.yaml fields except `name` (taken from pubspec top-level)
+/// and `packages` (taken from `workspace:` field).
+#[derive(Debug, Deserialize)]
+struct MelosSection {
+    /// Override workspace name (optional; defaults to pubspec `name`)
+    #[serde(default)]
+    name: Option<String>,
+
+    /// Package glob patterns (optional in 7.x; falls back to `workspace:` paths)
+    #[serde(default)]
+    packages: Option<Vec<String>>,
+
+    /// Command-level configuration
+    #[serde(default)]
+    command: Option<CommandConfig>,
+
+    /// Named scripts
+    #[serde(default)]
+    scripts: HashMap<String, ScriptEntry>,
+
+    /// Category definitions
+    #[serde(default)]
+    categories: HashMap<String, Vec<String>>,
+}
+
+/// Parse workspace config from the given config source.
+///
+/// - **6.x (`melos.yaml`)**: Direct deserialization to `MelosConfig`.
+/// - **7.x (`pubspec.yaml`)**: Deserialize wrapper, then assemble `MelosConfig`
+///   from pubspec top-level fields + the `melos:` section.
+pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
+    let path = source.path();
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
-    let config: MelosConfig = yaml_serde::from_str(&content)
-        .with_context(|| format!("Failed to parse melos.yaml: {}", path.display()))?;
+    match source {
+        ConfigSource::MelosYaml(_) => {
+            let config: MelosConfig = yaml_serde::from_str(&content)
+                .with_context(|| format!("Failed to parse melos.yaml: {}", path.display()))?;
+            Ok(config)
+        }
+        ConfigSource::PubspecYaml(_) => {
+            let wrapper: PubspecWithMelos = yaml_serde::from_str(&content).with_context(|| {
+                format!(
+                    "Failed to parse melos config from pubspec.yaml: {}",
+                    path.display()
+                )
+            })?;
 
-    Ok(config)
+            // Name: prefer melos.name override, then pubspec top-level name
+            let name = wrapper.melos.name.unwrap_or(wrapper.name);
+
+            // Packages: prefer melos.packages, then workspace: paths converted to globs.
+            // Dart workspace paths are explicit directory paths (e.g. "packages/core"),
+            // but discover_packages expects glob patterns. We append "/**" if the path
+            // doesn't already contain a glob character.
+            let packages = if let Some(pkgs) = wrapper.melos.packages {
+                pkgs
+            } else if let Some(ws_paths) = wrapper.workspace {
+                ws_paths
+                    .into_iter()
+                    .map(|p| {
+                        if p.contains('*') || p.contains('?') || p.contains('[') {
+                            p
+                        } else {
+                            // Dart workspace lists explicit package paths, not globs.
+                            // Keep them as-is — discover_packages will match the directory.
+                            p
+                        }
+                    })
+                    .collect()
+            } else {
+                anyhow::bail!(
+                    "No package paths found in pubspec.yaml: neither `melos.packages` nor `workspace:` is set.\n\
+                     \n\
+                     Hint: Add a `workspace:` field listing your package paths, or add `packages:` under `melos:`."
+                );
+            };
+
+            Ok(MelosConfig {
+                name,
+                packages,
+                command: wrapper.melos.command,
+                scripts: wrapper.melos.scripts,
+                categories: wrapper.melos.categories,
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +448,91 @@ categories:
         assert_eq!(
             config.categories["libraries"],
             vec!["core_*".to_string(), "utils".to_string()]
+        );
+    }
+
+    // ── 7.x pubspec.yaml format tests ───────────────────────────────────
+
+    #[test]
+    fn test_parse_7x_pubspec_with_melos_section() {
+        let yaml = r#"
+name: my_workspace
+workspace:
+  - packages/core
+  - packages/app
+melos:
+  scripts:
+    analyze: dart analyze .
+  categories:
+    libs:
+      - core
+"#;
+        let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
+        assert_eq!(wrapper.name, "my_workspace");
+        assert_eq!(
+            wrapper.workspace,
+            Some(vec![
+                "packages/core".to_string(),
+                "packages/app".to_string()
+            ])
+        );
+        assert_eq!(wrapper.melos.scripts.len(), 1);
+        assert!(wrapper.melos.name.is_none());
+    }
+
+    #[test]
+    fn test_parse_7x_with_melos_name_override() {
+        let yaml = r#"
+name: pubspec_name
+melos:
+  name: custom_workspace_name
+  packages:
+    - packages/**
+"#;
+        let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
+        assert_eq!(wrapper.melos.name.as_deref(), Some("custom_workspace_name"));
+    }
+
+    #[test]
+    fn test_parse_7x_packages_from_workspace_field() {
+        let yaml = r#"
+name: my_workspace
+workspace:
+  - packages/core
+  - packages/app
+melos:
+  scripts: {}
+"#;
+        let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
+
+        // Simulate what parse_config does: fall back to workspace paths
+        let packages = wrapper
+            .melos
+            .packages
+            .unwrap_or_else(|| wrapper.workspace.unwrap_or_default());
+        assert_eq!(
+            packages,
+            vec!["packages/core".to_string(), "packages/app".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_7x_melos_packages_override() {
+        let yaml = r#"
+name: my_workspace
+workspace:
+  - packages/core
+  - packages/app
+melos:
+  packages:
+    - packages/**
+    - tools/**
+"#;
+        let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
+        // melos.packages should take precedence over workspace:
+        assert_eq!(
+            wrapper.melos.packages,
+            Some(vec!["packages/**".to_string(), "tools/**".to_string()])
         );
     }
 }

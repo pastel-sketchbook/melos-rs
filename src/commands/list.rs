@@ -347,6 +347,9 @@ mod tests {
             &packages,
             &crate::workspace::Workspace {
                 root_path: PathBuf::from("/workspace"),
+                config_source: crate::workspace::ConfigSource::MelosYaml(
+                    PathBuf::from("/workspace/melos.yaml"),
+                ),
                 config: crate::config::MelosConfig {
                     name: "test".to_string(),
                     packages: vec![],

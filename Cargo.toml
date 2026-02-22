@@ -37,3 +37,9 @@ regex = "1.12.3"
 
 # Semver for version management
 semver = "1.0.27"
+
+# Path utilities
+pathdiff = "0.2"
+
+[dev-dependencies]
+tempfile = "3.19"

@@ -18,20 +18,23 @@ async fn main() -> Result<()> {
     let workspace = match workspace::Workspace::find_and_load() {
         Ok(ws) => ws,
         Err(e) => {
-            eprintln!(
-                "{} Failed to load melos.yaml: {}",
-                "ERROR".red().bold(),
-                e
-            );
+            eprintln!("{} Failed to load workspace: {}", "ERROR".red().bold(), e);
             std::process::exit(1);
         }
     };
 
+    let config_mode = if workspace.config_source.is_legacy() {
+        "melos.yaml"
+    } else {
+        "pubspec.yaml"
+    };
+
     println!(
-        "{} {} ({})",
+        "{} {} ({}) [{}]",
         "melos-rs".cyan().bold(),
         workspace.config.name.bold(),
-        workspace.root_path.display()
+        workspace.root_path.display(),
+        config_mode.dimmed()
     );
 
     let result = match cli.command {

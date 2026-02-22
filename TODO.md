@@ -40,7 +40,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Global filters (`--scope`, `--ignore`, `--depends-on`, etc.) via flattened GlobalFilterArgs
 - [x] Per-package env vars injected during exec (MELOS_PACKAGE_NAME, VERSION, PATH)
 - [x] Colored per-package output prefixing (10 rotating colors)
-- [ ] `--order-dependents` flag (topological sort for dependency-ordered execution)
+- [x] `--order-dependents` flag (topological sort for dependency-ordered execution)
 
 ### `run` Command
 - [x] Basic run: execute named scripts from config
@@ -77,13 +77,14 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Global filters support
 - [x] Parallel bootstrapping with configurable concurrency (`-c N`)
 - [x] Progress bar with `indicatif`
-- [ ] Link local package dependencies (path overrides)
+- [x] Link local package dependencies (pubspec_overrides.yaml for 6.x mode)
 
 ### `clean` Command
 - [x] Run `flutter clean` in Flutter packages
 - [x] Clean build artifacts in pure Dart packages (build/, .dart_tool/)
 - [x] Global filters support
 - [x] `--deep` flag to also delete `.dart_tool/`, `build/`, `pubspec.lock`
+- [x] Remove `pubspec_overrides.yaml` files (6.x mode cleanup)
 
 ### `list` Command
 - [x] List all packages
@@ -120,6 +121,21 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `BootstrapCommandConfig` with run_pub_get_in_parallel
 - [x] `CleanCommandConfig` with hooks
 
+## Phase 2.6: Dual Config Support (Melos 6.x + 7.x)
+
+- [x] `ConfigSource` enum (`MelosYaml` vs `PubspecYaml`) in workspace.rs
+- [x] Auto-detection: walk up searching for `melos.yaml` then `pubspec.yaml` with `melos:` key
+- [x] `melos.yaml` preferred over `pubspec.yaml` when both exist (user hasn't migrated)
+- [x] 7.x config parsing: extract `melos:` section from pubspec.yaml
+- [x] 7.x name resolution: `melos.name` override or fall back to pubspec `name`
+- [x] 7.x package paths: `melos.packages` or fall back to `workspace:` field
+- [x] `Workspace.config_source` field for downstream mode decisions
+- [x] Bootstrap: generate `pubspec_overrides.yaml` in 6.x mode only
+- [x] Clean: remove `pubspec_overrides.yaml` in 6.x mode only
+- [x] Startup banner shows config mode (`[melos.yaml]` or `[pubspec.yaml]`)
+- [x] Actionable error message when no config found
+- [ ] `melos-rs init` — scaffold new 7.x workspace
+
 ## Phase 3: Advanced Features
 
 ### Script Execution Engine
@@ -130,11 +146,11 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [ ] Dry-run mode (`--dry-run`)
 
 ### Package Management
-- [x] Topological sort for dependency-ordered execution (Kahn's algorithm, not yet wired to commands)
+- [x] Topological sort for dependency-ordered execution (Kahn's algorithm, wired to bootstrap + exec)
 - [x] Circular dependency detection (`list --cycles`)
 - [x] Category-based package filtering (`categories` config field)
+- [x] Workspace-level pubspec overrides (pubspec_overrides.yaml for 6.x local linking)
 - [ ] `pub:get`, `pub:outdated`, `pub:upgrade` built-in commands
-- [ ] Workspace-level pubspec overrides (pubspec_overrides.yaml for local linking)
 
 ### Build Commands (from melos.yaml scripts)
 - [ ] `build:android` / `build:ios` wrapper commands
@@ -149,7 +165,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [ ] Release branch management
 
 ### Developer Experience
-- [ ] `melos-rs init` - generate a starter melos.yaml
+- [ ] `melos-rs init` - scaffold a new 7.x workspace (pubspec.yaml with melos: key)
 - [ ] Tab completion for bash/zsh/fish
 - [ ] Progress bars with `indicatif` for more commands
 - [ ] Verbose/quiet/debug log levels
