@@ -70,6 +70,14 @@ pub struct PackageFilters {
     /// Also include transitive dependents of matched packages
     #[serde(default)]
     pub include_dependents: bool,
+
+    /// Filter by published status.
+    ///
+    /// - `Some(true)`: only include publishable packages (publish_to is NOT "none")
+    /// - `Some(false)`: only include non-published/private packages (publish_to IS "none")
+    /// - `None`: no filter
+    #[serde(default)]
+    pub published: Option<bool>,
 }
 
 impl From<&GlobalFilterArgs> for PackageFilters {
@@ -107,6 +115,7 @@ impl From<&GlobalFilterArgs> for PackageFilters {
             },
             include_dependencies: args.include_dependencies,
             include_dependents: args.include_dependents,
+            published: args.published_filter(),
         }
     }
 }
@@ -133,6 +142,7 @@ impl PackageFilters {
             category: merge_opt_vec(&self.category, &other.category),
             include_dependencies: self.include_dependencies || other.include_dependencies,
             include_dependents: self.include_dependents || other.include_dependents,
+            published: other.published.or(self.published),
         }
     }
 }
@@ -255,6 +265,8 @@ mod tests {
             category: vec!["apps".to_string()],
             include_dependencies: true,
             include_dependents: false,
+            published: false,
+            no_published: false,
         };
         let filters: PackageFilters = (&args).into();
         assert_eq!(filters.flutter, Some(true));
@@ -290,5 +302,50 @@ mod tests {
         };
         let filters: PackageFilters = (&args).into();
         assert_eq!(filters.diff, Some("v1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_from_global_filter_args_published() {
+        let args = GlobalFilterArgs {
+            published: true,
+            ..Default::default()
+        };
+        let filters: PackageFilters = (&args).into();
+        assert_eq!(filters.published, Some(true));
+    }
+
+    #[test]
+    fn test_from_global_filter_args_no_published() {
+        let args = GlobalFilterArgs {
+            no_published: true,
+            ..Default::default()
+        };
+        let filters: PackageFilters = (&args).into();
+        assert_eq!(filters.published, Some(false));
+    }
+
+    #[test]
+    fn test_merge_published_other_wins() {
+        let a = PackageFilters {
+            published: Some(true),
+            ..Default::default()
+        };
+        let b = PackageFilters {
+            published: Some(false),
+            ..Default::default()
+        };
+        let merged = a.merge(&b);
+        assert_eq!(merged.published, Some(false));
+    }
+
+    #[test]
+    fn test_merge_published_fallback() {
+        let a = PackageFilters {
+            published: Some(true),
+            ..Default::default()
+        };
+        let b = PackageFilters::default();
+        let merged = a.merge(&b);
+        assert_eq!(merged.published, Some(true));
     }
 }

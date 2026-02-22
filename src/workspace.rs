@@ -68,7 +68,18 @@ impl Workspace {
             eprintln!("{} {}", "WARNING:".yellow().bold(), warning);
         }
 
-        let packages = package::discover_packages(&root_path, &config.packages)?;
+        let mut packages = package::discover_packages(&root_path, &config.packages)?;
+
+        // Apply top-level ignore patterns (global exclusion before any command-level filters)
+        if let Some(ref ignore_patterns) = config.ignore {
+            packages.retain(|pkg| {
+                !ignore_patterns.iter().any(|pattern| {
+                    glob::Pattern::new(pattern)
+                        .map(|p| p.matches(&pkg.name))
+                        .unwrap_or_else(|_| pkg.name.contains(pattern))
+                })
+            });
+        }
 
         Ok(Workspace {
             root_path,

@@ -135,6 +135,18 @@ fn matches_filters(pkg: &Package, filters: &PackageFilters) -> bool {
         return false;
     }
 
+    // Published filter
+    if let Some(published) = filters.published {
+        if published && pkg.is_private() {
+            // --published: exclude private (unpublishable) packages
+            return false;
+        }
+        if !published && !pkg.is_private() {
+            // --no-published: exclude publishable packages
+            return false;
+        }
+    }
+
     true
 }
 
@@ -749,5 +761,55 @@ mod tests {
         let cyclic: Vec<&str> = sorted[1..].iter().map(|p| p.name.as_str()).collect();
         assert!(cyclic.contains(&"a"));
         assert!(cyclic.contains(&"b"));
+    }
+
+    #[test]
+    fn test_published_filter_only_published() {
+        let packages = vec![
+            make_package("public_pkg", false, vec![]),
+            make_private_package("private_pkg"),
+        ];
+
+        let filters = PackageFilters {
+            published: Some(true),
+            ..Default::default()
+        };
+
+        let result = apply_filters(&packages, &filters, None).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "public_pkg");
+    }
+
+    #[test]
+    fn test_published_filter_only_unpublished() {
+        let packages = vec![
+            make_package("public_pkg", false, vec![]),
+            make_private_package("private_pkg"),
+        ];
+
+        let filters = PackageFilters {
+            published: Some(false),
+            ..Default::default()
+        };
+
+        let result = apply_filters(&packages, &filters, None).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "private_pkg");
+    }
+
+    #[test]
+    fn test_published_filter_none_includes_all() {
+        let packages = vec![
+            make_package("public_pkg", false, vec![]),
+            make_private_package("private_pkg"),
+        ];
+
+        let filters = PackageFilters {
+            published: None,
+            ..Default::default()
+        };
+
+        let result = apply_filters(&packages, &filters, None).unwrap();
+        assert_eq!(result.len(), 2);
     }
 }

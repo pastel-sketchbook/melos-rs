@@ -263,6 +263,7 @@ mod tests {
                     clean: None,
                 }),
                 scripts: HashMap::new(),
+                ignore: None,
                 categories: HashMap::new(),
             },
             packages: vec![],

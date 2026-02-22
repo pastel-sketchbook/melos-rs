@@ -26,18 +26,35 @@ pub struct RunArgs {
     #[arg(long)]
     pub no_select: bool,
 
+    /// List available scripts instead of running one
+    #[arg(long)]
+    pub list: bool,
+
+    /// Output script list as JSON (use with --list)
+    #[arg(long, requires = "list")]
+    pub json: bool,
+
+    /// Include private scripts in interactive selection and --list output
+    #[arg(long)]
+    pub include_private: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
 
 /// Execute a named script from the melos.yaml scripts section
 pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
+    // Handle --list mode
+    if args.list {
+        return list_scripts(workspace, args.json, args.include_private);
+    }
+
     let script_name = match args.script {
         Some(name) => name,
         None if args.no_select => {
             bail!("No script name provided and --no-select is set");
         }
-        None => select_script_interactive(workspace)?,
+        None => select_script_interactive(workspace, args.include_private)?,
     };
 
     let cli_filters: PackageFilters = (&args.filters).into();
@@ -45,11 +62,90 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
     run_script_recursive(workspace, &script_name, &cli_filters, &mut visited, 0).await
 }
 
+/// List available scripts.
+///
+/// With `--json`, outputs a JSON array of script objects.
+/// Otherwise, prints a formatted table.
+fn list_scripts(workspace: &Workspace, json: bool, include_private: bool) -> Result<()> {
+    let mut scripts: Vec<(&String, &ScriptEntry)> = workspace
+        .config
+        .scripts
+        .iter()
+        .filter(|(_, entry)| include_private || !entry.is_private())
+        .collect();
+    scripts.sort_by_key(|(name, _)| *name);
+
+    if json {
+        let entries: Vec<serde_json::Value> = scripts
+            .iter()
+            .map(|(name, entry)| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("name".to_string(), serde_json::Value::String((*name).clone()));
+                if let Some(desc) = entry.description() {
+                    obj.insert(
+                        "description".to_string(),
+                        serde_json::Value::String(desc.to_string()),
+                    );
+                }
+                if entry.is_private() {
+                    obj.insert("private".to_string(), serde_json::Value::Bool(true));
+                }
+                if entry.has_exec_config() {
+                    obj.insert("exec".to_string(), serde_json::Value::Bool(true));
+                }
+                if entry.steps().is_some() {
+                    obj.insert("steps".to_string(), serde_json::Value::Bool(true));
+                }
+                serde_json::Value::Object(obj)
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&entries)
+                .unwrap_or_else(|_| "[]".to_string())
+        );
+    } else {
+        if scripts.is_empty() {
+            println!("No scripts available.");
+            return Ok(());
+        }
+
+        println!("\n{}\n", "Available scripts:".bold());
+        for (name, entry) in &scripts {
+            let desc = entry
+                .description()
+                .map(|d| format!(" - {}", d.trim().dimmed()))
+                .unwrap_or_default();
+            let private_tag = if entry.is_private() {
+                format!(" {}", "[private]".dimmed())
+            } else {
+                String::new()
+            };
+            let mode = if entry.steps().is_some() {
+                format!(" {}", "(steps)".dimmed())
+            } else if entry.has_exec_config() {
+                format!(" {}", "(exec)".dimmed())
+            } else {
+                String::new()
+            };
+            println!("  {} {}{}{}{}", "->".cyan(), name.bold(), desc, mode, private_tag);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
 /// Recursively execute a named script, resolving nested `melos run <X>` references.
 ///
 /// When a script's expanded command is `melos-rs run <other_script>` and that
 /// script exists in the config, it is executed inline instead of shelling out.
 /// A visited set tracks the call chain to detect and prevent cycles.
+///
+/// Supports three execution modes:
+/// 1. **Steps**: execute each step sequentially (shell commands or script references)
+/// 2. **Exec config**: per-package execution using `exec:` config
+/// 3. **Run command**: shell command at workspace root (with `melos exec` string detection)
 async fn run_script_recursive(
     workspace: &Workspace,
     script_name: &str,
@@ -80,8 +176,6 @@ async fn run_script_recursive(
         .get(script_name)
         .ok_or_else(|| anyhow::anyhow!("Script '{}' not found in config", script_name))?;
 
-    let run_command = script.run_command();
-
     if let Some(desc) = script.description() {
         println!("\n{} {}", "Description:".dimmed(), desc.trim());
     }
@@ -99,57 +193,206 @@ async fn run_script_recursive(
     // Merge script-level env vars (they take precedence over workspace vars)
     env_vars.extend(script.env().iter().map(|(k, v)| (k.clone(), v.clone())));
 
-    // Substitute env vars in the command string (e.g. $MELOS_ROOT_PATH)
-    let substituted = substitute_env_vars(run_command, &env_vars);
+    // Dispatch based on execution mode
+    if let Some(steps) = script.steps() {
+        // Mode 1: Multi-step workflow
+        run_steps(workspace, steps, &env_vars, cli_filters, visited, depth).await?;
+    } else if let Some(exec_cmd) = script.exec_command() {
+        // Mode 2: Exec config (per-package execution via config, not string parsing)
+        run_exec_config_script(workspace, script, exec_cmd, &env_vars, cli_filters).await?;
+    } else if let Some(run_command) = script.run_command() {
+        // Mode 3: Traditional run command
+        let substituted = substitute_env_vars(run_command, &env_vars);
 
-    // Check if this script has an exec-style command (runs in each package)
-    if is_exec_command(&substituted) {
-        run_exec_script(workspace, script, &substituted, &env_vars, cli_filters).await?;
-    } else {
-        // Parse the run command, expanding melos -> melos-rs references
-        let expanded = expand_command(&substituted)?;
+        if is_exec_command(&substituted) {
+            // Legacy exec-style: `melos exec -- <command>` in run string
+            run_exec_script(workspace, script, &substituted, &env_vars, cli_filters).await?;
+        } else {
+            // Regular shell command at workspace root
+            let expanded = expand_command(&substituted)?;
+            for cmd in &expanded {
+                if let Some(ref_name) = extract_melos_run_script_name(cmd)
+                    && workspace.config.scripts.contains_key(ref_name)
+                {
+                    Box::pin(run_script_recursive(
+                        workspace,
+                        ref_name,
+                        cli_filters,
+                        visited,
+                        depth + 1,
+                    ))
+                    .await?;
+                    continue;
+                }
 
-        // Execute the expanded command(s) at the workspace root
-        for cmd in &expanded {
-            // Check if this command is a `melos-rs run <script>` reference
-            // to a script defined in the config — if so, execute it inline
-            if let Some(ref_name) = extract_melos_run_script_name(cmd)
-                && workspace.config.scripts.contains_key(ref_name)
-            {
-                Box::pin(run_script_recursive(
-                    workspace,
-                    ref_name,
-                    cli_filters,
-                    visited,
-                    depth + 1,
-                ))
-                .await?;
-                continue;
-            }
+                println!("{}{} {}", indent, ">".dimmed(), cmd.dimmed());
 
-            println!("{}{} {}", indent, ">".dimmed(), cmd.dimmed());
+                let status = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .current_dir(&workspace.root_path)
+                    .envs(&env_vars)
+                    .status()
+                    .await?;
 
-            let status = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .current_dir(&workspace.root_path)
-                .envs(&env_vars)
-                .status()
-                .await?;
-
-            if !status.success() {
-                bail!(
-                    "Script '{}' failed with exit code: {}",
-                    script_name,
-                    status.code().unwrap_or(-1)
-                );
+                if !status.success() {
+                    bail!(
+                        "Script '{}' failed with exit code: {}",
+                        script_name,
+                        status.code().unwrap_or(-1)
+                    );
+                }
             }
         }
+    } else {
+        bail!(
+            "Script '{}' has no runnable configuration (no `run`, `exec`, or `steps` defined)",
+            script_name
+        );
     }
 
     // Remove from visited so the same script can appear in separate chains
     // (e.g. A -> B, A -> C -> B is fine; A -> B -> A is a cycle)
     visited.remove(script_name);
+
+    Ok(())
+}
+
+/// Execute a multi-step script workflow.
+///
+/// Each step is either:
+/// 1. A script name reference (if it matches a script in the config) → execute inline
+/// 2. A shell command → execute at workspace root
+async fn run_steps(
+    workspace: &Workspace,
+    steps: &[String],
+    env_vars: &HashMap<String, String>,
+    cli_filters: &PackageFilters,
+    visited: &mut HashSet<String>,
+    depth: usize,
+) -> Result<()> {
+    for (i, step) in steps.iter().enumerate() {
+        let step = step.trim();
+        if step.is_empty() {
+            continue;
+        }
+
+        println!(
+            "{}Step {}/{}: {}",
+            "  ".repeat(depth),
+            i + 1,
+            steps.len(),
+            step.bold()
+        );
+
+        // Check if this step is a reference to another script
+        if workspace.config.scripts.contains_key(step) {
+            Box::pin(run_script_recursive(
+                workspace,
+                step,
+                cli_filters,
+                visited,
+                depth + 1,
+            ))
+            .await?;
+        } else {
+            // Execute as a shell command
+            let substituted = substitute_env_vars(step, env_vars);
+            let expanded = expand_command(&substituted)?;
+
+            for cmd in &expanded {
+                println!("{}{} {}", "  ".repeat(depth + 1), ">".dimmed(), cmd.dimmed());
+
+                let status = tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .current_dir(&workspace.root_path)
+                    .envs(env_vars)
+                    .status()
+                    .await?;
+
+                if !status.success() {
+                    bail!(
+                        "Step '{}' failed with exit code: {}",
+                        step,
+                        status.code().unwrap_or(-1)
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Run a script that uses exec config (not string-parsed `melos exec` style).
+///
+/// The exec command comes from the config's `exec:` field, and options
+/// come from `ExecOptions` (concurrency, failFast, orderDependents).
+async fn run_exec_config_script(
+    workspace: &Workspace,
+    script: &ScriptEntry,
+    exec_command: &str,
+    env_vars: &HashMap<String, String>,
+    cli_filters: &PackageFilters,
+) -> Result<()> {
+    // Merge script-level packageFilters with CLI filters
+    let filters = if let Some(script_filters) = script.package_filters() {
+        script_filters.merge(cli_filters)
+    } else {
+        cli_filters.clone()
+    };
+
+    let mut packages = apply_filters_with_categories(
+        &workspace.packages,
+        &filters,
+        Some(&workspace.root_path),
+        &workspace.config.categories,
+    )?;
+
+    if packages.is_empty() {
+        println!("{}", "No packages matched the script's filters.".yellow());
+        return Ok(());
+    }
+
+    // Get exec options from config (or use defaults)
+    let concurrency = script
+        .exec_options()
+        .and_then(|o| o.concurrency)
+        .unwrap_or(5);
+    let fail_fast = script.exec_options().is_some_and(|o| o.fail_fast);
+    let order_dependents = script.exec_options().is_some_and(|o| o.order_dependents);
+
+    if order_dependents {
+        packages = topological_sort(&packages);
+        println!(
+            "{} Packages ordered by dependencies (topological sort)\n",
+            "i".blue()
+        );
+    }
+
+    println!(
+        "Running in {} package(s) with concurrency {}:\n",
+        packages.len().to_string().cyan(),
+        concurrency.to_string().cyan(),
+    );
+    for pkg in &packages {
+        println!("  {} {}", "->".cyan(), pkg.name);
+    }
+    println!();
+
+    // Substitute env vars in the exec command
+    let substituted = substitute_env_vars(exec_command, env_vars);
+
+    let runner = ProcessRunner::new(concurrency, fail_fast);
+    let results = runner
+        .run_in_packages(&packages, &substituted, env_vars, None)
+        .await?;
+
+    let failed = results.iter().filter(|(_, success)| !success).count();
+    if failed > 0 {
+        bail!("{} package(s) failed", failed);
+    }
 
     Ok(())
 }
@@ -299,10 +542,24 @@ async fn run_exec_script(
 }
 
 /// Prompt the user to select a script interactively from available scripts
-fn select_script_interactive(workspace: &Workspace) -> Result<String> {
-    let scripts: Vec<(&String, &ScriptEntry)> = workspace.config.scripts.iter().collect();
+fn select_script_interactive(workspace: &Workspace, include_private: bool) -> Result<String> {
+    let scripts: Vec<(&String, &ScriptEntry)> = workspace
+        .config
+        .scripts
+        .iter()
+        .filter(|(_, entry)| include_private || !entry.is_private())
+        .collect();
 
     if scripts.is_empty() {
+        if !include_private
+            && workspace
+                .config
+                .scripts
+                .values()
+                .any(|e| e.is_private())
+        {
+            bail!("No scripts available (all scripts are private). Use --include-private to see them.");
+        }
         bail!("No scripts defined in melos.yaml");
     }
 

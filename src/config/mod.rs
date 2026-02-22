@@ -7,7 +7,7 @@ use std::fmt;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use self::script::ScriptConfig;
+use self::script::{ExecEntry, ScriptConfig};
 use crate::workspace::ConfigSource;
 
 /// Top-level melos.yaml configuration
@@ -30,6 +30,12 @@ pub struct MelosConfig {
     /// Named scripts
     #[serde(default)]
     pub scripts: HashMap<String, ScriptEntry>,
+
+    /// Global ignore patterns: packages matching these globs are excluded from all commands.
+    ///
+    /// Applied during workspace loading before any command-level filters.
+    #[serde(default)]
+    pub ignore: Option<Vec<String>>,
 
     /// Category definitions: category_name -> list of package name glob patterns
     #[serde(default)]
@@ -56,22 +62,32 @@ impl MelosConfig {
 
         // Check scripts for common issues
         for (name, entry) in &self.scripts {
-            let cmd = entry.run_command();
+            // Scripts with steps or exec config don't need a traditional run command
+            let has_steps = entry.steps().is_some();
+            let has_exec_config = entry.has_exec_config();
 
-            // Warn about exec-style scripts missing `--` separator
-            if is_exec_style(cmd) && !cmd.contains(" -- ") {
-                warnings.push(format!(
-                    "Script '{}' looks like an exec command but has no `--` separator. \
-                     The command may not be parsed correctly. \
-                     Expected format: `melos exec [flags] -- <command>`",
-                    name
-                ));
-            }
+            if let Some(cmd) = entry.run_command() {
+                // Warn about exec-style scripts missing `--` separator
+                if is_exec_style(cmd) && !cmd.contains(" -- ") {
+                    warnings.push(format!(
+                        "Script '{}' looks like an exec command but has no `--` separator. \
+                         The command may not be parsed correctly. \
+                         Expected format: `melos exec [flags] -- <command>`",
+                        name
+                    ));
+                }
 
-            // Warn about empty run commands
-            if cmd.trim().is_empty() {
+                // Warn about empty run commands (only if no exec shorthand or steps)
+                if cmd.trim().is_empty() && !has_exec_config && !has_steps {
+                    warnings.push(format!(
+                        "Script '{}' has an empty `run` command.",
+                        name
+                    ));
+                }
+            } else if !has_exec_config && !has_steps {
+                // No run command and no exec/steps config
                 warnings.push(format!(
-                    "Script '{}' has an empty `run` command.",
+                    "Script '{}' has no `run`, `exec`, or `steps` defined.",
                     name
                 ));
             }
@@ -119,11 +135,91 @@ pub enum ScriptEntry {
 }
 
 impl ScriptEntry {
-    /// Get the run command string
-    pub fn run_command(&self) -> &str {
+    /// Get the run command string.
+    ///
+    /// Returns `None` for:
+    /// - `Simple("")` (shouldn't happen but handled)
+    /// - `Full` scripts with exec string shorthand (command is in `exec` field)
+    /// - `Full` scripts with only `steps` (no single command)
+    ///
+    /// For exec string shorthand, use `exec_command()` instead.
+    pub fn run_command(&self) -> Option<&str> {
         match self {
-            ScriptEntry::Simple(cmd) => cmd,
-            ScriptEntry::Full(config) => &config.run,
+            ScriptEntry::Simple(cmd) => Some(cmd),
+            ScriptEntry::Full(config) => {
+                // If exec is a string shorthand, the "run command" concept doesn't apply
+                if matches!(config.exec, Some(ExecEntry::Command(_))) && config.run.is_empty() {
+                    return None;
+                }
+                // If steps are present and run is empty, there's no single run command
+                if config.steps.is_some() && config.run.is_empty() {
+                    return None;
+                }
+                if config.run.is_empty() {
+                    return None;
+                }
+                Some(&config.run)
+            }
+        }
+    }
+
+    /// Get the exec command (the command to run in each package).
+    ///
+    /// Returns the effective command to execute per-package:
+    /// - Exec string shorthand: returns the exec string
+    /// - Exec object + run: returns the `run` string
+    /// - `melos exec` in run command: returns `None` (handled by string parsing)
+    pub fn exec_command(&self) -> Option<&str> {
+        match self {
+            ScriptEntry::Simple(_) => None,
+            ScriptEntry::Full(config) => match &config.exec {
+                Some(ExecEntry::Command(cmd)) => Some(cmd),
+                Some(ExecEntry::Options(_)) => {
+                    if config.run.is_empty() {
+                        None
+                    } else {
+                        Some(&config.run)
+                    }
+                }
+                None => None,
+            },
+        }
+    }
+
+    /// Whether this script has exec configuration (either string or object form).
+    pub fn has_exec_config(&self) -> bool {
+        match self {
+            ScriptEntry::Simple(_) => false,
+            ScriptEntry::Full(config) => config.exec.is_some(),
+        }
+    }
+
+    /// Get exec options from the config (concurrency, fail_fast, order_dependents).
+    ///
+    /// Returns `None` if no exec object config is present.
+    pub fn exec_options(&self) -> Option<&script::ExecOptions> {
+        match self {
+            ScriptEntry::Simple(_) => None,
+            ScriptEntry::Full(config) => match &config.exec {
+                Some(ExecEntry::Options(opts)) => Some(opts),
+                _ => None,
+            },
+        }
+    }
+
+    /// Get steps if this is a multi-step script.
+    pub fn steps(&self) -> Option<&[String]> {
+        match self {
+            ScriptEntry::Simple(_) => None,
+            ScriptEntry::Full(config) => config.steps.as_deref(),
+        }
+    }
+
+    /// Whether this script is private (hidden from interactive selection and `run --list`).
+    pub fn is_private(&self) -> bool {
+        match self {
+            ScriptEntry::Simple(_) => false,
+            ScriptEntry::Full(config) => config.private.unwrap_or(false),
         }
     }
 
@@ -436,6 +532,10 @@ struct MelosSection {
     #[serde(default)]
     scripts: HashMap<String, ScriptEntry>,
 
+    /// Global ignore patterns
+    #[serde(default)]
+    ignore: Option<Vec<String>>,
+
     /// Category definitions
     #[serde(default)]
     categories: HashMap<String, Vec<String>>,
@@ -492,6 +592,7 @@ pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
                 repository: wrapper.melos.repository,
                 command: wrapper.melos.command,
                 scripts: wrapper.melos.scripts,
+                ignore: wrapper.melos.ignore,
                 categories: wrapper.melos.categories,
             })
         }
@@ -566,12 +667,12 @@ scripts:
         assert_eq!(config.scripts.len(), 2);
 
         let analyze = &config.scripts["analyze"];
-        assert_eq!(analyze.run_command(), "flutter analyze .");
+        assert_eq!(analyze.run_command(), Some("flutter analyze ."));
         assert_eq!(analyze.description(), Some("Run analysis"));
         assert!(analyze.env().is_empty());
 
         let format = &config.scripts["format"];
-        assert_eq!(format.run_command(), "dart format .");
+        assert_eq!(format.run_command(), Some("dart format ."));
         assert_eq!(format.description(), None);
     }
 
@@ -591,7 +692,7 @@ scripts:
 "#;
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let build = &config.scripts["build"];
-        assert_eq!(build.run_command(), "dart run build_runner build");
+        assert_eq!(build.run_command(), Some("dart run build_runner build"));
 
         let env = build.env();
         assert_eq!(env.len(), 2);
@@ -720,6 +821,7 @@ melos:
             repository: None,
             command: None,
             scripts: HashMap::new(),
+            ignore: None,
             categories: HashMap::new(),
         };
         let warnings = config.validate();
@@ -740,6 +842,7 @@ melos:
             repository: None,
             command: None,
             scripts,
+            ignore: None,
             categories: HashMap::new(),
         };
         let warnings = config.validate();
@@ -760,6 +863,7 @@ melos:
             repository: None,
             command: None,
             scripts,
+            ignore: None,
             categories: HashMap::new(),
         };
         let warnings = config.validate();
@@ -779,6 +883,7 @@ melos:
             repository: None,
             command: None,
             scripts,
+            ignore: None,
             categories: HashMap::new(),
         };
         let warnings = config.validate();
@@ -793,6 +898,9 @@ melos:
             "test".to_string(),
             ScriptEntry::Full(Box::new(ScriptConfig {
                 run: "flutter test".to_string(),
+                exec: None,
+                steps: None,
+                private: None,
                 description: None,
                 package_filters: Some(filter::PackageFilters {
                     category: Some(vec!["nonexistent".to_string()]),
@@ -807,6 +915,7 @@ melos:
             repository: None,
             command: None,
             scripts,
+            ignore: None,
             categories: HashMap::new(),
         };
         let warnings = config.validate();
@@ -959,5 +1068,203 @@ packages:
 "#).unwrap();
         assert!(section.repository.is_some());
         assert_eq!(section.repository.unwrap().url, "https://github.com/myorg/myapp");
+    }
+
+    // -----------------------------------------------------------------------
+    // ScriptEntry method tests (exec config, steps, private)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_script_entry_exec_string_shorthand() {
+        let yaml = r#"
+name: test
+packages:
+  - packages/**
+scripts:
+  test:
+    exec: "flutter test"
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let entry = &config.scripts["test"];
+
+        // exec_command returns the exec string
+        assert_eq!(entry.exec_command(), Some("flutter test"));
+        // run_command returns None (no run field with exec shorthand)
+        assert!(entry.run_command().is_none());
+        // has_exec_config is true
+        assert!(entry.has_exec_config());
+        // no exec options (it's a string, not an object)
+        assert!(entry.exec_options().is_none());
+    }
+
+    #[test]
+    fn test_script_entry_exec_object_with_run() {
+        let yaml = r#"
+name: test
+packages:
+  - packages/**
+scripts:
+  test:
+    run: flutter test
+    exec:
+      concurrency: 3
+      failFast: true
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let entry = &config.scripts["test"];
+
+        // exec_command returns the run field (command comes from run when exec is object)
+        assert_eq!(entry.exec_command(), Some("flutter test"));
+        // run_command also returns the run field
+        assert_eq!(entry.run_command(), Some("flutter test"));
+        // has exec config
+        assert!(entry.has_exec_config());
+        // exec options are available
+        let opts = entry.exec_options().unwrap();
+        assert_eq!(opts.concurrency, Some(3));
+        assert!(opts.fail_fast);
+        assert!(!opts.order_dependents);
+    }
+
+    #[test]
+    fn test_script_entry_steps() {
+        let yaml = r#"
+name: test
+packages:
+  - packages/**
+scripts:
+  check:
+    steps:
+      - analyze
+      - "dart format --set-exit-if-changed ."
+      - test:unit
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let entry = &config.scripts["check"];
+
+        let steps = entry.steps().unwrap();
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0], "analyze");
+        assert_eq!(steps[1], "dart format --set-exit-if-changed .");
+        assert_eq!(steps[2], "test:unit");
+        // run_command returns None for steps-only scripts
+        assert!(entry.run_command().is_none());
+    }
+
+    #[test]
+    fn test_script_entry_private() {
+        let yaml = r#"
+name: test
+packages:
+  - packages/**
+scripts:
+  internal:
+    run: echo internal
+    private: true
+  public:
+    run: echo public
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert!(config.scripts["internal"].is_private());
+        assert!(!config.scripts["public"].is_private());
+    }
+
+    #[test]
+    fn test_script_entry_simple_is_not_private() {
+        let entry = ScriptEntry::Simple("echo hello".to_string());
+        assert!(!entry.is_private());
+        assert!(entry.steps().is_none());
+        assert!(entry.exec_command().is_none());
+        assert!(!entry.has_exec_config());
+    }
+
+    #[test]
+    fn test_validate_steps_no_empty_run_warning() {
+        // A script with steps but no run should NOT produce an empty run warning
+        let mut scripts = HashMap::new();
+        scripts.insert(
+            "check".to_string(),
+            ScriptEntry::Full(Box::new(ScriptConfig {
+                run: String::new(),
+                exec: None,
+                steps: Some(vec!["analyze".to_string(), "test".to_string()]),
+                private: None,
+                description: None,
+                package_filters: None,
+                env: HashMap::new(),
+            })),
+        );
+        let config = MelosConfig {
+            name: "test".to_string(),
+            packages: vec!["packages/**".to_string()],
+            repository: None,
+            command: None,
+            scripts,
+            ignore: None,
+            categories: HashMap::new(),
+        };
+        let warnings = config.validate();
+        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+    }
+
+    #[test]
+    fn test_validate_exec_shorthand_no_empty_run_warning() {
+        // A script with exec string shorthand but no run should NOT produce a warning
+        let mut scripts = HashMap::new();
+        scripts.insert(
+            "test".to_string(),
+            ScriptEntry::Full(Box::new(ScriptConfig {
+                run: String::new(),
+                exec: Some(script::ExecEntry::Command("flutter test".to_string())),
+                steps: None,
+                private: None,
+                description: None,
+                package_filters: None,
+                env: HashMap::new(),
+            })),
+        );
+        let config = MelosConfig {
+            name: "test".to_string(),
+            packages: vec!["packages/**".to_string()],
+            repository: None,
+            command: None,
+            scripts,
+            ignore: None,
+            categories: HashMap::new(),
+        };
+        let warnings = config.validate();
+        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+    }
+
+    // -----------------------------------------------------------------------
+    // Top-level ignore config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_top_level_ignore() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+ignore:
+  - "*_example"
+  - internal_*
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let ignore = config.ignore.unwrap();
+        assert_eq!(ignore.len(), 2);
+        assert_eq!(ignore[0], "*_example");
+        assert_eq!(ignore[1], "internal_*");
+    }
+
+    #[test]
+    fn test_parse_no_top_level_ignore() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert!(config.ignore.is_none());
     }
 }

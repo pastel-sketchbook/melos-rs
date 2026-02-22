@@ -109,6 +109,14 @@ pub struct GlobalFilterArgs {
     /// Also include transitive dependents of matched packages
     #[arg(long, global = true)]
     pub include_dependents: bool,
+
+    /// Only include published packages (publish_to is not "none")
+    #[arg(long, global = true)]
+    pub published: bool,
+
+    /// Only include non-published/private packages
+    #[arg(long, global = true, conflicts_with = "published")]
+    pub no_published: bool,
 }
 
 impl GlobalFilterArgs {
@@ -122,6 +130,17 @@ impl GlobalFilterArgs {
         if self.flutter {
             Some(true)
         } else if self.no_flutter {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the published filter: Some(true) for --published, Some(false) for --no-published, None if neither
+    pub fn published_filter(&self) -> Option<bool> {
+        if self.published {
+            Some(true)
+        } else if self.no_published {
             Some(false)
         } else {
             None

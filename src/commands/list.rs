@@ -356,6 +356,7 @@ mod tests {
                     repository: None,
                     command: None,
                     scripts: Default::default(),
+                    ignore: None,
                     categories: Default::default(),
                 },
                 packages: packages.clone(),
