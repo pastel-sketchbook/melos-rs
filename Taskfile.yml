@@ -1,0 +1,98 @@
+version: "3"
+
+tasks:
+  # --- Core Development ---
+  fmt:
+    desc: "Format all Rust code"
+    cmds:
+      - cargo fmt
+
+  build:
+    desc: "Build in debug mode"
+    deps: [fmt]
+    cmds:
+      - cargo build
+
+  build:release:
+    desc: "Build optimized release binary"
+    deps: [fmt]
+    cmds:
+      - cargo build --release
+
+  check:
+    desc: "Run fmt, cargo check, and clippy"
+    deps: [fmt]
+    cmds:
+      - cargo check
+      - cargo clippy -- -D warnings
+
+  test:
+    desc: "Run all tests"
+    cmds:
+      - cargo test
+
+  test:verbose:
+    desc: "Run tests with output visible (--nocapture)"
+    cmds:
+      - cargo test -- --nocapture
+
+  check:all:
+    desc: "Run fmt, clippy, and tests"
+    deps: [fmt]
+    cmds:
+      - cargo clippy -- -D warnings
+      - cargo test
+
+  # --- Run ---
+  run:
+    desc: "Run melos-rs (pass args after --)"
+    deps: [build]
+    cmds:
+      - cargo run -- {{.CLI_ARGS}}
+
+  run:list:
+    desc: "List all packages in the workspace"
+    cmds:
+      - cargo run -- list
+
+  run:list:long:
+    desc: "List packages with full details"
+    cmds:
+      - cargo run -- list --long
+
+  run:bootstrap:
+    desc: "Bootstrap all packages (pub get)"
+    cmds:
+      - cargo run -- bootstrap
+
+  run:clean:
+    desc: "Clean all Flutter packages"
+    cmds:
+      - cargo run -- clean
+
+  run:exec:
+    desc: "Exec a command in packages (pass args after --)"
+    cmds:
+      - cargo run -- exec {{.CLI_ARGS}}
+
+  run:version:
+    desc: "Run version command (pass args after --)"
+    cmds:
+      - cargo run -- version {{.CLI_ARGS}}
+
+  # --- Install ---
+  install:
+    desc: "Install melos-rs binary to ~/.cargo/bin"
+    cmds:
+      - cargo install --path .
+
+  # --- Code Quality ---
+  loc:
+    desc: "Show lines of code statistics using tokei"
+    cmds:
+      - tokei
+
+  clean:
+    desc: "Remove build artifacts"
+    cmds:
+      - cargo clean

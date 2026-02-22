@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+debug/
+*.pdb
+
+# Cargo lock (binary crate - keep it; uncomment if library)
+# Cargo.lock
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.*
+/melos.yaml
