@@ -69,31 +69,15 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Run pre-test hook if configured
-    if let Some(test_config) = workspace
+    if let Some(pre_hook) = workspace
         .config
         .command
         .as_ref()
         .and_then(|c| c.test.as_ref())
-        && let Some(hooks) = &test_config.hooks
-        && let Some(ref pre_hook) = hooks.pre
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.pre.as_deref())
     {
-        println!(
-            "\n{} Running pre-test hook: {}",
-            "$".cyan(),
-            pre_hook
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(pre_hook)
-            .current_dir(&workspace.root_path)
-            .status()
-            .await?;
-
-        if !status.success() {
-            anyhow::bail!("Pre-test hook failed with exit code: {}", status.code().unwrap_or(-1));
-        }
+        crate::runner::run_lifecycle_hook(pre_hook, "pre-test", &workspace.root_path, &[]).await?;
     }
 
     println!(
@@ -108,10 +92,16 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
     }
     println!();
 
-    // Build test commands per SDK type.
-    // Flutter packages use `flutter test`, Dart packages use `dart test`.
-    let flutter_pkgs: Vec<_> = testable_packages.iter().filter(|p| p.is_flutter).cloned().collect();
-    let dart_pkgs: Vec<_> = testable_packages.iter().filter(|p| !p.is_flutter).cloned().collect();
+    let flutter_pkgs: Vec<_> = testable_packages
+        .iter()
+        .filter(|p| p.is_flutter)
+        .cloned()
+        .collect();
+    let dart_pkgs: Vec<_> = testable_packages
+        .iter()
+        .filter(|p| !p.is_flutter)
+        .cloned()
+        .collect();
 
     let extra_flags = build_extra_flags(&args);
 
@@ -123,7 +113,14 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
         let cmd = build_test_command("flutter", &extra_flags, &args.extra_args);
         pb.set_message("flutter test...");
         let results = runner
-            .run_in_packages_with_progress(&flutter_pkgs, &cmd, &workspace.env_vars(), None, Some(&pb), &workspace.packages)
+            .run_in_packages_with_progress(
+                &flutter_pkgs,
+                &cmd,
+                &workspace.env_vars(),
+                None,
+                Some(&pb),
+                &workspace.packages,
+            )
             .await?;
         all_results.extend(results);
     }
@@ -132,7 +129,14 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
         let cmd = build_test_command("dart", &extra_flags, &args.extra_args);
         pb.set_message("dart test...");
         let results = runner
-            .run_in_packages_with_progress(&dart_pkgs, &cmd, &workspace.env_vars(), None, Some(&pb), &workspace.packages)
+            .run_in_packages_with_progress(
+                &dart_pkgs,
+                &cmd,
+                &workspace.env_vars(),
+                None,
+                Some(&pb),
+                &workspace.packages,
+            )
             .await?;
         all_results.extend(results);
     }
@@ -146,33 +150,21 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
         anyhow::bail!("{} package(s) failed testing ({} passed)", failed, passed);
     }
 
-    println!("\n{}", format!("All {} package(s) passed testing.", passed).green());
+    println!(
+        "\n{}",
+        format!("All {} package(s) passed testing.", passed).green()
+    );
 
-    // Run post-test hook if configured
-    if let Some(test_config) = workspace
+    if let Some(post_hook) = workspace
         .config
         .command
         .as_ref()
         .and_then(|c| c.test.as_ref())
-        && let Some(hooks) = &test_config.hooks
-        && let Some(ref post_hook) = hooks.post
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.post.as_deref())
     {
-        println!(
-            "\n{} Running post-test hook: {}",
-            "$".cyan(),
-            post_hook
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(post_hook)
-            .current_dir(&workspace.root_path)
-            .status()
+        crate::runner::run_lifecycle_hook(post_hook, "post-test", &workspace.root_path, &[])
             .await?;
-
-        if !status.success() {
-            anyhow::bail!("Post-test hook failed with exit code: {}", status.code().unwrap_or(-1));
-        }
     }
 
     Ok(())

@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters_with_categories;
 use crate::package::Package;
+use crate::package::filter::apply_filters_with_categories;
 use crate::workspace::Workspace;
 
 /// Output format for the list command
@@ -75,7 +75,12 @@ pub struct ListArgs {
 /// List packages in the workspace
 pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
     let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
+    let packages = apply_filters_with_categories(
+        &workspace.packages,
+        &filters,
+        Some(&workspace.root_path),
+        &workspace.config.categories,
+    )?;
 
     if packages.is_empty() {
         println!("{}", "No packages found.".yellow());
@@ -88,18 +93,19 @@ pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
     }
 
     // Determine effective format (shorthand flags override --format)
-    let format = if args.json {
-        ListFormat::Json
-    } else if args.parsable {
-        ListFormat::Parsable
-    } else if args.graph {
-        ListFormat::Graph
-    } else if args.gviz {
-        ListFormat::Gviz
-    } else if args.mermaid {
-        ListFormat::Mermaid
-    } else {
-        args.format
+    let format = match (
+        args.json,
+        args.parsable,
+        args.graph,
+        args.gviz,
+        args.mermaid,
+    ) {
+        (true, _, _, _, _) => ListFormat::Json,
+        (_, true, _, _, _) => ListFormat::Parsable,
+        (_, _, true, _, _) => ListFormat::Graph,
+        (_, _, _, true, _) => ListFormat::Gviz,
+        (_, _, _, _, true) => ListFormat::Mermaid,
+        _ => args.format,
     };
 
     match format {
@@ -282,9 +288,7 @@ fn detect_and_report_cycles(packages: &[Package]) -> Result<()> {
 
         for dep in &pkg.dependencies {
             if known.contains(dep.as_str()) {
-                adj.entry(pkg.name.as_str())
-                    .or_default()
-                    .push(dep.as_str());
+                adj.entry(pkg.name.as_str()).or_default().push(dep.as_str());
                 *in_degree.entry(dep.as_str()).or_insert(0) += 1;
             }
         }
@@ -372,9 +376,9 @@ mod tests {
             &packages,
             &crate::workspace::Workspace {
                 root_path: PathBuf::from("/workspace"),
-                config_source: crate::workspace::ConfigSource::MelosYaml(
-                    PathBuf::from("/workspace/melos.yaml"),
-                ),
+                config_source: crate::workspace::ConfigSource::MelosYaml(PathBuf::from(
+                    "/workspace/melos.yaml",
+                )),
                 config: crate::config::MelosConfig {
                     name: "test".to_string(),
                     packages: vec![],

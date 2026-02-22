@@ -411,7 +411,6 @@ fn expand_with_dependents(matched: &[Package], all_packages: &[Package]) -> Vec<
         .collect()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -729,10 +728,7 @@ mod tests {
         ];
 
         let mut categories = HashMap::new();
-        categories.insert(
-            "apps".to_string(),
-            vec!["app_*".to_string()],
-        );
+        categories.insert("apps".to_string(), vec!["app_*".to_string()]);
         categories.insert(
             "libraries".to_string(),
             vec!["core_*".to_string(), "utils".to_string()],
@@ -744,8 +740,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result =
-            apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
+        let result = apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "app_main");
         assert_eq!(result[1].name, "app_settings");
@@ -755,8 +750,7 @@ mod tests {
             category: Some(vec!["libraries".to_string()]),
             ..Default::default()
         };
-        let result =
-            apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
+        let result = apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "core_lib");
         assert_eq!(result[1].name, "utils");
@@ -766,8 +760,7 @@ mod tests {
             category: Some(vec!["nonexistent".to_string()]),
             ..Default::default()
         };
-        let result =
-            apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
+        let result = apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
         assert_eq!(result.len(), 0);
     }
 

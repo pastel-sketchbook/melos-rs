@@ -135,19 +135,29 @@ fn pub_cmd(pkg: &Package) -> &'static str {
     if pkg.is_flutter { "flutter" } else { "dart" }
 }
 
-/// Run `dart pub get` / `flutter pub get` in each matching package
-async fn run_pub_get(workspace: &Workspace, args: PubGetArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
+/// Common logic for all pub subcommands: filter packages, print header, and run.
+///
+/// `show_sdk` controls whether the SDK (flutter/dart) is shown next to each
+/// package name in the listing.
+async fn run_pub_subcommand(
+    workspace: &Workspace,
+    filters: &GlobalFilterArgs,
+    subcmd: &str,
+    concurrency: usize,
+    show_sdk: bool,
+) -> Result<()> {
+    let pf: PackageFilters = filters.into();
     let packages = apply_filters_with_categories(
         &workspace.packages,
-        &filters,
+        &pf,
         Some(&workspace.root_path),
         &workspace.config.categories,
     )?;
 
     println!(
-        "\n{} Running pub get in {} package(s)...\n",
+        "\n{} Running {} in {} package(s)...\n",
         "$".cyan(),
+        subcmd,
         packages.len()
     );
 
@@ -157,171 +167,76 @@ async fn run_pub_get(workspace: &Workspace, args: PubGetArgs) -> Result<()> {
     }
 
     for pkg in &packages {
-        println!("  {} {} ({})", "->".cyan(), pkg.name, pub_cmd(pkg));
+        if show_sdk {
+            println!("  {} {} ({})", "->".cyan(), pkg.name, pub_cmd(pkg));
+        } else {
+            println!("  {} {}", "->".cyan(), pkg.name);
+        }
     }
     println!();
 
-    // Run each package with its appropriate command (flutter vs dart)
-    run_pub_in_packages(&packages, "pub get", args.concurrency, &workspace.env_vars(), &workspace.packages).await
+    run_pub_in_packages(
+        &packages,
+        subcmd,
+        concurrency,
+        &workspace.env_vars(),
+        &workspace.packages,
+    )
+    .await
 }
 
-/// Run `dart pub outdated` in each matching package
+/// Run `dart pub get` / `flutter pub get` in each matching package
+async fn run_pub_get(workspace: &Workspace, args: PubGetArgs) -> Result<()> {
+    run_pub_subcommand(workspace, &args.filters, "pub get", args.concurrency, true).await
+}
+
+/// Run `dart pub outdated` in each matching package.
+///
+/// pub outdated is informational — non-zero exit from outdated deps is expected,
+/// but the runner still reports failures per-package.
 async fn run_pub_outdated(workspace: &Workspace, args: PubOutdatedArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(
-        &workspace.packages,
-        &filters,
-        Some(&workspace.root_path),
-        &workspace.config.categories,
-    )?;
-
-    println!(
-        "\n{} Running pub outdated in {} package(s)...\n",
-        "$".cyan(),
-        packages.len()
-    );
-
-    if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
-        return Ok(());
-    }
-
-    for pkg in &packages {
-        println!("  {} {}", "->".cyan(), pkg.name);
-    }
-    println!();
-
-    // pub outdated is informational — don't fail on non-zero exit (outdated deps are expected)
-    run_pub_in_packages(&packages, "pub outdated", args.concurrency, &workspace.env_vars(), &workspace.packages).await
+    run_pub_subcommand(
+        workspace,
+        &args.filters,
+        "pub outdated",
+        args.concurrency,
+        false,
+    )
+    .await
 }
 
 /// Run `dart pub upgrade` in each matching package
 async fn run_pub_upgrade(workspace: &Workspace, args: PubUpgradeArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(
-        &workspace.packages,
-        &filters,
-        Some(&workspace.root_path),
-        &workspace.config.categories,
-    )?;
-
     let subcmd = if args.major_versions {
         "pub upgrade --major-versions"
     } else {
         "pub upgrade"
     };
-
-    println!(
-        "\n{} Running {} in {} package(s)...\n",
-        "$".cyan(),
-        subcmd,
-        packages.len()
-    );
-
-    if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
-        return Ok(());
-    }
-
-    for pkg in &packages {
-        println!("  {} {} ({})", "->".cyan(), pkg.name, pub_cmd(pkg));
-    }
-    println!();
-
-    run_pub_in_packages(&packages, subcmd, args.concurrency, &workspace.env_vars(), &workspace.packages).await
+    run_pub_subcommand(workspace, &args.filters, subcmd, args.concurrency, true).await
 }
 
 /// Run `dart pub downgrade` in each matching package
 async fn run_pub_downgrade(workspace: &Workspace, args: PubDowngradeArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(
-        &workspace.packages,
-        &filters,
-        Some(&workspace.root_path),
-        &workspace.config.categories,
-    )?;
-
-    println!(
-        "\n{} Running pub downgrade in {} package(s)...\n",
-        "$".cyan(),
-        packages.len()
-    );
-
-    if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
-        return Ok(());
-    }
-
-    for pkg in &packages {
-        println!("  {} {} ({})", "->".cyan(), pkg.name, pub_cmd(pkg));
-    }
-    println!();
-
-    run_pub_in_packages(&packages, "pub downgrade", args.concurrency, &workspace.env_vars(), &workspace.packages).await
+    run_pub_subcommand(
+        workspace,
+        &args.filters,
+        "pub downgrade",
+        args.concurrency,
+        true,
+    )
+    .await
 }
 
 /// Run `dart pub add` / `flutter pub add` in each matching package
 async fn run_pub_add(workspace: &Workspace, args: PubAddArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(
-        &workspace.packages,
-        &filters,
-        Some(&workspace.root_path),
-        &workspace.config.categories,
-    )?;
-
     let subcmd = build_pub_add_command(&args.package, args.dev);
-
-    println!(
-        "\n{} Running {} in {} package(s)...\n",
-        "$".cyan(),
-        subcmd,
-        packages.len()
-    );
-
-    if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
-        return Ok(());
-    }
-
-    for pkg in &packages {
-        println!("  {} {} ({})", "->".cyan(), pkg.name, pub_cmd(pkg));
-    }
-    println!();
-
-    run_pub_in_packages(&packages, &subcmd, args.concurrency, &workspace.env_vars(), &workspace.packages).await
+    run_pub_subcommand(workspace, &args.filters, &subcmd, args.concurrency, true).await
 }
 
 /// Run `dart pub remove` / `flutter pub remove` in each matching package
 async fn run_pub_remove(workspace: &Workspace, args: PubRemoveArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(
-        &workspace.packages,
-        &filters,
-        Some(&workspace.root_path),
-        &workspace.config.categories,
-    )?;
-
     let subcmd = build_pub_remove_command(&args.package);
-
-    println!(
-        "\n{} Running {} in {} package(s)...\n",
-        "$".cyan(),
-        subcmd,
-        packages.len()
-    );
-
-    if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
-        return Ok(());
-    }
-
-    for pkg in &packages {
-        println!("  {} {} ({})", "->".cyan(), pkg.name, pub_cmd(pkg));
-    }
-    println!();
-
-    run_pub_in_packages(&packages, &subcmd, args.concurrency, &workspace.env_vars(), &workspace.packages).await
+    run_pub_subcommand(workspace, &args.filters, &subcmd, args.concurrency, true).await
 }
 
 /// Build the `pub add` subcommand string.
@@ -361,7 +276,9 @@ async fn run_pub_in_packages(
         let cmd = format!("flutter {}", pub_subcmd);
         let pkgs: Vec<Package> = flutter_pkgs.into_iter().cloned().collect();
         pb.set_message(format!("flutter {}...", pub_subcmd));
-        let results = runner.run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages).await?;
+        let results = runner
+            .run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages)
+            .await?;
         all_results.extend(results);
     }
 
@@ -369,7 +286,9 @@ async fn run_pub_in_packages(
         let cmd = format!("dart {}", pub_subcmd);
         let pkgs: Vec<Package> = dart_pkgs.into_iter().cloned().collect();
         pb.set_message(format!("dart {}...", pub_subcmd));
-        let results = runner.run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages).await?;
+        let results = runner
+            .run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages)
+            .await?;
         all_results.extend(results);
     }
 

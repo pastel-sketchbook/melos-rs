@@ -43,12 +43,10 @@ pub enum Verbosity {
 impl Cli {
     /// Resolve the verbosity level from CLI flags
     pub fn verbosity(&self) -> Verbosity {
-        if self.quiet {
-            Verbosity::Quiet
-        } else if self.verbose {
-            Verbosity::Verbose
-        } else {
-            Verbosity::Normal
+        match (self.quiet, self.verbose) {
+            (true, _) => Verbosity::Quiet,
+            (_, true) => Verbosity::Verbose,
+            _ => Verbosity::Normal,
         }
     }
 }
@@ -132,23 +130,19 @@ impl GlobalFilterArgs {
 
     /// Returns the flutter filter: Some(true) for --flutter, Some(false) for --no-flutter, None if neither
     pub fn flutter_filter(&self) -> Option<bool> {
-        if self.flutter {
-            Some(true)
-        } else if self.no_flutter {
-            Some(false)
-        } else {
-            None
+        match (self.flutter, self.no_flutter) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
         }
     }
 
     /// Returns the published filter: Some(true) for --published, Some(false) for --no-published, None if neither
     pub fn published_filter(&self) -> Option<bool> {
-        if self.published {
-            Some(true)
-        } else if self.no_published {
-            Some(false)
-        } else {
-            None
+        match (self.published, self.no_published) {
+            (true, _) => Some(true),
+            (_, true) => Some(false),
+            _ => None,
         }
     }
 }

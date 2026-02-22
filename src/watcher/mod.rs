@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
+use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 use tokio::sync::mpsc;
 
 use crate::package::Package;
@@ -354,15 +354,13 @@ mod tests {
 
     #[test]
     fn test_has_watched_extension_g_dart() {
-        assert!(has_watched_extension(Path::new(
-            "lib/models/user.g.dart"
-        )));
+        assert!(has_watched_extension(Path::new("lib/models/user.g.dart")));
     }
 
     #[tokio::test]
     async fn test_start_watching_detects_file_change() {
-        use std::fs;
         use std::collections::HashMap;
+        use std::fs;
 
         // Create a temp directory structure mimicking a package
         let tmp = tempfile::tempdir().unwrap();
@@ -401,11 +399,7 @@ mod tests {
         fs::write(lib_dir.join("widget.dart"), "class MyWidget {}").unwrap();
 
         // Wait for the event (with timeout)
-        let event = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            event_rx.recv(),
-        )
-        .await;
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv()).await;
 
         assert!(event.is_ok(), "Should receive an event within 5 seconds");
         let event = event.unwrap().expect("Should have an event");
@@ -413,16 +407,13 @@ mod tests {
 
         // Signal shutdown and wait for the watcher to exit
         drop(shutdown_tx);
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            watcher_handle,
-        ).await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), watcher_handle).await;
     }
 
     #[tokio::test]
     async fn test_watcher_ignores_non_dart_files() {
-        use std::fs;
         use std::collections::HashMap;
+        use std::fs;
 
         let tmp = tempfile::tempdir().unwrap();
         let pkg_dir = tmp.path().join("my_package");
@@ -456,11 +447,7 @@ mod tests {
         fs::write(pkg_dir.join("README.md"), "# My Package").unwrap();
 
         // Wait briefly — should NOT get an event
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            event_rx.recv(),
-        )
-        .await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), event_rx.recv()).await;
 
         assert!(
             result.is_err(),
@@ -469,9 +456,6 @@ mod tests {
 
         // Signal shutdown and wait for the watcher to exit
         drop(shutdown_tx);
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            watcher_handle,
-        ).await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), watcher_handle).await;
     }
 }

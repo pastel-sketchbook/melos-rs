@@ -83,7 +83,11 @@ impl Package {
 
         // Extract version constraints from both deps and dev_deps
         let mut dependency_versions = HashMap::new();
-        for deps_map in [&pubspec.dependencies, &pubspec.dev_dependencies].iter().copied().flatten() {
+        for deps_map in [&pubspec.dependencies, &pubspec.dev_dependencies]
+            .iter()
+            .copied()
+            .flatten()
+        {
             for (name, value) in deps_map {
                 if let Some(constraint) = extract_version_constraint(value) {
                     dependency_versions.insert(name.clone(), constraint);
@@ -366,9 +370,18 @@ mod tests {
         .unwrap();
 
         let pkg = Package::from_path(&pkg_dir).unwrap();
-        assert_eq!(pkg.dependency_versions.get("http").map(|s| s.as_str()), Some("^0.13.0"));
-        assert_eq!(pkg.dependency_versions.get("core").map(|s| s.as_str()), Some("^2.0.0"));
-        assert_eq!(pkg.dependency_versions.get("test").map(|s| s.as_str()), Some("^1.0.0"));
+        assert_eq!(
+            pkg.dependency_versions.get("http").map(|s| s.as_str()),
+            Some("^0.13.0")
+        );
+        assert_eq!(
+            pkg.dependency_versions.get("core").map(|s| s.as_str()),
+            Some("^2.0.0")
+        );
+        assert_eq!(
+            pkg.dependency_versions.get("test").map(|s| s.as_str()),
+            Some("^1.0.0")
+        );
         // flutter SDK dep should have no version constraint
         assert!(pkg.dependency_versions.get("flutter").is_none());
     }

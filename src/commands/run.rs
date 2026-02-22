@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::Args;
 use colored::Colorize;
 
@@ -145,7 +145,6 @@ async fn run_watch_loop(
         watcher::start_watching(&watch_pkgs_clone, 0, event_tx, shutdown_rx)
     });
 
-    // Set up Ctrl+C handler
     let shutdown_tx_ctrlc = shutdown_tx.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -204,7 +203,12 @@ async fn run_watch_loop(
 ///
 /// With `--json`, outputs a JSON array of script objects.
 /// Otherwise, prints a formatted table.
-fn list_scripts(workspace: &Workspace, json: bool, include_private: bool, groups: &[String]) -> Result<()> {
+fn list_scripts(
+    workspace: &Workspace,
+    json: bool,
+    include_private: bool,
+    groups: &[String],
+) -> Result<()> {
     let mut scripts: Vec<(&String, &ScriptEntry)> = workspace
         .config
         .scripts
@@ -219,7 +223,10 @@ fn list_scripts(workspace: &Workspace, json: bool, include_private: bool, groups
             .iter()
             .map(|(name, entry)| {
                 let mut obj = serde_json::Map::new();
-                obj.insert("name".to_string(), serde_json::Value::String((*name).clone()));
+                obj.insert(
+                    "name".to_string(),
+                    serde_json::Value::String((*name).clone()),
+                );
                 if let Some(desc) = entry.description() {
                     obj.insert(
                         "description".to_string(),
@@ -247,8 +254,7 @@ fn list_scripts(workspace: &Workspace, json: bool, include_private: bool, groups
             .collect();
         println!(
             "{}",
-            serde_json::to_string_pretty(&entries)
-                .unwrap_or_else(|_| "[]".to_string())
+            serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string())
         );
     } else {
         if scripts.is_empty() {
@@ -274,7 +280,14 @@ fn list_scripts(workspace: &Workspace, json: bool, include_private: bool, groups
             } else {
                 String::new()
             };
-            println!("  {} {}{}{}{}", "->".cyan(), name.bold(), desc, mode, private_tag);
+            println!(
+                "  {} {}{}{}{}",
+                "->".cyan(),
+                name.bold(),
+                desc,
+                mode,
+                private_tag
+            );
         }
         println!();
     }
@@ -334,14 +347,11 @@ async fn run_script_recursive(
         script_name.bold()
     );
 
-    // Build env vars with MELOS_ROOT_PATH and any script-level env
     let mut env_vars = workspace.env_vars();
     // Merge script-level env vars (they take precedence over workspace vars)
     env_vars.extend(script.env().iter().map(|(k, v)| (k.clone(), v.clone())));
 
-    // Dispatch based on execution mode
     if let Some(steps) = script.steps() {
-        // Mode 1: Multi-step workflow
         run_steps(workspace, steps, &env_vars, cli_filters, visited, depth).await?;
     } else if let Some(exec_cmd) = script.exec_command() {
         // Mode 2: Exec config (per-package execution via config, not string parsing)
@@ -432,7 +442,6 @@ async fn run_steps(
             step.bold()
         );
 
-        // Check if this step is a reference to another script
         if workspace.config.scripts.contains_key(step) {
             Box::pin(run_script_recursive(
                 workspace,
@@ -443,12 +452,16 @@ async fn run_steps(
             ))
             .await?;
         } else {
-            // Execute as a shell command
             let substituted = substitute_env_vars(step, env_vars);
             let expanded = expand_command(&substituted)?;
 
             for cmd in &expanded {
-                println!("{}{} {}", "  ".repeat(depth + 1), ">".dimmed(), cmd.dimmed());
+                println!(
+                    "{}{} {}",
+                    "  ".repeat(depth + 1),
+                    ">".dimmed(),
+                    cmd.dimmed()
+                );
 
                 let (shell, shell_flag) = crate::runner::shell_command();
                 let status = tokio::process::Command::new(shell)
@@ -503,7 +516,6 @@ async fn run_exec_config_script(
         return Ok(());
     }
 
-    // Get exec options from config (or use defaults)
     let concurrency = script
         .exec_options()
         .and_then(|o| o.concurrency)
@@ -639,10 +651,8 @@ async fn run_exec_script(
         return Ok(());
     }
 
-    // Parse all exec flags from the command string
     let flags = parse_exec_flags(command);
 
-    // Apply topological sort if requested
     if flags.order_dependents {
         packages = topological_sort(&packages);
         println!(
@@ -678,7 +688,13 @@ async fn run_exec_script(
 
     let runner = ProcessRunner::new(flags.concurrency, flags.fail_fast);
     let results = runner
-        .run_in_packages(&packages, &actual_cmd, env_vars, flags.timeout, &workspace.packages)
+        .run_in_packages(
+            &packages,
+            &actual_cmd,
+            env_vars,
+            flags.timeout,
+            &workspace.packages,
+        )
         .await?;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
@@ -690,7 +706,11 @@ async fn run_exec_script(
 }
 
 /// Prompt the user to select a script interactively from available scripts
-fn select_script_interactive(workspace: &Workspace, include_private: bool, groups: &[String]) -> Result<String> {
+fn select_script_interactive(
+    workspace: &Workspace,
+    include_private: bool,
+    groups: &[String],
+) -> Result<String> {
     let scripts: Vec<(&String, &ScriptEntry)> = workspace
         .config
         .scripts
@@ -700,14 +720,10 @@ fn select_script_interactive(workspace: &Workspace, include_private: bool, group
         .collect();
 
     if scripts.is_empty() {
-        if !include_private
-            && workspace
-                .config
-                .scripts
-                .values()
-                .any(|e| e.is_private())
-        {
-            bail!("No scripts available (all scripts are private). Use --include-private to see them.");
+        if !include_private && workspace.config.scripts.values().any(|e| e.is_private()) {
+            bail!(
+                "No scripts available (all scripts are private). Use --include-private to see them."
+            );
         }
         bail!("No scripts defined in melos.yaml");
     }
@@ -728,9 +744,7 @@ fn select_script_interactive(workspace: &Workspace, include_private: bool, group
     io::stdout().flush()?;
 
     let mut input = String::new();
-    io::stdin()
-        .lock()
-        .read_line(&mut input)?;
+    io::stdin().lock().read_line(&mut input)?;
     let input = input.trim();
 
     // Try as number first
@@ -781,11 +795,11 @@ fn extract_exec_command(command: &str) -> String {
             skip_next = false;
             continue;
         }
-        if *part == "-c" || *part == "--concurrency" || *part == "--timeout" {
+        if matches!(*part, "-c" | "--concurrency" | "--timeout") {
             skip_next = true;
             continue;
         }
-        if *part == "--fail-fast" || *part == "--order-dependents" || *part == "--dry-run" {
+        if matches!(*part, "--fail-fast" | "--order-dependents" | "--dry-run") {
             continue;
         }
         result.push(*part);
@@ -845,7 +859,7 @@ fn substitute_env_vars(command: &str, env: &HashMap<String, String>) -> String {
             let bytes = bytes.as_bytes();
             result = re
                 .replace_all(&result.clone(), |caps: &regex::Captures| {
-                    // Safety: group 0 (the full match) is always present in a Captures
+                    // Group 0 (the full match) is always present in a Captures
                     let m = caps.get(0).expect("regex group 0 always exists");
                     let end = m.end();
                     // If followed by an alphanumeric or underscore, don't replace
@@ -889,8 +903,8 @@ fn expand_command(command: &str) -> Result<Vec<String>> {
             // Use replace_all with a closure that checks context after the match
             let bytes = part.as_bytes();
             re.replace_all(part, |caps: &regex::Captures| {
-                    // Safety: group 0 (the full match) is always present in a Captures
-                    let m = caps.get(0).expect("regex group 0 always exists");
+                // Group 0 (the full match) is always present in a Captures
+                let m = caps.get(0).expect("regex group 0 always exists");
                 let end = m.end();
                 // If followed by `-rs`, don't replace (it's already melos-rs)
                 if end < bytes.len() && bytes[end] == b'-' {
@@ -942,10 +956,7 @@ mod tests {
     fn test_expand_preserves_melos_rs() {
         // Must NOT turn `melos-rs` into `melos-rs-rs`
         let result = expand_command("melos-rs run generate && melos run build").unwrap();
-        assert_eq!(
-            result,
-            vec!["melos-rs run generate", "melos-rs run build"]
-        );
+        assert_eq!(result, vec!["melos-rs run generate", "melos-rs run build"]);
     }
 
     #[test]
@@ -996,10 +1007,7 @@ mod tests {
         );
 
         // $MELOS_ROOT at end of string (no trailing char)
-        assert_eq!(
-            substitute_env_vars("path=$MELOS_ROOT", &env),
-            "path=/root"
-        );
+        assert_eq!(substitute_env_vars("path=$MELOS_ROOT", &env), "path=/root");
     }
 
     #[test]
@@ -1026,7 +1034,9 @@ mod tests {
     fn test_extract_exec_command_strips_new_flags() {
         // Fallback path (no -- separator): should strip all known flags
         assert_eq!(
-            extract_exec_command("melos exec --order-dependents --dry-run --timeout 30 flutter test"),
+            extract_exec_command(
+                "melos exec --order-dependents --dry-run --timeout 30 flutter test"
+            ),
             "flutter test"
         );
     }
@@ -1053,7 +1063,7 @@ mod tests {
     #[test]
     fn test_parse_exec_flags_all() {
         let flags = parse_exec_flags(
-            "melos exec -c 2 --fail-fast --order-dependents --timeout 60 --dry-run -- flutter test"
+            "melos exec -c 2 --fail-fast --order-dependents --timeout 60 --dry-run -- flutter test",
         );
         assert_eq!(flags.concurrency, 2);
         assert!(flags.fail_fast);

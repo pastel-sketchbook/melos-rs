@@ -7,15 +7,25 @@ mod watcher;
 mod workspace;
 
 use anyhow::Result;
-use cli::{Cli, Commands, Verbosity};
 use clap::Parser;
+use cli::{Cli, Commands, Verbosity};
 use colored::Colorize;
 
 /// Built-in command names that can be overridden by scripts with the same name.
 /// Note: `run`, `init`, and `completion` are excluded because they are never overridden.
 /// The `bs` alias for `bootstrap` is resolved by clap before reaching our code.
 const OVERRIDABLE_COMMANDS: &[&str] = &[
-    "analyze", "bootstrap", "clean", "exec", "format", "health", "list", "pub", "publish", "test", "version",
+    "analyze",
+    "bootstrap",
+    "clean",
+    "exec",
+    "format",
+    "health",
+    "list",
+    "pub",
+    "publish",
+    "test",
+    "version",
 ];
 
 #[tokio::main]

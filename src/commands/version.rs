@@ -2,15 +2,15 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use colored::Colorize;
 use semver::{Prerelease, Version};
 
-use crate::config::filter::PackageFilters;
 use crate::config::RepositoryConfig;
-use crate::package::filter::apply_filters_with_categories;
+use crate::config::filter::PackageFilters;
 use crate::package::Package;
+use crate::package::filter::apply_filters_with_categories;
 use crate::workspace::Workspace;
 
 /// Arguments for the `version` command
@@ -141,13 +141,12 @@ impl ConventionalCommit {
     /// Determine the bump type this commit implies
     pub fn bump_type(&self) -> BumpType {
         if self.breaking {
-            BumpType::Major
-        } else if self.commit_type == "feat" {
-            BumpType::Minor
-        } else if self.commit_type == "fix" {
-            BumpType::Patch
-        } else {
-            BumpType::None
+            return BumpType::Major;
+        }
+        match self.commit_type.as_str() {
+            "feat" => BumpType::Minor,
+            "fix" => BumpType::Patch,
+            _ => BumpType::None,
         }
     }
 }
@@ -180,8 +179,9 @@ impl fmt::Display for BumpType {
 /// - `: description` is required
 pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<ConventionalCommit> {
     let re = regex::Regex::new(
-        r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?:\s*(?P<desc>.+)"
-    ).ok()?;
+        r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?:\s*(?P<desc>.+)",
+    )
+    .ok()?;
 
     let first_line = message.lines().next()?;
     let caps = re.captures(first_line)?;
@@ -216,7 +216,11 @@ pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<Convention
 /// Returns commits that successfully parse as conventional commits.
 pub fn parse_commits_since(root: &Path, since_ref: &str) -> Result<Vec<ConventionalCommit>> {
     let output = std::process::Command::new("git")
-        .args(["log", &format!("{}..HEAD", since_ref), "--format=%h%n%B%n---END---"])
+        .args([
+            "log",
+            &format!("{}..HEAD", since_ref),
+            "--format=%h%n%B%n---END---",
+        ])
         .current_dir(root)
         .output()
         .context("Failed to run git log")?;
@@ -262,7 +266,13 @@ pub fn map_commits_to_packages(
 
     for commit in commits {
         let output = std::process::Command::new("git")
-            .args(["diff-tree", "--no-commit-id", "-r", "--name-only", &commit.hash])
+            .args([
+                "diff-tree",
+                "--no-commit-id",
+                "-r",
+                "--name-only",
+                &commit.hash,
+            ])
             .current_dir(root)
             .output()
             .context("Failed to run git diff-tree")?;
@@ -274,10 +284,7 @@ pub fn map_commits_to_packages(
 
         // Check which packages are affected by the changed files
         for pkg in packages {
-            let pkg_relative = pkg
-                .path
-                .strip_prefix(root)
-                .unwrap_or(&pkg.path);
+            let pkg_relative = pkg.path.strip_prefix(root).unwrap_or(&pkg.path);
             let pkg_prefix = pkg_relative.to_string_lossy();
 
             let affects_package = changed_files
@@ -635,11 +642,7 @@ pub fn find_latest_git_tag(root: &Path) -> Option<String> {
     }
 
     let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if tag.is_empty() {
-        None
-    } else {
-        Some(tag)
-    }
+    if tag.is_empty() { None } else { Some(tag) }
 }
 
 // ---------------------------------------------------------------------------
@@ -728,20 +731,23 @@ pub fn compute_next_prerelease(current: &str, bump: &str, preid: &str) -> Result
         // Different preid — reset counter to 0 but keep the same base
         let new_pre = format!("{}.0", preid);
         let mut result = current_base;
-        result.pre = Prerelease::new(&new_pre)
-            .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+        result.pre =
+            Prerelease::new(&new_pre).map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
         return Ok(result);
     }
 
     // Current is stable — bump the base, then add prerelease suffix
     let base = compute_next_version(
-        &format!("{}.{}.{}", current_ver.major, current_ver.minor, current_ver.patch),
+        &format!(
+            "{}.{}.{}",
+            current_ver.major, current_ver.minor, current_ver.patch
+        ),
         bump,
     )?;
     let new_pre = format!("{}.0", preid);
     let mut result = base;
-    result.pre = Prerelease::new(&new_pre)
-        .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+    result.pre =
+        Prerelease::new(&new_pre).map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
     Ok(result)
 }
 
@@ -775,10 +781,7 @@ pub fn is_prerelease(version_str: &str) -> bool {
 
 /// Extract build number from a Flutter version string like "1.2.3+42"
 fn extract_build_number(version_str: &str) -> Option<u64> {
-    version_str
-        .split('+')
-        .nth(1)
-        .and_then(|b| b.parse().ok())
+    version_str.split('+').nth(1).and_then(|b| b.parse().ok())
 }
 
 /// Apply a version bump to a package's pubspec.yaml
@@ -974,9 +977,7 @@ fn update_git_tag_refs(
             std::fs::write(&pubspec_path, &new_content)
                 .with_context(|| format!("Failed to write {}", pubspec_path.display()))?;
 
-            let rel_path = pubspec_path
-                .strip_prefix(root)
-                .unwrap_or(&pubspec_path);
+            let rel_path = pubspec_path.strip_prefix(root).unwrap_or(&pubspec_path);
             println!(
                 "  {} Updated git tag refs in {}",
                 "OK".green(),
@@ -995,10 +996,7 @@ fn update_git_tag_refs(
 
 /// Execute the version command
 pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
-    println!(
-        "\n{} Managing versions across packages...\n",
-        "$".cyan()
-    );
+    println!("\n{} Managing versions across packages...\n", "$".cyan());
 
     if workspace.packages.is_empty() {
         println!("{}", "No packages found in workspace.".yellow());
@@ -1019,7 +1017,6 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         )?
     };
 
-    // Get version command config (if any)
     let version_config = workspace
         .config
         .command
@@ -1058,18 +1055,17 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
     // Resolve commit body inclusion: changelogCommitBodies takes precedence over
     // changelogConfig.includeCommitBody for backward compatibility.
-    let (include_body, only_breaking_bodies) = if let Some(bodies_cfg) = version_config
-        .and_then(|c| c.changelog_commit_bodies.as_ref())
-    {
-        (bodies_cfg.include, bodies_cfg.only_breaking)
-    } else {
-        let body = version_config
-            .and_then(|c| c.changelog_config.as_ref())
-            .and_then(|cc| cc.include_commit_body)
-            .unwrap_or(false);
-        // Legacy includeCommitBody includes ALL bodies (not just breaking)
-        (body, false)
-    };
+    let (include_body, only_breaking_bodies) =
+        if let Some(bodies_cfg) = version_config.and_then(|c| c.changelog_commit_bodies.as_ref()) {
+            (bodies_cfg.include, bodies_cfg.only_breaking)
+        } else {
+            let body = version_config
+                .and_then(|c| c.changelog_config.as_ref())
+                .and_then(|cc| cc.include_commit_body)
+                .unwrap_or(false);
+            // Legacy includeCommitBody includes ALL bodies (not just breaking)
+            (body, false)
+        };
 
     let include_hash = version_config
         .and_then(|c| c.changelog_config.as_ref())
@@ -1098,8 +1094,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     let conventional_commits = if args.conventional_commits {
         // Resolve since_ref: CLI flag -> latest git tag -> fallback "HEAD~10"
         let since_ref = args.since_ref.clone().unwrap_or_else(|| {
-            find_latest_git_tag(&workspace.root_path)
-                .unwrap_or_else(|| "HEAD~10".to_string())
+            find_latest_git_tag(&workspace.root_path).unwrap_or_else(|| "HEAD~10".to_string())
         });
         let commits = parse_commits_since(&workspace.root_path, &since_ref)?;
         println!(
@@ -1114,10 +1109,8 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     };
 
     // Determine whether coordinated versioning is enabled (CLI flag or config)
-    let is_coordinated = args.coordinated
-        || version_config
-            .map(|c| c.is_coordinated())
-            .unwrap_or(false);
+    let is_coordinated =
+        args.coordinated || version_config.map(|c| c.is_coordinated()).unwrap_or(false);
 
     // Determine which packages to version and how.
     //
@@ -1167,7 +1160,10 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             .max()
             .unwrap_or_else(|| Version::new(0, 0, 0));
 
-        let base_str = format!("{}.{}.{}", highest_current.major, highest_current.minor, highest_current.patch);
+        let base_str = format!(
+            "{}.{}.{}",
+            highest_current.major, highest_current.minor, highest_current.patch
+        );
         let coordinated_version = if args.prerelease {
             compute_next_prerelease(&base_str, &args.bump, &args.preid)?
         } else {
@@ -1339,7 +1335,6 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             }
         }
 
-        // Apply patch bumps to dependents
         if !dependents_to_bump.is_empty() {
             println!(
                 "\n{} Bumping {} dependent package(s)...",
@@ -1409,16 +1404,10 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         exclude_types: changelog_exclude_types.as_deref(),
                         include_date,
                     };
-                    let entry = generate_changelog_entry(
-                        summary_version,
-                        &all_commits,
-                        &changelog_opts,
-                    );
+                    let entry =
+                        generate_changelog_entry(summary_version, &all_commits, &changelog_opts);
                     write_changelog(&workspace.root_path, &entry)?;
-                    println!(
-                        "  {} Updated workspace CHANGELOG.md",
-                        "OK".green()
-                    );
+                    println!("  {} Updated workspace CHANGELOG.md", "OK".green());
                 }
             }
 
@@ -1428,18 +1417,19 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                     let agg_path = workspace.root_path.join(&agg.path);
 
                     // Filter commits to only those from packages matching the aggregate filters
-                    let agg_commits: Vec<ConventionalCommit> = if let Some(ref filters) = agg.package_filters {
-                        mapped
-                            .iter()
-                            .filter(|(pkg_name, _)| {
-                                package_matches_filters(pkg_name, filters, &workspace.packages)
-                            })
-                            .flat_map(|(_, commits)| commits.iter().cloned())
-                            .collect()
-                    } else {
-                        // No filters — include all commits
-                        mapped.values().flatten().cloned().collect()
-                    };
+                    let agg_commits: Vec<ConventionalCommit> =
+                        if let Some(ref filters) = agg.package_filters {
+                            mapped
+                                .iter()
+                                .filter(|(pkg_name, _)| {
+                                    package_matches_filters(pkg_name, filters, &workspace.packages)
+                                })
+                                .flat_map(|(_, commits)| commits.iter().cloned())
+                                .collect()
+                        } else {
+                            // No filters — include all commits
+                            mapped.values().flatten().cloned().collect()
+                        };
 
                     if !agg_commits.is_empty() {
                         let agg_version = versioned
@@ -1456,7 +1446,8 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                             exclude_types: changelog_exclude_types.as_deref(),
                             include_date,
                         };
-                        let entry = generate_changelog_entry(agg_version, &agg_commits, &changelog_opts);
+                        let entry =
+                            generate_changelog_entry(agg_version, &agg_commits, &changelog_opts);
 
                         // If the file has a description configured, ensure it's at the top
                         let full_entry = if let Some(ref desc) = agg.description {
@@ -1504,30 +1495,14 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         }
     }
 
-    // Run pre-commit hook if configured
-    if let Some(cfg) = version_config
-        && let Some(ref hooks) = cfg.hooks
-        && let Some(ref pre_commit) = hooks.pre_commit
+    if let Some(pre_commit) = version_config
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.pre_commit.as_deref())
     {
-        println!(
-            "\n{} Running pre-commit hook: {}",
-            "$".cyan(),
-            pre_commit
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(pre_commit)
-            .current_dir(&workspace.root_path)
-            .status()
+        crate::runner::run_lifecycle_hook(pre_commit, "pre-commit", &workspace.root_path, &[])
             .await?;
-
-        if !status.success() {
-            bail!("Pre-commit hook failed");
-        }
     }
 
-    // Git commit
     let new_package_versions = versioned
         .iter()
         .map(|(name, ver)| format!(" - {} @ {}", name, ver))
@@ -1540,37 +1515,31 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     } else {
         let template = version_config
             .map(|c| c.message_template().to_string())
-            .unwrap_or_else(|| "chore(release): publish packages\n\n{new_package_versions}".to_string());
+            .unwrap_or_else(|| {
+                "chore(release): publish packages\n\n{new_package_versions}".to_string()
+            });
         template.replace("{new_package_versions}", &new_package_versions)
     };
-    println!("\n{} Committing: {}", "$".cyan(), commit_message.lines().next().unwrap_or(&commit_message).dimmed());
+    println!(
+        "\n{} Committing: {}",
+        "$".cyan(),
+        commit_message
+            .lines()
+            .next()
+            .unwrap_or(&commit_message)
+            .dimmed()
+    );
     git_commit(&workspace.root_path, &commit_message)?;
     println!("  {} Committed version changes", "OK".green());
 
-    // Run post-commit hook if configured
-    if let Some(cfg) = version_config
-        && let Some(ref hooks) = cfg.hooks
-        && let Some(ref post_commit) = hooks.post_commit
+    if let Some(post_commit) = version_config
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.post_commit.as_deref())
     {
-        println!(
-            "\n{} Running post-commit hook: {}",
-            "$".cyan(),
-            post_commit
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(post_commit)
-            .current_dir(&workspace.root_path)
-            .status()
+        crate::runner::run_lifecycle_hook(post_commit, "post-commit", &workspace.root_path, &[])
             .await?;
-
-        if !status.success() {
-            bail!("Post-commit hook failed");
-        }
     }
 
-    // Create git tags
     if should_tag {
         println!("\n{} Creating git tags...", "$".cyan());
         for (pkg_name, version) in &versioned {
@@ -1578,7 +1547,6 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         }
     }
 
-    // Push commits and tags to remote
     let should_push = if args.no_git_push {
         false
     } else {
@@ -1587,8 +1555,11 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     if should_push {
         println!("\n{} Pushing to remote...", "$".cyan());
         git_push(&workspace.root_path, should_tag)?;
-        println!("  {} Pushed commits{}", "OK".green(),
-            if should_tag { " and tags" } else { "" });
+        println!(
+            "  {} Pushed commits{}",
+            "OK".green(),
+            if should_tag { " and tags" } else { "" }
+        );
     }
 
     // Print release URLs if requested (CLI flag or config)
@@ -1674,8 +1645,7 @@ mod tests {
     #[test]
     fn test_parse_conventional_commit_breaking_bang() {
         let commit =
-            parse_conventional_commit("ghi9012", "feat(api)!: remove deprecated endpoint")
-                .unwrap();
+            parse_conventional_commit("ghi9012", "feat(api)!: remove deprecated endpoint").unwrap();
         assert_eq!(commit.commit_type, "feat");
         assert!(commit.breaking);
         assert_eq!(commit.bump_type(), BumpType::Major);
@@ -1745,13 +1715,15 @@ mod tests {
 
     #[test]
     fn test_generate_changelog_with_hash() {
-        let commits = vec![
-            parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
-        ];
-        let entry = generate_changelog_entry("2.0.0", &commits, &ChangelogOptions {
-            include_hash: true,
-            ..ChangelogOptions::default()
-        });
+        let commits = vec![parse_conventional_commit("abc1234", "feat(ui): new button").unwrap()];
+        let entry = generate_changelog_entry(
+            "2.0.0",
+            &commits,
+            &ChangelogOptions {
+                include_hash: true,
+                ..ChangelogOptions::default()
+            },
+        );
         assert!(entry.contains("(abc1234)"));
         assert!(entry.contains("**ui**: new button"));
     }
@@ -1794,16 +1766,17 @@ mod tests {
             parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
             parse_conventional_commit("def5678", "fix(auth): handle token").unwrap(),
         ];
-        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
-            include_scopes: false,
-            ..ChangelogOptions::default()
-        });
+        let entry = generate_changelog_entry(
+            "1.0.0",
+            &commits,
+            &ChangelogOptions {
+                include_scopes: false,
+                ..ChangelogOptions::default()
+            },
+        );
         // With include_scopes=false, scope prefix should NOT appear
         assert!(!entry.contains("**ui**"), "Scope should not be included");
-        assert!(
-            !entry.contains("**auth**"),
-            "Scope should not be included"
-        );
+        assert!(!entry.contains("**auth**"), "Scope should not be included");
         // But the descriptions should still be present
         assert!(entry.contains("new button"));
         assert!(entry.contains("handle token"));
@@ -1811,9 +1784,7 @@ mod tests {
 
     #[test]
     fn test_generate_changelog_with_scopes() {
-        let commits = vec![
-            parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
-        ];
+        let commits = vec![parse_conventional_commit("abc1234", "feat(ui): new button").unwrap()];
         let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions::default());
         assert!(entry.contains("**ui**: new button"));
     }
@@ -2024,14 +1995,16 @@ mod tests {
         let repo = RepositoryConfig {
             url: "https://github.com/org/repo".to_string(),
         };
-        let commits = vec![
-            parse_conventional_commit("abc1234", "feat(ui): new button").unwrap(),
-        ];
-        let entry = generate_changelog_entry("2.0.0", &commits, &ChangelogOptions {
-            include_hash: true,
-            repository: Some(&repo),
-            ..ChangelogOptions::default()
-        });
+        let commits = vec![parse_conventional_commit("abc1234", "feat(ui): new button").unwrap()];
+        let entry = generate_changelog_entry(
+            "2.0.0",
+            &commits,
+            &ChangelogOptions {
+                include_hash: true,
+                repository: Some(&repo),
+                ..ChangelogOptions::default()
+            },
+        );
         // Should contain a markdown link instead of bare hash
         assert!(entry.contains("[abc1234](https://github.com/org/repo/commit/abc1234)"));
         assert!(!entry.contains(" (abc1234)"), "Should not have bare hash");
@@ -2039,13 +2012,15 @@ mod tests {
 
     #[test]
     fn test_generate_changelog_hash_no_repo() {
-        let commits = vec![
-            parse_conventional_commit("abc1234", "feat: something").unwrap(),
-        ];
-        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
-            include_hash: true,
-            ..ChangelogOptions::default()
-        });
+        let commits = vec![parse_conventional_commit("abc1234", "feat: something").unwrap()];
+        let entry = generate_changelog_entry(
+            "1.0.0",
+            &commits,
+            &ChangelogOptions {
+                include_hash: true,
+                ..ChangelogOptions::default()
+            },
+        );
         // Without repository, should be bare hash in parens
         assert!(entry.contains("(abc1234)"));
         assert!(!entry.contains("[abc1234]"));
@@ -2087,7 +2062,9 @@ mod tests {
         ];
         let include = vec!["feat".to_string(), "fix".to_string()];
         let entry = generate_changelog_entry(
-            "1.0.0", &commits, &ChangelogOptions {
+            "1.0.0",
+            &commits,
+            &ChangelogOptions {
                 include_types: Some(&include),
                 ..ChangelogOptions::default()
             },
@@ -2107,7 +2084,9 @@ mod tests {
         ];
         let exclude = vec!["chore".to_string(), "ci".to_string()];
         let entry = generate_changelog_entry(
-            "1.0.0", &commits, &ChangelogOptions {
+            "1.0.0",
+            &commits,
+            &ChangelogOptions {
                 exclude_types: Some(&exclude),
                 ..ChangelogOptions::default()
             },
@@ -2129,7 +2108,9 @@ mod tests {
         let include = vec!["feat".to_string()];
         let exclude = vec!["chore".to_string()];
         let entry = generate_changelog_entry(
-            "1.0.0", &commits, &ChangelogOptions {
+            "1.0.0",
+            &commits,
+            &ChangelogOptions {
                 include_types: Some(&include),
                 exclude_types: Some(&exclude),
                 ..ChangelogOptions::default()
@@ -2146,9 +2127,7 @@ mod tests {
             parse_conventional_commit("a1", "feat: new feature").unwrap(),
             parse_conventional_commit("b2", "chore: update deps").unwrap(),
         ];
-        let entry = generate_changelog_entry(
-            "1.0.0", &commits, &ChangelogOptions::default(),
-        );
+        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions::default());
         // All types should be included
         assert!(entry.contains("new feature"));
         assert!(entry.contains("update deps"));
@@ -2542,11 +2521,15 @@ command:
             body: Some("Fixed a null pointer issue.".to_string()),
             hash: "def".to_string(),
         };
-        let entry = generate_changelog_entry("1.0.0", &[breaking_commit, normal_commit], &ChangelogOptions {
-            include_body: true,
-            only_breaking_bodies: true,
-            ..ChangelogOptions::default()
-        });
+        let entry = generate_changelog_entry(
+            "1.0.0",
+            &[breaking_commit, normal_commit],
+            &ChangelogOptions {
+                include_body: true,
+                only_breaking_bodies: true,
+                ..ChangelogOptions::default()
+            },
+        );
         // Breaking commit's body should be included
         assert!(entry.contains("This changes the entire API surface."));
         // Non-breaking commit's body should NOT be included
@@ -2571,11 +2554,15 @@ command:
             body: Some("Normal body.".to_string()),
             hash: "def".to_string(),
         };
-        let entry = generate_changelog_entry("1.0.0", &[breaking_commit, normal_commit], &ChangelogOptions {
-            include_body: true,
-            only_breaking_bodies: false,
-            ..ChangelogOptions::default()
-        });
+        let entry = generate_changelog_entry(
+            "1.0.0",
+            &[breaking_commit, normal_commit],
+            &ChangelogOptions {
+                include_body: true,
+                only_breaking_bodies: false,
+                ..ChangelogOptions::default()
+            },
+        );
         // Both bodies should be included
         assert!(entry.contains("Breaking body."));
         assert!(entry.contains("Normal body."));
@@ -2618,13 +2605,15 @@ command:
 
     #[test]
     fn test_changelog_without_date() {
-        let commits = vec![
-            parse_conventional_commit("abc", "feat: something new").unwrap(),
-        ];
-        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
-            include_date: false,
-            ..ChangelogOptions::default()
-        });
+        let commits = vec![parse_conventional_commit("abc", "feat: something new").unwrap()];
+        let entry = generate_changelog_entry(
+            "1.0.0",
+            &commits,
+            &ChangelogOptions {
+                include_date: false,
+                ..ChangelogOptions::default()
+            },
+        );
         // Should be "## 1.0.0\n" without a date
         assert!(entry.starts_with("## 1.0.0\n"));
         // Should NOT contain a date pattern like (2026-02-22)
@@ -2633,18 +2622,24 @@ command:
 
     #[test]
     fn test_changelog_with_date() {
-        let commits = vec![
-            parse_conventional_commit("abc", "feat: something new").unwrap(),
-        ];
-        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
-            include_date: true,
-            ..ChangelogOptions::default()
-        });
+        let commits = vec![parse_conventional_commit("abc", "feat: something new").unwrap()];
+        let entry = generate_changelog_entry(
+            "1.0.0",
+            &commits,
+            &ChangelogOptions {
+                include_date: true,
+                ..ChangelogOptions::default()
+            },
+        );
         // Should be "## 1.0.0 (YYYY-MM-DD)\n" with a date
         assert!(entry.starts_with("## 1.0.0 ("));
         // Check date pattern
         let re = regex::Regex::new(r"## 1\.0\.0 \(\d{4}-\d{2}-\d{2}\)").unwrap();
-        assert!(re.is_match(&entry), "Expected date in header, got: {}", entry);
+        assert!(
+            re.is_match(&entry),
+            "Expected date in header, got: {}",
+            entry
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2699,25 +2694,27 @@ dependencies:
 "#;
         std::fs::write(pkg_path.join("pubspec.yaml"), pubspec_content).unwrap();
 
-        let packages = vec![
-            Package {
-                name: "my_app".to_string(),
-                path: pkg_path.clone(),
-                version: Some("1.0.0".to_string()),
-                is_flutter: false,
-                dependencies: vec!["core_lib".to_string()],
-                dev_dependencies: vec![],
-                dependency_versions: HashMap::new(),
-                publish_to: None,
-            },
-        ];
+        let packages = vec![Package {
+            name: "my_app".to_string(),
+            path: pkg_path.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            dependencies: vec!["core_lib".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            publish_to: None,
+        }];
         let versioned = vec![("core_lib".to_string(), "2.0.0".to_string())];
 
         let count = update_git_tag_refs(tmp.path(), &packages, &versioned).unwrap();
         assert_eq!(count, 1);
 
         let updated = std::fs::read_to_string(pkg_path.join("pubspec.yaml")).unwrap();
-        assert!(updated.contains("ref: core_lib-v2.0.0"), "Expected updated ref, got:\n{}", updated);
+        assert!(
+            updated.contains("ref: core_lib-v2.0.0"),
+            "Expected updated ref, got:\n{}",
+            updated
+        );
         assert!(!updated.contains("ref: core_lib-v1.0.0"));
     }
 
@@ -2736,18 +2733,16 @@ dependencies:
 "#;
         std::fs::write(pkg_path.join("pubspec.yaml"), pubspec_content).unwrap();
 
-        let packages = vec![
-            Package {
-                name: "my_app".to_string(),
-                path: pkg_path,
-                version: Some("1.0.0".to_string()),
-                is_flutter: false,
-                dependencies: vec!["core_lib".to_string()],
-                dev_dependencies: vec![],
-                dependency_versions: HashMap::new(),
-                publish_to: None,
-            },
-        ];
+        let packages = vec![Package {
+            name: "my_app".to_string(),
+            path: pkg_path,
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            dependencies: vec!["core_lib".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            publish_to: None,
+        }];
         let versioned = vec![("core_lib".to_string(), "2.0.0".to_string())];
 
         let count = update_git_tag_refs(tmp.path(), &packages, &versioned).unwrap();

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -18,6 +19,36 @@ pub fn shell_command() -> (&'static str, &'static str) {
     } else {
         ("sh", "-c")
     }
+}
+
+/// Run a lifecycle hook shell command in the workspace root.
+///
+/// Prints the hook label and command, executes via the platform shell, and
+/// bails if the command exits with a non-zero status. Extra environment
+/// variables (e.g. `MELOS_PUBLISH_DRY_RUN`) can be passed via `extra_env`.
+pub async fn run_lifecycle_hook(
+    hook_cmd: &str,
+    label: &str,
+    root_path: &Path,
+    extra_env: &[(&str, &str)],
+) -> Result<()> {
+    println!("\n{} Running {} hook: {}", "$".cyan(), label, hook_cmd);
+    let (shell, shell_flag) = shell_command();
+    let mut cmd = tokio::process::Command::new(shell);
+    cmd.arg(shell_flag).arg(hook_cmd).current_dir(root_path);
+    for &(key, val) in extra_env {
+        cmd.env(key, val);
+    }
+    let status = cmd.status().await?;
+
+    if !status.success() {
+        anyhow::bail!(
+            "{} hook failed with exit code: {}",
+            label,
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
 }
 
 /// Create a styled progress bar for package processing.
@@ -113,7 +144,6 @@ impl ProcessRunner {
         let mut handles = Vec::new();
 
         for (idx, pkg) in packages.iter().enumerate() {
-            // Check if we should stop early
             if self.fail_fast && failed.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
@@ -128,12 +158,11 @@ impl ProcessRunner {
             let pkg_path = pkg.path.clone();
             let color = PKG_COLORS[idx % PKG_COLORS.len()];
 
-            // Build per-package env vars merged with workspace vars
             let env = build_package_env(env_vars, pkg, all_packages);
             let pb = progress.cloned();
 
             let handle = tokio::spawn(async move {
-                // Safety: the semaphore is never closed, so acquire always succeeds.
+                // The semaphore is never closed, so acquire always succeeds.
                 let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
 
                 // Skip if already failed and fail-fast is enabled
@@ -161,11 +190,9 @@ impl ProcessRunner {
                     Ok(child) => {
                         if let Some(dur) = timeout {
                             match tokio::time::timeout(dur, child.wait_with_output()).await {
-                                Ok(Ok(output)) => (
-                                    output.status.success(),
-                                    output.stdout,
-                                    output.stderr,
-                                ),
+                                Ok(Ok(output)) => {
+                                    (output.status.success(), output.stdout, output.stderr)
+                                }
                                 Ok(Err(e)) => {
                                     let msg = format!("{} {} {}\n", prefix, "ERROR".red(), e);
                                     (false, Vec::new(), msg.into_bytes())
@@ -182,11 +209,9 @@ impl ProcessRunner {
                             }
                         } else {
                             match child.wait_with_output().await {
-                                Ok(output) => (
-                                    output.status.success(),
-                                    output.stdout,
-                                    output.stderr,
-                                ),
+                                Ok(output) => {
+                                    (output.status.success(), output.stdout, output.stderr)
+                                }
                                 Err(e) => {
                                     let msg = format!("{} {} {}\n", prefix, "ERROR".red(), e);
                                     (false, Vec::new(), msg.into_bytes())
@@ -202,7 +227,7 @@ impl ProcessRunner {
 
                 // Atomically print the entire output block under the lock
                 {
-                    // Safety: the lock is never poisoned in practice since we
+                    // The lock is never poisoned in practice since we
                     // never panic while holding it; using expect for clarity.
                     let _guard = output_lock.lock().expect("output lock poisoned");
 
@@ -271,19 +296,13 @@ fn build_package_env(
     // Detect parent package: if the current package name ends with "example"
     // and its directory is a child of another package's directory, set parent env vars.
     if let Some(parent) = find_parent_package(pkg, all_packages) {
-        env.insert(
-            "MELOS_PARENT_PACKAGE_NAME".to_string(),
-            parent.name.clone(),
-        );
+        env.insert("MELOS_PARENT_PACKAGE_NAME".to_string(), parent.name.clone());
         env.insert(
             "MELOS_PARENT_PACKAGE_PATH".to_string(),
             parent.path.display().to_string(),
         );
         if let Some(ref version) = parent.version {
-            env.insert(
-                "MELOS_PARENT_PACKAGE_VERSION".to_string(),
-                version.clone(),
-            );
+            env.insert("MELOS_PARENT_PACKAGE_VERSION".to_string(), version.clone());
         }
     }
 
@@ -396,7 +415,10 @@ mod tests {
     fn test_find_parent_package_deepest_wins() {
         let root = make_pkg("app", "/workspace/packages/app");
         let inner = make_pkg("app_feature", "/workspace/packages/app/feature");
-        let child = make_pkg("app_feature_example", "/workspace/packages/app/feature/example");
+        let child = make_pkg(
+            "app_feature_example",
+            "/workspace/packages/app/feature/example",
+        );
         let all = vec![root.clone(), inner.clone(), child.clone()];
 
         let result = find_parent_package(&child, &all);
@@ -431,7 +453,10 @@ mod tests {
         let env = build_package_env(&ws_env, &pkg, &[]);
 
         assert_eq!(env.get("MELOS_PACKAGE_NAME").unwrap(), "core");
-        assert_eq!(env.get("MELOS_PACKAGE_PATH").unwrap(), "/workspace/packages/core");
+        assert_eq!(
+            env.get("MELOS_PACKAGE_PATH").unwrap(),
+            "/workspace/packages/core"
+        );
         assert_eq!(env.get("MELOS_PACKAGE_VERSION").unwrap(), "1.0.0");
         assert_eq!(env.get("MELOS_ROOT_PATH").unwrap(), "/workspace");
         // No parent env vars
@@ -448,7 +473,10 @@ mod tests {
         let env = build_package_env(&ws_env, &child, &all);
 
         assert_eq!(env.get("MELOS_PARENT_PACKAGE_NAME").unwrap(), "my_lib");
-        assert_eq!(env.get("MELOS_PARENT_PACKAGE_PATH").unwrap(), "/workspace/packages/my_lib");
+        assert_eq!(
+            env.get("MELOS_PARENT_PACKAGE_PATH").unwrap(),
+            "/workspace/packages/my_lib"
+        );
         assert_eq!(env.get("MELOS_PARENT_PACKAGE_VERSION").unwrap(), "1.0.0");
     }
 

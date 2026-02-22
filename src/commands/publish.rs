@@ -38,7 +38,12 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     // Publishing only makes sense for non-private packages
     filters.no_private = true;
 
-    let packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
+    let packages = apply_filters_with_categories(
+        &workspace.packages,
+        &filters,
+        Some(&workspace.root_path),
+        &workspace.config.categories,
+    )?;
 
     if packages.is_empty() {
         println!(
@@ -72,10 +77,7 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
             "{}",
             "Dry run mode: no packages will actually be published.".dimmed()
         );
-        println!(
-            "{}",
-            "Use --dry-run=false to publish for real.\n".dimmed()
-        );
+        println!("{}", "Use --dry-run=false to publish for real.\n".dimmed());
     }
 
     if !args.yes && !args.dry_run {
@@ -96,41 +98,36 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
 
     let dry_run_str = if args.dry_run { "true" } else { "false" };
 
-    // Run pre-publish hook if configured
-    if let Some(publish_config) = workspace
+    if let Some(pre_hook) = workspace
         .config
         .command
         .as_ref()
         .and_then(|c| c.publish.as_ref())
-        && let Some(hooks) = &publish_config.hooks
-        && let Some(ref pre_hook) = hooks.pre
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.pre.as_deref())
     {
-        println!(
-            "\n{} Running pre-publish hook: {}",
-            "$".cyan(),
-            pre_hook
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(pre_hook)
-            .current_dir(&workspace.root_path)
-            .env("MELOS_PUBLISH_DRY_RUN", dry_run_str)
-            .status()
-            .await?;
-
-        if !status.success() {
-            anyhow::bail!("Pre-publish hook failed with exit code: {}", status.code().unwrap_or(-1));
-        }
+        crate::runner::run_lifecycle_hook(
+            pre_hook,
+            "pre-publish",
+            &workspace.root_path,
+            &[("MELOS_PUBLISH_DRY_RUN", dry_run_str)],
+        )
+        .await?;
     }
 
-    // Build the publish command
     let cmd = build_publish_command(args.dry_run);
 
     let pb = create_progress_bar(packages.len() as u64, "publishing");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages_with_progress(&packages, &cmd, &workspace.env_vars(), None, Some(&pb), &workspace.packages)
+        .run_in_packages_with_progress(
+            &packages,
+            &cmd,
+            &workspace.env_vars(),
+            None,
+            Some(&pb),
+            &workspace.packages,
+        )
         .await?;
     pb.finish_and_clear();
 
@@ -141,7 +138,6 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         .map(|(name, _)| name.clone())
         .collect();
 
-    // Git tag creation for successfully published packages
     if args.git_tag_version && !args.dry_run && !succeeded.is_empty() {
         println!("\n{} Creating git tags...\n", "$".cyan());
         for pkg_name in &succeeded {
@@ -149,7 +145,13 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
                 let version = pkg.version.as_deref().unwrap_or("0.0.0");
                 let tag = build_git_tag(pkg_name, version);
                 let tag_result = std::process::Command::new("git")
-                    .args(["tag", "-a", &tag, "-m", &format!("Release {} v{}", pkg_name, version)])
+                    .args([
+                        "tag",
+                        "-a",
+                        &tag,
+                        "-m",
+                        &format!("Release {} v{}", pkg_name, version),
+                    ])
                     .current_dir(&workspace.root_path)
                     .status();
 
@@ -168,32 +170,22 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         }
     }
 
-    // Run post-publish hook if configured (before bail on failure, matching Melos behavior)
-    if let Some(publish_config) = workspace
+    // Run post-publish hook before bail on failure, matching Melos behavior
+    if let Some(post_hook) = workspace
         .config
         .command
         .as_ref()
         .and_then(|c| c.publish.as_ref())
-        && let Some(hooks) = &publish_config.hooks
-        && let Some(ref post_hook) = hooks.post
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.post.as_deref())
     {
-        println!(
-            "\n{} Running post-publish hook: {}",
-            "$".cyan(),
-            post_hook
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(post_hook)
-            .current_dir(&workspace.root_path)
-            .env("MELOS_PUBLISH_DRY_RUN", dry_run_str)
-            .status()
-            .await?;
-
-        if !status.success() {
-            anyhow::bail!("Post-publish hook failed with exit code: {}", status.code().unwrap_or(-1));
-        }
+        crate::runner::run_lifecycle_hook(
+            post_hook,
+            "post-publish",
+            &workspace.root_path,
+            &[("MELOS_PUBLISH_DRY_RUN", dry_run_str)],
+        )
+        .await?;
     }
 
     if failed > 0 {
@@ -249,10 +241,7 @@ mod tests {
 
     #[test]
     fn test_build_git_tag_prerelease() {
-        assert_eq!(
-            build_git_tag("core", "2.0.0-beta.1"),
-            "core-v2.0.0-beta.1"
-        );
+        assert_eq!(build_git_tag("core", "2.0.0-beta.1"), "core-v2.0.0-beta.1");
     }
 
     #[test]

@@ -102,10 +102,7 @@ impl MelosConfig {
 
                 // Warn about empty run commands (only if no exec shorthand or steps)
                 if cmd.trim().is_empty() && !has_exec_config && !has_steps {
-                    warnings.push(format!(
-                        "Script '{}' has an empty `run` command.",
-                        name
-                    ));
+                    warnings.push(format!("Script '{}' has an empty `run` command.", name));
                 }
             } else if !has_exec_config && !has_steps {
                 // No run command and no exec/steps config
@@ -360,16 +357,18 @@ impl<'de> serde::Deserialize<'de> for RepositoryConfig {
             type Value = RepositoryConfig;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a repository URL string or an object with type/origin/owner/name")
+                formatter
+                    .write_str("a repository URL string or an object with type/origin/owner/name")
             }
 
             fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
-                Ok(RepositoryConfig {
-                    url: v.to_string(),
-                })
+                Ok(RepositoryConfig { url: v.to_string() })
             }
 
-            fn visit_map<M: de::MapAccess<'de>>(self, mut map: M) -> std::result::Result<Self::Value, M::Error> {
+            fn visit_map<M: de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> std::result::Result<Self::Value, M::Error> {
                 let mut repo_type: Option<String> = None;
                 let mut origin: Option<String> = None;
                 let mut owner: Option<String> = None;
@@ -381,7 +380,9 @@ impl<'de> serde::Deserialize<'de> for RepositoryConfig {
                         "origin" => origin = Some(map.next_value()?),
                         "owner" => owner = Some(map.next_value()?),
                         "name" => name = Some(map.next_value()?),
-                        _ => { let _: yaml_serde::Value = map.next_value()?; }
+                        _ => {
+                            let _: yaml_serde::Value = map.next_value()?;
+                        }
                     }
                 }
 
@@ -1223,10 +1224,7 @@ melos:
     #[test]
     fn test_validate_empty_run_command() {
         let mut scripts = HashMap::new();
-        scripts.insert(
-            "empty".to_string(),
-            ScriptEntry::Simple("  ".to_string()),
-        );
+        scripts.insert("empty".to_string(), ScriptEntry::Simple("  ".to_string()));
         let config = MelosConfig {
             name: "test".to_string(),
             packages: vec!["packages/**".to_string()],
@@ -1297,7 +1295,11 @@ categories:
 "#;
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let warnings = config.validate();
-        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings, got: {:?}",
+            warnings
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1418,13 +1420,19 @@ packages:
     fn test_repository_config_7x_pubspec() {
         // Verify the MelosSection correctly parses the repository field,
         // which is what the 7.x config path uses
-        let section: MelosSection = yaml_serde::from_str(r#"
+        let section: MelosSection = yaml_serde::from_str(
+            r#"
 repository: https://github.com/myorg/myapp
 packages:
   - packages/**
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         assert!(section.repository.is_some());
-        assert_eq!(section.repository.unwrap().url, "https://github.com/myorg/myapp");
+        assert_eq!(
+            section.repository.unwrap().url,
+            "https://github.com/myorg/myapp"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1565,7 +1573,11 @@ scripts:
             discover_nested_workspaces: None,
         };
         let warnings = config.validate();
-        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings, got: {:?}",
+            warnings
+        );
     }
 
     #[test]
@@ -1598,7 +1610,11 @@ scripts:
             discover_nested_workspaces: None,
         };
         let warnings = config.validate();
-        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings, got: {:?}",
+            warnings
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1652,8 +1668,14 @@ command:
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let publish = config.command.unwrap().publish.unwrap();
         let hooks = publish.hooks.unwrap();
-        assert_eq!(hooks.pre.as_deref(), Some("dart pub run build_runner build"));
-        assert_eq!(hooks.post.as_deref(), Some("dart pub run build_runner clean"));
+        assert_eq!(
+            hooks.pre.as_deref(),
+            Some("dart pub run build_runner build")
+        );
+        assert_eq!(
+            hooks.post.as_deref(),
+            Some("dart pub run build_runner clean")
+        );
     }
 
     #[test]
@@ -1725,7 +1747,10 @@ melos:
   sdkPath: /usr/local/flutter
 "#;
         let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
-        assert_eq!(wrapper.melos.sdk_path.as_deref(), Some("/usr/local/flutter"));
+        assert_eq!(
+            wrapper.melos.sdk_path.as_deref(),
+            Some("/usr/local/flutter")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1753,7 +1778,10 @@ scripts:
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
 
         let analyze = &config.scripts["analyze"];
-        assert_eq!(analyze.groups(), Some(vec!["ci".to_string(), "quality".to_string()].as_slice()));
+        assert_eq!(
+            analyze.groups(),
+            Some(vec!["ci".to_string(), "quality".to_string()].as_slice())
+        );
         assert!(analyze.in_group("ci"));
         assert!(analyze.in_group("quality"));
         assert!(!analyze.in_group("build"));

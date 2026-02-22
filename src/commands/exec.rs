@@ -52,16 +52,19 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     let cmd_str = args.command.join(" ");
     let watch_mode = args.watch;
 
-    // Apply filters from CLI flags
     let filters: PackageFilters = (&args.filters).into();
-    let mut packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
+    let mut packages = apply_filters_with_categories(
+        &workspace.packages,
+        &filters,
+        Some(&workspace.root_path),
+        &workspace.config.categories,
+    )?;
 
     if packages.is_empty() {
         println!("{}", "No packages matched the given filters.".yellow());
         return Ok(());
     }
 
-    // Apply topological sort if requested
     if args.order_dependents {
         packages = topological_sort(&packages);
     }
@@ -124,18 +127,23 @@ async fn run_exec_once(
         return Ok(());
     }
 
-    // Build timeout Duration (0 means no timeout)
     let timeout = if args.timeout > 0 {
         Some(std::time::Duration::from_secs(args.timeout))
     } else {
         None
     };
 
-    // Execute command in each package (runner handles per-package env vars + colored output)
     let pb = create_progress_bar(packages.len() as u64, "exec");
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let results = runner
-        .run_in_packages_with_progress(packages, cmd_str, &workspace.env_vars(), timeout, Some(&pb), &workspace.packages)
+        .run_in_packages_with_progress(
+            packages,
+            cmd_str,
+            &workspace.env_vars(),
+            timeout,
+            Some(&pb),
+            &workspace.packages,
+        )
         .await?;
     pb.finish_and_clear();
 
@@ -176,7 +184,6 @@ async fn run_watch_loop(
         watcher::start_watching(&watch_packages, 0, event_tx, shutdown_rx)
     });
 
-    // Set up Ctrl+C handler
     let shutdown_tx_ctrlc = shutdown_tx.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -202,7 +209,6 @@ async fn run_watch_loop(
             changed_packages.insert(event.package_name);
         }
 
-        // Filter to only the packages that changed
         let affected: Vec<Package> = packages
             .iter()
             .filter(|p| changed_packages.contains(&p.name))
@@ -219,8 +225,7 @@ async fn run_watch_loop(
             watcher::format_changed_packages(&changed_packages).bold(),
         );
 
-        // Re-run the command in affected packages
-        // Build timeout Duration
+        // Re-run in affected packages
         let timeout = if args.timeout > 0 {
             Some(std::time::Duration::from_secs(args.timeout))
         } else {
@@ -230,7 +235,14 @@ async fn run_watch_loop(
         let pb = create_progress_bar(affected.len() as u64, "exec");
         let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
         let results = runner
-            .run_in_packages_with_progress(&affected, cmd_str, &workspace.env_vars(), timeout, Some(&pb), &workspace.packages)
+            .run_in_packages_with_progress(
+                &affected,
+                cmd_str,
+                &workspace.env_vars(),
+                timeout,
+                Some(&pb),
+                &workspace.packages,
+            )
             .await;
         pb.finish_and_clear();
 
@@ -317,9 +329,18 @@ mod tests {
         }
 
         let cli = TestCli::parse_from([
-            "test", "--watch", "--fail-fast", "--order-dependents",
-            "--dry-run", "-c", "3", "--timeout", "60",
-            "dart", "analyze", ".",
+            "test",
+            "--watch",
+            "--fail-fast",
+            "--order-dependents",
+            "--dry-run",
+            "-c",
+            "3",
+            "--timeout",
+            "60",
+            "dart",
+            "analyze",
+            ".",
         ]);
         assert!(cli.args.watch);
         assert!(cli.args.fail_fast);

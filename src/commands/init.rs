@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use colored::Colorize;
 
@@ -62,7 +62,6 @@ pub fn run(args: InitArgs) -> Result<()> {
     // Ask about apps directory
     let include_apps = prompt_yes_no("Include an 'apps' directory?", true)?;
 
-    // Build package patterns
     let mut package_patterns: Vec<String> = vec!["packages/*".to_string()];
     if include_apps {
         package_patterns.push("apps/*".to_string());
@@ -84,7 +83,6 @@ pub fn run(args: InitArgs) -> Result<()> {
         target_dir.display()
     );
 
-    // Create directories
     create_dir_if_missing(&target_dir)?;
     create_dir_if_missing(&target_dir.join("packages"))?;
     if include_apps {
@@ -98,7 +96,6 @@ pub fn run(args: InitArgs) -> Result<()> {
         write_7x_config(&target_dir, &workspace_name, &package_patterns)?;
     }
 
-    // Print summary
     println!("{}", "Created:".green().bold());
     print_tree(&target_dir, &cwd, args.legacy, include_apps);
 
@@ -121,7 +118,6 @@ fn write_7x_config(dir: &Path, name: &str, package_patterns: &[String]) -> Resul
         );
     }
 
-    // Build workspace: field (explicit package paths for Dart workspace support)
     let workspace_entries: String = package_patterns
         .iter()
         .map(|p| format!("  - {}", p))

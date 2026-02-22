@@ -32,31 +32,15 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Run pre-clean hook if configured
-    if let Some(clean_config) = workspace
+    if let Some(pre_hook) = workspace
         .config
         .command
         .as_ref()
         .and_then(|c| c.clean.as_ref())
-        && let Some(hooks) = &clean_config.hooks
-        && let Some(ref pre_hook) = hooks.pre
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.pre.as_deref())
     {
-        println!(
-            "\n{} Running pre-clean hook: {}",
-            "$".cyan(),
-            pre_hook
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(pre_hook)
-            .current_dir(&workspace.root_path)
-            .status()
-            .await?;
-
-        if !status.success() {
-            anyhow::bail!("Pre-clean hook failed with exit code: {}", status.code().unwrap_or(-1));
-        }
+        crate::runner::run_lifecycle_hook(pre_hook, "pre-clean", &workspace.root_path, &[]).await?;
     }
 
     // In 6.x mode, remove generated pubspec_overrides.yaml files
@@ -64,7 +48,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         remove_pubspec_overrides(&all_filtered);
     }
 
-    // Run `flutter clean` in Flutter packages
+    // Flutter packages need `flutter clean`; pure Dart packages just need artifacts removed
     let flutter_packages: Vec<_> = all_filtered
         .iter()
         .filter(|p| p.is_flutter)
@@ -109,7 +93,6 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         pb.set_message("cleaning dart packages...");
         println!("{}", "Cleaning pure Dart packages...".dimmed());
         for pkg in &dart_packages {
-            // Remove build/ directory if present
             let build_dir = pkg.path.join("build");
             if build_dir.exists()
                 && let Err(e) = std::fs::remove_dir_all(&build_dir)
@@ -123,7 +106,6 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
                 failed += 1;
             }
 
-            // Remove .dart_tool/ directory if present
             let dart_tool_dir = pkg.path.join(".dart_tool");
             if dart_tool_dir.exists()
                 && let Err(e) = std::fs::remove_dir_all(&dart_tool_dir)
@@ -159,12 +141,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
                             e
                         );
                     } else {
-                        println!(
-                            "  {} Removed {}/{}",
-                            "OK".green(),
-                            pkg.name,
-                            dir_name
-                        );
+                        println!("  {} Removed {}/{}", "OK".green(), pkg.name, dir_name);
                     }
                 }
             }
@@ -180,12 +157,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
                             e
                         );
                     } else {
-                        println!(
-                            "  {} Removed {}/{}",
-                            "OK".green(),
-                            pkg.name,
-                            file_name
-                        );
+                        println!("  {} Removed {}/{}", "OK".green(), pkg.name, file_name);
                     }
                 }
             }
@@ -198,31 +170,16 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
 
     println!("\n{}", "All packages cleaned.".green());
 
-    // Run post-clean hook if configured
-    if let Some(clean_config) = workspace
+    if let Some(post_hook) = workspace
         .config
         .command
         .as_ref()
         .and_then(|c| c.clean.as_ref())
-        && let Some(hooks) = &clean_config.hooks
-        && let Some(ref post_hook) = hooks.post
+        .and_then(|cfg| cfg.hooks.as_ref())
+        .and_then(|h| h.post.as_deref())
     {
-        println!(
-            "\n{} Running post-clean hook: {}",
-            "$".cyan(),
-            post_hook
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(post_hook)
-            .current_dir(&workspace.root_path)
-            .status()
+        crate::runner::run_lifecycle_hook(post_hook, "post-clean", &workspace.root_path, &[])
             .await?;
-
-        if !status.success() {
-            anyhow::bail!("Post-clean hook failed with exit code: {}", status.code().unwrap_or(-1));
-        }
     }
 
     Ok(())
@@ -309,13 +266,20 @@ mod tests {
 
         // Create the override file
         let override_path = pkg_dir.join("pubspec_overrides.yaml");
-        std::fs::write(&override_path, "dependency_overrides:\n  core:\n    path: ../core\n").unwrap();
+        std::fs::write(
+            &override_path,
+            "dependency_overrides:\n  core:\n    path: ../core\n",
+        )
+        .unwrap();
         assert!(override_path.exists());
 
         let pkg = make_package("app", pkg_dir.clone());
         remove_pubspec_overrides(&[pkg]);
 
-        assert!(!override_path.exists(), "pubspec_overrides.yaml should be removed");
+        assert!(
+            !override_path.exists(),
+            "pubspec_overrides.yaml should be removed"
+        );
     }
 
     #[test]
@@ -350,7 +314,10 @@ mod tests {
         remove_pubspec_overrides(&[pkg_a, pkg_b]);
 
         assert!(!override_a.exists(), "a's override should be removed");
-        assert!(!pkg_b_dir.join("pubspec_overrides.yaml").exists(), "b never had one");
+        assert!(
+            !pkg_b_dir.join("pubspec_overrides.yaml").exists(),
+            "b never had one"
+        );
     }
 
     #[test]

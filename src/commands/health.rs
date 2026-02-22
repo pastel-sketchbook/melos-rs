@@ -50,7 +50,8 @@ pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
     }
 
     // If no specific check is selected, run all
-    let run_all = args.all || (!args.version_drift && !args.missing_fields && !args.sdk_consistency);
+    let run_all =
+        args.all || (!args.version_drift && !args.missing_fields && !args.sdk_consistency);
 
     let mut issues = 0u32;
 
@@ -223,14 +224,8 @@ fn check_missing_fields(packages: &[Package]) -> u32 {
         }
 
         // homepage OR repository should be present
-        let has_homepage = fields
-            .homepage
-            .as_deref()
-            .is_some_and(|s| !s.is_empty());
-        let has_repository = fields
-            .repository
-            .as_deref()
-            .is_some_and(|s| !s.is_empty());
+        let has_homepage = fields.homepage.as_deref().is_some_and(|s| !s.is_empty());
+        let has_repository = fields.repository.as_deref().is_some_and(|s| !s.is_empty());
         if !has_homepage && !has_repository {
             missing.push("homepage/repository");
         }
@@ -251,7 +246,10 @@ fn check_missing_fields(packages: &[Package]) -> u32 {
     }
 
     if issues == 0 {
-        println!("  {} All public packages have required fields.", "OK".green());
+        println!(
+            "  {} All public packages have required fields.",
+            "OK".green()
+        );
     } else {
         println!(
             "\n  {} {} public package(s) have missing recommended fields.",
@@ -321,10 +319,7 @@ fn check_sdk_consistency(packages: &[Package]) -> u32 {
         let constraints = read_sdk_constraints(pkg);
         match constraints.sdk {
             Some(ref s) if !s.is_empty() => {
-                sdk_map
-                    .entry(s.clone())
-                    .or_default()
-                    .push(pkg.name.clone());
+                sdk_map.entry(s.clone()).or_default().push(pkg.name.clone());
             }
             _ => {
                 missing_sdk.push(pkg.name.clone());

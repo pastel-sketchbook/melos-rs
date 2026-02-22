@@ -15,7 +15,7 @@ tasks:
 
   build:release:
     desc: "Build optimized release binary"
-    deps: [fmt]
+    deps: [check:all]
     cmds:
       - cargo build --release
 
@@ -38,10 +38,10 @@ tasks:
 
   check:all:
     desc: "Run fmt, clippy, and tests"
-    deps: [fmt]
     cmds:
-      - cargo clippy -- -D warnings
-      - cargo test
+      - task: fmt
+      - task: check
+      - task: test
 
   # --- Run ---
   run:

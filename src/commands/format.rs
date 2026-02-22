@@ -34,7 +34,12 @@ pub struct FormatArgs {
 /// Format Dart code across all matching packages using `dart format`
 pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
     let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
+    let packages = apply_filters_with_categories(
+        &workspace.packages,
+        &filters,
+        Some(&workspace.root_path),
+        &workspace.config.categories,
+    )?;
 
     println!(
         "\n{} Formatting {} packages...\n",
@@ -57,7 +62,14 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
     let pb = create_progress_bar(packages.len() as u64, "formatting");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), None, Some(&pb), &workspace.packages)
+        .run_in_packages_with_progress(
+            &packages,
+            &cmd_str,
+            &workspace.env_vars(),
+            None,
+            Some(&pb),
+            &workspace.packages,
+        )
         .await?;
     pb.finish_and_clear();
 
@@ -78,7 +90,11 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
 }
 
 /// Build the `dart format` command string from flags.
-fn build_format_command(set_exit_if_changed: bool, output: &str, line_length: Option<u32>) -> String {
+fn build_format_command(
+    set_exit_if_changed: bool,
+    output: &str,
+    line_length: Option<u32>,
+) -> String {
     let mut cmd_parts = vec!["dart".to_string(), "format".to_string()];
 
     if set_exit_if_changed {
@@ -136,7 +152,10 @@ mod tests {
     #[test]
     fn test_build_format_command_all_flags() {
         let cmd = build_format_command(true, "json", Some(80));
-        assert_eq!(cmd, "dart format --set-exit-if-changed --output=json --line-length=80 .");
+        assert_eq!(
+            cmd,
+            "dart format --set-exit-if-changed --output=json --line-length=80 ."
+        );
     }
 
     #[test]

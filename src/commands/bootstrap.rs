@@ -57,13 +57,23 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     }
     println!();
 
-    // Run pre-bootstrap hook if configured
-    run_hook(workspace, HookPhase::Pre).await?;
+    if let Some(pre_hook) = bootstrap_config(workspace)
+        .and_then(|b| b.hooks.as_ref())
+        .and_then(|h| h.pre.as_deref())
+    {
+        crate::runner::run_lifecycle_hook(pre_hook, "pre-bootstrap", &workspace.root_path, &[])
+            .await?;
+    }
 
     // In 6.x mode, generate pubspec_overrides.yaml for local package linking
     if workspace.config_source.is_legacy() {
         let override_paths = config_dependency_override_paths(workspace);
-        generate_pubspec_overrides(&packages, &workspace.packages, &override_paths, &workspace.root_path)?;
+        generate_pubspec_overrides(
+            &packages,
+            &workspace.packages,
+            &override_paths,
+            &workspace.root_path,
+        )?;
     }
 
     // Validate version constraints if configured
@@ -74,7 +84,6 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     // Sync shared dependencies if configured
     sync_shared_dependencies(&packages, workspace)?;
 
-    // Build the pub get command with extra flags
     let flutter_cmd = build_pub_get_command("flutter", enforce_lockfile, args.no_example, offline);
     let dart_cmd = build_pub_get_command("dart", enforce_lockfile, args.no_example, offline);
 
@@ -112,7 +121,13 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         pb.set_message("dart pub get...");
         let runner = ProcessRunner::new(concurrency, true);
         let results = runner
-            .run_in_packages(&dart_packages, &dart_cmd, &workspace.env_vars(), None, &workspace.packages)
+            .run_in_packages(
+                &dart_packages,
+                &dart_cmd,
+                &workspace.env_vars(),
+                None,
+                &workspace.packages,
+            )
             .await?;
 
         for (name, success) in &results {
@@ -126,11 +141,25 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 
     pb.finish_and_clear();
 
-    // Run post-bootstrap hook if configured
-    run_hook(workspace, HookPhase::Post).await?;
+    if let Some(post_hook) = bootstrap_config(workspace)
+        .and_then(|b| b.hooks.as_ref())
+        .and_then(|h| h.post.as_deref())
+    {
+        crate::runner::run_lifecycle_hook(post_hook, "post-bootstrap", &workspace.root_path, &[])
+            .await?;
+    }
 
     println!("\n{}", "All packages bootstrapped.".green());
     Ok(())
+}
+
+/// Extract the bootstrap command config from the workspace, if present.
+fn bootstrap_config(workspace: &Workspace) -> Option<&crate::config::BootstrapCommandConfig> {
+    workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref())
 }
 
 /// Determine effective concurrency for bootstrap.
@@ -138,14 +167,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 /// If the config has `command.bootstrap.run_pub_get_in_parallel: false`,
 /// concurrency is forced to 1. Otherwise, the CLI `-c N` value is used.
 fn effective_concurrency(workspace: &Workspace, cli_concurrency: usize) -> usize {
-    let parallel = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.bootstrap.as_ref())
-        .and_then(|b| b.run_pub_get_in_parallel);
-
-    match parallel {
+    match bootstrap_config(workspace).and_then(|b| b.run_pub_get_in_parallel) {
         Some(false) => 1,
         _ => cli_concurrency,
     }
@@ -153,44 +175,28 @@ fn effective_concurrency(workspace: &Workspace, cli_concurrency: usize) -> usize
 
 /// Check if `enforce_lockfile` is set in bootstrap config.
 fn config_enforce_lockfile(workspace: &Workspace) -> bool {
-    workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.bootstrap.as_ref())
+    bootstrap_config(workspace)
         .and_then(|b| b.enforce_lockfile)
         .unwrap_or(false)
 }
 
 /// Check if `run_pub_get_offline` is set in bootstrap config.
 fn config_run_pub_get_offline(workspace: &Workspace) -> bool {
-    workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.bootstrap.as_ref())
+    bootstrap_config(workspace)
         .and_then(|b| b.run_pub_get_offline)
         .unwrap_or(false)
 }
 
 /// Get `dependencyOverridePaths` from bootstrap config, if set.
 fn config_dependency_override_paths(workspace: &Workspace) -> Vec<String> {
-    workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.bootstrap.as_ref())
+    bootstrap_config(workspace)
         .and_then(|b| b.dependency_override_paths.clone())
         .unwrap_or_default()
 }
 
 /// Check if `enforce_versions_for_dependency_resolution` is set in bootstrap config.
 fn config_enforce_versions(workspace: &Workspace) -> bool {
-    workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.bootstrap.as_ref())
+    bootstrap_config(workspace)
         .and_then(|b| b.enforce_versions_for_dependency_resolution)
         .unwrap_or(false)
 }
@@ -205,15 +211,11 @@ fn config_enforce_versions(workspace: &Workspace) -> bool {
 /// This mirrors Melos's `command.bootstrap.dependencies` / `dev_dependencies` /
 /// `environment` feature that keeps dependency versions consistent across all packages.
 fn sync_shared_dependencies(packages: &[Package], workspace: &Workspace) -> Result<()> {
-    let bootstrap_config = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.bootstrap.as_ref());
+    let bc = bootstrap_config(workspace);
 
-    let shared_env = bootstrap_config.and_then(|b| b.environment.as_ref());
-    let shared_deps = bootstrap_config.and_then(|b| b.dependencies.as_ref());
-    let shared_dev_deps = bootstrap_config.and_then(|b| b.dev_dependencies.as_ref());
+    let shared_env = bc.and_then(|b| b.environment.as_ref());
+    let shared_deps = bc.and_then(|b| b.dependencies.as_ref());
+    let shared_dev_deps = bc.and_then(|b| b.dev_dependencies.as_ref());
 
     // Nothing to sync?
     if shared_env.is_none() && shared_deps.is_none() && shared_dev_deps.is_none() {
@@ -256,10 +258,7 @@ fn sync_shared_dependencies(packages: &[Package], workspace: &Workspace) -> Resu
         if changed {
             let new_content = lines.join("\n") + "\n";
             std::fs::write(&pubspec_path, new_content).with_context(|| {
-                format!(
-                    "Failed to write updated pubspec.yaml for '{}'",
-                    pkg.name
-                )
+                format!("Failed to write updated pubspec.yaml for '{}'", pkg.name)
             })?;
             synced_count += 1;
         }
@@ -300,7 +299,11 @@ fn yaml_value_to_constraint(value: &yaml_serde::Value) -> Option<String> {
 /// `  <key>: <new_value>`.
 ///
 /// Returns `true` if any lines were modified.
-fn sync_yaml_section(lines: &mut [String], section: &str, values: &HashMap<String, String>) -> bool {
+fn sync_yaml_section(
+    lines: &mut [String],
+    section: &str,
+    values: &HashMap<String, String>,
+) -> bool {
     if values.is_empty() {
         return false;
     }
@@ -386,7 +389,10 @@ fn enforce_versions(packages: &[Package], all_workspace_packages: &[Package]) ->
             };
 
             // Dart versions may have +buildNumber; strip it for semver parsing
-            let version_for_semver = sibling_version_str.split('+').next().unwrap_or(sibling_version_str);
+            let version_for_semver = sibling_version_str
+                .split('+')
+                .next()
+                .unwrap_or(sibling_version_str);
             let sibling_version = match semver::Version::parse(version_for_semver) {
                 Ok(v) => v,
                 Err(_) => {
@@ -422,7 +428,12 @@ fn enforce_versions(packages: &[Package], all_workspace_packages: &[Package]) ->
 }
 
 /// Build the `pub get` command string with optional flags.
-fn build_pub_get_command(sdk: &str, enforce_lockfile: bool, no_example: bool, offline: bool) -> String {
+fn build_pub_get_command(
+    sdk: &str,
+    enforce_lockfile: bool,
+    no_example: bool,
+    offline: bool,
+) -> String {
     let mut cmd = format!("{} pub get", sdk);
     if enforce_lockfile {
         cmd.push_str(" --enforce-lockfile");
@@ -434,52 +445,6 @@ fn build_pub_get_command(sdk: &str, enforce_lockfile: bool, no_example: bool, of
         cmd.push_str(" --offline");
     }
     cmd
-}
-
-/// Hook phase for bootstrap lifecycle hooks
-enum HookPhase {
-    Pre,
-    Post,
-}
-
-/// Run a bootstrap lifecycle hook if configured.
-async fn run_hook(workspace: &Workspace, phase: HookPhase) -> Result<()> {
-    let hook_cmd = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.bootstrap.as_ref())
-        .and_then(|b| b.hooks.as_ref())
-        .and_then(|h| match phase {
-            HookPhase::Pre => h.pre.as_deref(),
-            HookPhase::Post => h.post.as_deref(),
-        });
-
-    if let Some(hook) = hook_cmd {
-        let label = match phase {
-            HookPhase::Pre => "pre-bootstrap",
-            HookPhase::Post => "post-bootstrap",
-        };
-        println!(
-            "\n{} Running {} hook: {}",
-            "$".cyan(),
-            label,
-            hook
-        );
-        let (shell, shell_flag) = crate::runner::shell_command();
-        let status = tokio::process::Command::new(shell)
-            .arg(shell_flag)
-            .arg(hook)
-            .current_dir(&workspace.root_path)
-            .status()
-            .await?;
-
-        if !status.success() {
-            anyhow::bail!("{} hook failed with exit code: {}", label, status.code().unwrap_or(-1));
-        }
-    }
-
-    Ok(())
 }
 
 /// Generate `pubspec_overrides.yaml` files for local package linking (Melos 6.x mode).
@@ -559,7 +524,12 @@ fn generate_pubspec_overrides(
             .iter()
             .chain(pkg.dev_dependencies.iter())
             .filter(|dep| override_names.contains(dep.as_str()))
-            .filter_map(|dep| all_override_sources.iter().find(|p| p.name == **dep).copied())
+            .filter_map(|dep| {
+                all_override_sources
+                    .iter()
+                    .find(|p| p.name == **dep)
+                    .copied()
+            })
             .collect();
 
         let override_path = pkg.path.join("pubspec_overrides.yaml");
@@ -619,14 +589,16 @@ fn generate_pubspec_overrides(
 ///     path: ../../shared/utils
 /// ```
 fn build_pubspec_overrides_content(local_deps: &[&Package], pkg_path: &Path) -> Result<String> {
-    let mut content = String::from("# Generated by melos-rs. Do not edit.\ndependency_overrides:\n");
+    let mut content =
+        String::from("# Generated by melos-rs. Do not edit.\ndependency_overrides:\n");
 
     // Sort deps by name for deterministic output
     let mut sorted_deps: Vec<&&Package> = local_deps.iter().collect();
     sorted_deps.sort_by_key(|p| &p.name);
 
     for dep in sorted_deps {
-        let relative = pathdiff::diff_paths(&dep.path, pkg_path).unwrap_or_else(|| dep.path.clone());
+        let relative =
+            pathdiff::diff_paths(&dep.path, pkg_path).unwrap_or_else(|| dep.path.clone());
         let relative_str = relative.display().to_string();
 
         content.push_str(&format!("  {}:\n", dep.name));
@@ -639,12 +611,10 @@ fn build_pubspec_overrides_content(local_deps: &[&Package], pkg_path: &Path) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
-    use crate::config::{
-        BootstrapCommandConfig, CommandConfig, MelosConfig,
-    };
+    use crate::config::{BootstrapCommandConfig, CommandConfig, MelosConfig};
     use crate::workspace::{ConfigSource, Workspace};
 
     fn make_package(name: &str, path: &str, deps: Vec<&str>) -> Package {
@@ -716,7 +686,10 @@ mod tests {
         // alpha should come before zebra (sorted)
         let alpha_pos = content.find("alpha:").unwrap();
         let zebra_pos = content.find("zebra:").unwrap();
-        assert!(alpha_pos < zebra_pos, "Dependencies should be sorted by name");
+        assert!(
+            alpha_pos < zebra_pos,
+            "Dependencies should be sorted by name"
+        );
     }
 
     #[test]
@@ -804,7 +777,10 @@ mod tests {
     #[test]
     fn test_build_pub_get_command_all_flags() {
         let cmd = build_pub_get_command("flutter", true, true, true);
-        assert_eq!(cmd, "flutter pub get --enforce-lockfile --no-example --offline");
+        assert_eq!(
+            cmd,
+            "flutter pub get --enforce-lockfile --no-example --offline"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -853,7 +829,12 @@ mod tests {
     // enforce_versions tests
     // -----------------------------------------------------------------------
 
-    fn make_versioned_package(name: &str, version: &str, deps: Vec<&str>, dep_versions: Vec<(&str, &str)>) -> Package {
+    fn make_versioned_package(
+        name: &str,
+        version: &str,
+        deps: Vec<&str>,
+        dep_versions: Vec<(&str, &str)>,
+    ) -> Package {
         Package {
             name: name.to_string(),
             path: PathBuf::from(format!("/workspace/packages/{}", name)),
@@ -862,7 +843,10 @@ mod tests {
             publish_to: None,
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
-            dependency_versions: dep_versions.into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            dependency_versions: dep_versions
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         }
     }
 
@@ -980,7 +964,10 @@ mod tests {
             enforce_versions_for_dependency_resolution: None,
             enforce_lockfile: None,
             run_pub_get_offline: None,
-            dependency_override_paths: Some(vec!["../external".to_string(), "../other".to_string()]),
+            dependency_override_paths: Some(vec![
+                "../external".to_string(),
+                "../other".to_string(),
+            ]),
             environment: None,
             dependencies: None,
             dev_dependencies: None,
@@ -1018,7 +1005,11 @@ mod tests {
             dependency_versions: HashMap::new(),
         };
 
-        let core = make_package("core", &dir.path().join("packages/core").to_string_lossy(), vec![]);
+        let core = make_package(
+            "core",
+            &dir.path().join("packages/core").to_string_lossy(),
+            vec![],
+        );
 
         // Create an external package directory
         let ext_dir = dir.path().join("external").join("external_lib");
@@ -1026,14 +1017,11 @@ mod tests {
         std::fs::write(
             ext_dir.join("pubspec.yaml"),
             "name: external_lib\nversion: 2.0.0\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let result = generate_pubspec_overrides(
-            &[app],
-            &[core],
-            &["external".to_string()],
-            dir.path(),
-        );
+        let result =
+            generate_pubspec_overrides(&[app], &[core], &["external".to_string()], dir.path());
         assert!(result.is_ok());
 
         let overrides_path = pkg_dir.join("pubspec_overrides.yaml");
@@ -1064,12 +1052,7 @@ mod tests {
         std::fs::create_dir_all(&core_dir).unwrap();
         let core = make_package("core", &core_dir.to_string_lossy(), vec![]);
 
-        let result = generate_pubspec_overrides(
-            &[app],
-            &[core],
-            &[],
-            dir.path(),
-        );
+        let result = generate_pubspec_overrides(&[app], &[core], &[], dir.path());
         assert!(result.is_ok());
 
         let overrides_path = pkg_dir.join("pubspec_overrides.yaml");
@@ -1105,10 +1088,8 @@ mod tests {
 
     #[test]
     fn test_sync_yaml_section_no_change_if_same() {
-        let mut lines: Vec<String> = vec![
-            "dependencies:".to_string(),
-            "  http: ^1.0.0".to_string(),
-        ];
+        let mut lines: Vec<String> =
+            vec!["dependencies:".to_string(), "  http: ^1.0.0".to_string()];
         let mut values = HashMap::new();
         values.insert("http".to_string(), "^1.0.0".to_string());
 
@@ -1137,10 +1118,8 @@ mod tests {
 
     #[test]
     fn test_sync_yaml_section_only_matches_existing_keys() {
-        let mut lines: Vec<String> = vec![
-            "dependencies:".to_string(),
-            "  http: ^0.13.0".to_string(),
-        ];
+        let mut lines: Vec<String> =
+            vec!["dependencies:".to_string(), "  http: ^0.13.0".to_string()];
         let mut values = HashMap::new();
         // This key doesn't exist in the file, so no change
         values.insert("dio".to_string(), "^5.0.0".to_string());
@@ -1151,10 +1130,8 @@ mod tests {
 
     #[test]
     fn test_sync_yaml_section_empty_values() {
-        let mut lines: Vec<String> = vec![
-            "dependencies:".to_string(),
-            "  http: ^0.13.0".to_string(),
-        ];
+        let mut lines: Vec<String> =
+            vec!["dependencies:".to_string(), "  http: ^0.13.0".to_string()];
         let values = HashMap::new();
 
         let changed = sync_yaml_section(&mut lines, "dependencies", &values);
@@ -1214,10 +1191,16 @@ mod tests {
         };
 
         let mut shared_deps = HashMap::new();
-        shared_deps.insert("http".to_string(), yaml_serde::Value::String("^1.0.0".to_string()));
+        shared_deps.insert(
+            "http".to_string(),
+            yaml_serde::Value::String("^1.0.0".to_string()),
+        );
 
         let mut shared_dev_deps = HashMap::new();
-        shared_dev_deps.insert("test".to_string(), yaml_serde::Value::String("^2.0.0".to_string()));
+        shared_dev_deps.insert(
+            "test".to_string(),
+            yaml_serde::Value::String("^2.0.0".to_string()),
+        );
 
         let mut shared_env = HashMap::new();
         shared_env.insert("sdk".to_string(), "'>=3.0.0 <4.0.0'".to_string());
@@ -1261,11 +1244,27 @@ mod tests {
         assert!(result.is_ok());
 
         let content = std::fs::read_to_string(pkg_dir.join("pubspec.yaml")).unwrap();
-        assert!(content.contains("http: ^1.0.0"), "http should be updated to ^1.0.0, got:\n{}", content);
-        assert!(content.contains("test: ^2.0.0"), "test should be updated to ^2.0.0, got:\n{}", content);
-        assert!(content.contains("sdk: '>=3.0.0 <4.0.0'"), "sdk should be updated, got:\n{}", content);
+        assert!(
+            content.contains("http: ^1.0.0"),
+            "http should be updated to ^1.0.0, got:\n{}",
+            content
+        );
+        assert!(
+            content.contains("test: ^2.0.0"),
+            "test should be updated to ^2.0.0, got:\n{}",
+            content
+        );
+        assert!(
+            content.contains("sdk: '>=3.0.0 <4.0.0'"),
+            "sdk should be updated, got:\n{}",
+            content
+        );
         // intl should remain unchanged
-        assert!(content.contains("intl: ^0.17.0"), "intl should be unchanged, got:\n{}", content);
+        assert!(
+            content.contains("intl: ^0.17.0"),
+            "intl should be unchanged, got:\n{}",
+            content
+        );
     }
 
     #[test]
@@ -1276,7 +1275,8 @@ mod tests {
         std::fs::write(
             pkg_dir.join("pubspec.yaml"),
             "name: app\nversion: 1.0.0\ndependencies:\n  http: ^0.13.0\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let app = Package {
             name: "app".to_string(),
