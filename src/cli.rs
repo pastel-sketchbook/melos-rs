@@ -1,8 +1,9 @@
 use clap::{Args, Parser, Subcommand};
+use clap_complete::Shell;
 
 use crate::commands::{
-    exec::ExecArgs, format::FormatArgs, list::ListArgs, publish::PublishArgs, run::RunArgs,
-    version::VersionArgs,
+    exec::ExecArgs, format::FormatArgs, init::InitArgs, list::ListArgs, publish::PublishArgs,
+    run::RunArgs, version::VersionArgs,
 };
 
 /// melos-rs: A Rust CLI for Flutter/Dart monorepo management
@@ -11,8 +12,40 @@ use crate::commands::{
 #[derive(Parser, Debug)]
 #[command(name = "melos-rs", version, about, long_about = None)]
 pub struct Cli {
+    /// Increase output verbosity (show debug info)
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
+
+    /// Suppress non-essential output
+    #[arg(short, long, global = true, conflicts_with = "verbose")]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Commands,
+}
+
+/// Verbosity level resolved from --verbose / --quiet flags
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verbosity {
+    /// --quiet: only errors and essential output
+    Quiet,
+    /// default: normal output
+    Normal,
+    /// --verbose: extra debug info
+    Verbose,
+}
+
+impl Cli {
+    /// Resolve the verbosity level from CLI flags
+    pub fn verbosity(&self) -> Verbosity {
+        if self.quiet {
+            Verbosity::Quiet
+        } else if self.verbose {
+            Verbosity::Verbose
+        } else {
+            Verbosity::Normal
+        }
+    }
 }
 
 /// Package filter flags shared across all commands.
@@ -104,11 +137,17 @@ pub enum Commands {
     /// Clean all packages (runs `flutter clean` in each)
     Clean(CleanArgs),
 
+    /// Generate shell completion scripts
+    Completion(CompletionArgs),
+
     /// Execute a command in each package
     Exec(ExecArgs),
 
     /// Format Dart code across packages using `dart format`
     Format(FormatArgs),
+
+    /// Initialize a new Melos workspace
+    Init(InitArgs),
 
     /// List packages in the workspace
     List(ListArgs),
@@ -143,4 +182,12 @@ pub struct CleanArgs {
 
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
+}
+
+/// Arguments for the `completion` command
+#[derive(Args, Debug)]
+pub struct CompletionArgs {
+    /// The shell to generate completions for
+    #[arg(value_enum)]
+    pub shell: Shell,
 }

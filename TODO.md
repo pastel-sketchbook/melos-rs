@@ -142,16 +142,16 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Clean: remove `pubspec_overrides.yaml` in 6.x mode only
 - [x] Startup banner shows config mode (`[melos.yaml]` or `[pubspec.yaml]`)
 - [x] Actionable error message when no config found
-- [ ] `melos-rs init` — scaffold new 7.x workspace
+- [x] `melos-rs init` — scaffold new 7.x workspace (with `--legacy` flag for 6.x)
 
 ## Phase 3: Advanced Features
 
 ### Script Execution Engine
 - [ ] Full `melos exec` flag parsing when invoked from `run` command
 - [x] Script-level `env` field support (merged into run command environment)
-- [ ] Recursive `melos run X` expansion (handle nested script references)
-- [ ] Timeout support for long-running commands
-- [ ] Dry-run mode (`--dry-run`)
+- [x] Recursive `melos run X` expansion (handle nested script references, cycle detection, max depth 16)
+- [x] Timeout support for long-running commands (`--timeout <seconds>` on exec)
+- [x] Dry-run mode (`--dry-run` on exec)
 
 ### Package Management
 - [x] Topological sort for dependency-ordered execution (Kahn's algorithm, wired to bootstrap + exec)
@@ -173,10 +173,10 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [ ] Release branch management
 
 ### Developer Experience
-- [ ] `melos-rs init` - scaffold a new 7.x workspace (pubspec.yaml with melos: key)
-- [ ] Tab completion for bash/zsh/fish
+- [x] `melos-rs init` - scaffold new 7.x workspace (with `--legacy` for 6.x)
+- [x] Tab completion for bash/zsh/fish (`completion` subcommand via `clap_complete`)
 - [ ] Progress bars with `indicatif` for more commands
-- [ ] Verbose/quiet/debug log levels
+- [x] Verbose/quiet log levels (`--verbose` / `--quiet` global flags)
 - [ ] Config validation and helpful error messages
 - [ ] Watch mode for development (`--watch`)
 

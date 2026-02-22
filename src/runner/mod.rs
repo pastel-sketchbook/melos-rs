@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::Result;
 use colored::{Color, Colorize};
@@ -43,12 +44,15 @@ impl ProcessRunner {
     /// MELOS_PACKAGE_PATH) are automatically injected alongside workspace env vars.
     /// Each package gets colored output prefixing to distinguish concurrent output.
     ///
+    /// If `timeout` is `Some(duration)`, each command is killed after the duration elapses.
+    ///
     /// Returns a vec of (package_name, success) results.
     pub async fn run_in_packages(
         &self,
         packages: &[Package],
         command: &str,
         env_vars: &HashMap<String, String>,
+        timeout: Option<Duration>,
     ) -> Result<Vec<(String, bool)>> {
         let semaphore = std::sync::Arc::new(Semaphore::new(self.concurrency));
         let results = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
@@ -86,18 +90,46 @@ impl ProcessRunner {
                 let prefix = format!("[{}]", pkg_name).color(color).bold();
                 println!("{} running...", prefix);
 
-                let result = tokio::process::Command::new("sh")
+                let child = tokio::process::Command::new("sh")
                     .arg("-c")
                     .arg(&command)
                     .current_dir(&pkg_path)
                     .envs(&env)
                     .stdout(std::process::Stdio::inherit())
                     .stderr(std::process::Stdio::inherit())
-                    .status()
-                    .await;
+                    .spawn();
 
-                let success = match result {
-                    Ok(status) => status.success(),
+                let success = match child {
+                    Ok(child) => {
+                        if let Some(dur) = timeout {
+                            // Apply timeout: wait for the child or kill it
+                            match tokio::time::timeout(dur, child.wait_with_output()).await {
+                                Ok(Ok(output)) => output.status.success(),
+                                Ok(Err(e)) => {
+                                    eprintln!("{} {} {}", prefix, "ERROR".red(), e);
+                                    false
+                                }
+                                Err(_) => {
+                                    eprintln!(
+                                        "{} {} timed out after {}s",
+                                        prefix,
+                                        "TIMEOUT".red().bold(),
+                                        dur.as_secs()
+                                    );
+                                    false
+                                }
+                            }
+                        } else {
+                            // No timeout: wait normally
+                            match child.wait_with_output().await {
+                                Ok(output) => output.status.success(),
+                                Err(e) => {
+                                    eprintln!("{} {} {}", prefix, "ERROR".red(), e);
+                                    false
+                                }
+                            }
+                        }
+                    }
                     Err(e) => {
                         eprintln!("{} {} {}", prefix, "ERROR".red(), e);
                         false

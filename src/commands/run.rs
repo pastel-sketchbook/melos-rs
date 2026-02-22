@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 
 use anyhow::{bail, Result};
@@ -11,6 +11,9 @@ use crate::config::filter::PackageFilters;
 use crate::package::filter::apply_filters_with_categories;
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
+
+/// Maximum recursion depth for nested script references
+const MAX_SCRIPT_DEPTH: usize = 16;
 
 /// Arguments for the `run` command
 #[derive(Args, Debug)]
@@ -36,11 +39,45 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
         None => select_script_interactive(workspace)?,
     };
 
+    let cli_filters: PackageFilters = (&args.filters).into();
+    let mut visited = HashSet::new();
+    run_script_recursive(workspace, &script_name, &cli_filters, &mut visited, 0).await
+}
+
+/// Recursively execute a named script, resolving nested `melos run <X>` references.
+///
+/// When a script's expanded command is `melos-rs run <other_script>` and that
+/// script exists in the config, it is executed inline instead of shelling out.
+/// A visited set tracks the call chain to detect and prevent cycles.
+async fn run_script_recursive(
+    workspace: &Workspace,
+    script_name: &str,
+    cli_filters: &PackageFilters,
+    visited: &mut HashSet<String>,
+    depth: usize,
+) -> Result<()> {
+    if depth > MAX_SCRIPT_DEPTH {
+        bail!(
+            "Script recursion depth exceeded ({} levels). Check for deeply nested 'melos run' references.",
+            MAX_SCRIPT_DEPTH
+        );
+    }
+
+    if !visited.insert(script_name.to_string()) {
+        let chain: Vec<_> = visited.iter().cloned().collect();
+        bail!(
+            "Circular script reference detected: '{}' -> [{}] -> '{}'",
+            script_name,
+            chain.join(" -> "),
+            script_name
+        );
+    }
+
     let script = workspace
         .config
         .scripts
-        .get(&script_name)
-        .ok_or_else(|| anyhow::anyhow!("Script '{}' not found in melos.yaml", script_name))?;
+        .get(script_name)
+        .ok_or_else(|| anyhow::anyhow!("Script '{}' not found in config", script_name))?;
 
     let run_command = script.run_command();
 
@@ -48,8 +85,10 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
         println!("\n{} {}", "Description:".dimmed(), desc.trim());
     }
 
+    let indent = "  ".repeat(depth);
     println!(
-        "\n{} Running script '{}'...\n",
+        "\n{}{} Running script '{}'...\n",
+        indent,
         "$".cyan(),
         script_name.bold()
     );
@@ -64,19 +103,34 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
 
     // Check if this script has an exec-style command (runs in each package)
     if is_exec_command(&substituted) {
-        let cli_filters: PackageFilters = (&args.filters).into();
-        run_exec_script(workspace, script, &substituted, &env_vars, &cli_filters).await?;
+        run_exec_script(workspace, script, &substituted, &env_vars, cli_filters).await?;
     } else {
         // Parse the run command, expanding melos -> melos-rs references
         let expanded = expand_command(&substituted)?;
 
         // Execute the expanded command(s) at the workspace root
-        for cmd in expanded {
-            println!("{} {}", ">".dimmed(), cmd.dimmed());
+        for cmd in &expanded {
+            // Check if this command is a `melos-rs run <script>` reference
+            // to a script defined in the config — if so, execute it inline
+            if let Some(ref_name) = extract_melos_run_script_name(cmd)
+                && workspace.config.scripts.contains_key(ref_name)
+            {
+                Box::pin(run_script_recursive(
+                    workspace,
+                    ref_name,
+                    cli_filters,
+                    visited,
+                    depth + 1,
+                ))
+                .await?;
+                continue;
+            }
+
+            println!("{}{} {}", indent, ">".dimmed(), cmd.dimmed());
 
             let status = tokio::process::Command::new("sh")
                 .arg("-c")
-                .arg(&cmd)
+                .arg(cmd)
                 .current_dir(&workspace.root_path)
                 .envs(&env_vars)
                 .status()
@@ -91,6 +145,10 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
             }
         }
     }
+
+    // Remove from visited so the same script can appear in separate chains
+    // (e.g. A -> B, A -> C -> B is fine; A -> B -> A is a cycle)
+    visited.remove(script_name);
 
     Ok(())
 }
@@ -144,7 +202,7 @@ async fn run_exec_script(
 
     let runner = ProcessRunner::new(concurrency, fail_fast);
     let results = runner
-        .run_in_packages(&packages, &actual_cmd, env_vars)
+        .run_in_packages(&packages, &actual_cmd, env_vars, None)
         .await?;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
@@ -257,6 +315,29 @@ fn extract_exec_concurrency(command: &str) -> usize {
         }
     }
     5 // Melos default
+}
+
+/// Extract the script name from a `melos-rs run <name>` or `melos run <name>` command.
+///
+/// Returns `Some(script_name)` if the command is a simple `melos[-rs] run <name>` invocation
+/// with no extra flags or arguments after the script name.
+/// Returns `None` if the command doesn't match or has trailing args.
+fn extract_melos_run_script_name(command: &str) -> Option<&str> {
+    let trimmed = command.trim();
+
+    // Try `melos-rs run <name>` first, then `melos run <name>`
+    let rest = trimmed
+        .strip_prefix("melos-rs run ")
+        .or_else(|| trimmed.strip_prefix("melos run "))?;
+
+    let rest = rest.trim();
+
+    // The script name must be a single token (no spaces, no extra args)
+    if rest.is_empty() || rest.contains(' ') {
+        return None;
+    }
+
+    Some(rest)
 }
 
 /// Substitute environment variables in a command string.
@@ -472,5 +553,36 @@ mod tests {
             extract_exec_concurrency("melos exec -- flutter test"),
             5 // default
         );
+    }
+
+    #[test]
+    fn test_extract_melos_run_script_name() {
+        // Should extract script name from `melos run <name>`
+        assert_eq!(
+            extract_melos_run_script_name("melos run build"),
+            Some("build")
+        );
+        assert_eq!(
+            extract_melos_run_script_name("melos-rs run build"),
+            Some("build")
+        );
+        assert_eq!(
+            extract_melos_run_script_name("melos-rs run generate:dart"),
+            Some("generate:dart")
+        );
+
+        // Should return None for non-matching commands
+        assert_eq!(extract_melos_run_script_name("flutter analyze ."), None);
+        assert_eq!(extract_melos_run_script_name("dart format ."), None);
+
+        // Should return None when there are extra args after the script name
+        assert_eq!(
+            extract_melos_run_script_name("melos-rs run build --verbose"),
+            None
+        );
+
+        // Should return None when no script name is given
+        assert_eq!(extract_melos_run_script_name("melos run "), None);
+        assert_eq!(extract_melos_run_script_name("melos-rs run"), None);
     }
 }

@@ -27,6 +27,14 @@ pub struct ExecArgs {
     #[arg(long)]
     pub order_dependents: bool,
 
+    /// Timeout per package in seconds (0 = no timeout)
+    #[arg(long, default_value = "0")]
+    pub timeout: u64,
+
+    /// Print commands without executing them
+    #[arg(long)]
+    pub dry_run: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -58,10 +66,17 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
         );
     }
 
+    let timeout_display = if args.timeout > 0 {
+        format!(", timeout {}s", args.timeout)
+    } else {
+        String::new()
+    };
+
     println!(
-        "Running in {} package(s) with concurrency {}:\n",
+        "Running in {} package(s) with concurrency {}{}:\n",
         packages.len().to_string().cyan(),
-        args.concurrency.to_string().cyan()
+        args.concurrency.to_string().cyan(),
+        timeout_display,
     );
 
     for pkg in &packages {
@@ -69,10 +84,23 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     }
     println!();
 
+    // Dry-run mode: show what would be executed without running
+    if args.dry_run {
+        println!("{}", "DRY RUN — no commands were executed.".yellow().bold());
+        return Ok(());
+    }
+
+    // Build timeout Duration (0 means no timeout)
+    let timeout = if args.timeout > 0 {
+        Some(std::time::Duration::from_secs(args.timeout))
+    } else {
+        None
+    };
+
     // Execute command in each package (runner handles per-package env vars + colored output)
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let results = runner
-        .run_in_packages(&packages, &cmd_str, &workspace.env_vars())
+        .run_in_packages(&packages, &cmd_str, &workspace.env_vars(), timeout)
         .await?;
 
     // Count failures

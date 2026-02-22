@@ -60,6 +60,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
                 &flutter_packages,
                 "flutter clean",
                 &workspace.env_vars(),
+                None,
             )
             .await?;
 

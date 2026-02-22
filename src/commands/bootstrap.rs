@@ -73,6 +73,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
                 &flutter_packages,
                 "flutter pub get",
                 &workspace.env_vars(),
+                None,
             )
             .await?;
 
@@ -90,7 +91,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         pb.set_message("dart pub get...");
         let runner = ProcessRunner::new(concurrency, true);
         let results = runner
-            .run_in_packages(&dart_packages, "dart pub get", &workspace.env_vars())
+            .run_in_packages(&dart_packages, "dart pub get", &workspace.env_vars(), None)
             .await?;
 
         for (name, success) in &results {

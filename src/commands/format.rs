@@ -74,7 +74,7 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
 
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages(&packages, &cmd_str, &workspace.env_vars())
+        .run_in_packages(&packages, &cmd_str, &workspace.env_vars(), None)
         .await?;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
