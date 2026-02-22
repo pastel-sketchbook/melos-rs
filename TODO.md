@@ -168,10 +168,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `pub get`, `pub outdated`, `pub upgrade` subcommands (groups by SDK, `--major-versions` flag)
 
 ### Build Commands (from melos.yaml scripts)
-- [ ] `build:android` / `build:ios` wrapper commands
-- [ ] Flavor/environment support (prod, qa, dev)
-- [ ] Build artifact path resolution
-- [ ] Simulator build + bundletool integration
+- [ ] _(see "Known Gaps" section below)_
 
 ### Versioning & Release
 - [x] `version:set` command (works via `melos-rs version 2.0.0 --all`)
@@ -188,15 +185,15 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `changelogCommitBodies` config (include/onlyBreaking options for commit body inclusion)
 - [x] `changelogFormat.includeDate` config (optional date in version headers, default false)
 - [x] `updateGitTagRefs` config (update git dependency `ref:` tags in pubspec.yaml)
-- [ ] Release branch management
+- [ ] Release branch management _(see "Known Gaps" section below)_
 
 ### Developer Experience
 - [x] `melos-rs init` - scaffold new 7.x workspace (with `--legacy` for 6.x)
 - [x] Tab completion for bash/zsh/fish (`completion` subcommand via `clap_complete`)
-- [ ] Progress bars with `indicatif` for more commands
+- [ ] Progress bars with `indicatif` for more commands _(see "Known Gaps" section below)_
 - [x] Verbose/quiet log levels (`--verbose` / `--quiet` global flags)
 - [x] Config validation and helpful warning messages
-- [ ] Watch mode for development (`--watch`)
+- [ ] Watch mode for development (`--watch`) _(see "Known Gaps" section below)_
 
 ## Batch 14: Bootstrap Maturity & Version Polish
 
@@ -225,9 +222,20 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Publish hooks (pre/post) via `command.publish.hooks` config, `MELOS_PUBLISH_DRY_RUN` env var
 - [x] `MELOS_PACKAGES` env var (comma-delimited scope override applied in `apply_filters_with_categories`)
 
+## Known Gaps & Dead Code
+
+### Dead code (parsed but not wired)
+- [ ] `BootstrapCommandConfig::enforce_versions_for_dependency_resolution` — parsed from config, has `#[allow(dead_code)]` at `src/config/mod.rs:669`. Needs to be consulted during bootstrap dependency resolution.
+
+### Missing commands / features
+- [ ] `build:android` / `build:ios` wrapper commands (flavor/environment support, artifact resolution, simulator/bundletool)
+- [ ] Release branch management (auto-create/merge release branches during `version`)
+- [ ] Progress bars with `indicatif` for more commands (only bootstrap has one currently)
+- [ ] Watch mode for development (`--watch` flag on exec/run)
+
 ## Phase 4: Parity & Beyond
 
-- [ ] Full Melos CLI flag compatibility
+- [ ] Full Melos CLI flag compatibility audit
 - [ ] Migration guide from Melos to melos-rs
 - [ ] Performance benchmarks vs Melos
 - [ ] Plugin system for custom commands
