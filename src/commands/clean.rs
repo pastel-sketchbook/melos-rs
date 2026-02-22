@@ -3,7 +3,7 @@ use colored::Colorize;
 
 use crate::cli::CleanArgs;
 use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters;
+use crate::package::filter::apply_filters_with_categories;
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
 
@@ -14,7 +14,7 @@ const DEEP_CLEAN_FILES: &[&str] = &["pubspec.lock"];
 /// Clean all packages
 pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
     let filters: PackageFilters = (&args.filters).into();
-    let all_filtered = apply_filters(&workspace.packages, &filters, Some(&workspace.root_path))?;
+    let all_filtered = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
 
     println!(
         "\n{} Cleaning {} packages...\n",

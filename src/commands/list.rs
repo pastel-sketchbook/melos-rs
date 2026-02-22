@@ -3,10 +3,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use anyhow::Result;
 use clap::Args;
 use colored::Colorize;
+use serde::Serialize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters;
+use crate::package::filter::apply_filters_with_categories;
 use crate::package::Package;
 use crate::workspace::Workspace;
 
@@ -58,7 +59,7 @@ pub struct ListArgs {
 /// List packages in the workspace
 pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
     let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters(&workspace.packages, &filters, Some(&workspace.root_path))?;
+    let packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
 
     if packages.is_empty() {
         println!("{}", "No packages found.".yellow());
@@ -149,29 +150,35 @@ fn print_parsable(packages: &[Package], workspace: &Workspace, relative: bool) {
     }
 }
 
+/// Serializable representation of a package for JSON output
+#[derive(Serialize)]
+struct PackageJson<'a> {
+    name: &'a str,
+    version: &'a str,
+    path: String,
+    flutter: bool,
+    private: bool,
+    dependencies: &'a Vec<String>,
+}
+
 fn print_json(packages: &[Package]) {
-    // Build JSON manually to avoid adding serde_json dependency
-    let entries: Vec<String> = packages
+    let entries: Vec<PackageJson> = packages
         .iter()
-        .map(|p| {
-            let version = p
-                .version
-                .as_deref()
-                .unwrap_or("unknown")
-                .replace('"', "\\\"");
-            let path = p.path.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
-            let deps: Vec<String> = p
-                .dependencies
-                .iter()
-                .map(|d| format!("\"{}\"", d))
-                .collect();
-            format!(
-                "  {{\n    \"name\": \"{}\",\n    \"version\": \"{}\",\n    \"path\": \"{}\",\n    \"flutter\": {},\n    \"private\": {},\n    \"dependencies\": [{}]\n  }}",
-                p.name, version, path, p.is_flutter, p.is_private(), deps.join(", ")
-            )
+        .map(|p| PackageJson {
+            name: &p.name,
+            version: p.version.as_deref().unwrap_or("unknown"),
+            path: p.path.display().to_string(),
+            flutter: p.is_flutter,
+            private: p.is_private(),
+            dependencies: &p.dependencies,
         })
         .collect();
-    println!("[\n{}\n]", entries.join(",\n"));
+
+    // serde_json handles all escaping correctly
+    match serde_json::to_string_pretty(&entries) {
+        Ok(json) => println!("{}", json),
+        Err(e) => eprintln!("Failed to serialize packages to JSON: {}", e),
+    }
 }
 
 fn print_graph(packages: &[Package]) {
@@ -345,6 +352,7 @@ mod tests {
                     packages: vec![],
                     command: None,
                     scripts: Default::default(),
+                    categories: Default::default(),
                 },
                 packages: packages.clone(),
             },

@@ -15,15 +15,14 @@ clap = { version = "4.5.60", features = ["derive"] }
 
 # Serialization / Config
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
 yaml_serde = "0.10"
 
 # File system
 glob = "0.3.3"
-walkdir = "2.5.0"
 
-# Async runtime & parallelism
+# Async runtime
 tokio = { version = "1.49.0", features = ["full"] }
-rayon = "1.11.0"
 
 # Error handling
 anyhow = "1.0.102"
@@ -38,6 +37,3 @@ regex = "1.12.3"
 
 # Semver for version management
 semver = "1.0.27"
-
-# TOML for potential config extensions
-toml = "1.0.3+spec-1.1.0"

@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -6,25 +6,41 @@ use anyhow::{Context, Result};
 use crate::config::filter::PackageFilters;
 use crate::package::Package;
 
-/// Apply package filters to a list of packages, returning only those that match.
+/// Apply package filters without category definitions.
 ///
-/// This is the main filtering entry point used by all commands. It handles:
-/// - Glob-based scope/ignore matching on package names
-/// - Flutter/Dart filtering
-/// - Directory/file existence checks
-/// - Dependency-based filtering (depends-on, no-depends-on)
-/// - Private package exclusion (no-private)
-/// - Git diff-based change detection
-/// - Transitive dependency/dependent expansion
+/// Convenience wrapper for `apply_filters_with_categories` when categories
+/// are not available (e.g., in tests or when filtering without a full config).
+#[cfg(test)]
 pub fn apply_filters(
     packages: &[Package],
     filters: &PackageFilters,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<Package>> {
+    apply_filters_with_categories(packages, filters, workspace_root, &HashMap::new())
+}
+
+/// Apply package filters with category definitions from melos.yaml.
+///
+/// `categories` maps category names to lists of package name glob patterns.
+pub fn apply_filters_with_categories(
+    packages: &[Package],
+    filters: &PackageFilters,
+    workspace_root: Option<&Path>,
+    categories: &HashMap<String, Vec<String>>,
+) -> Result<Vec<Package>> {
+    // Resolve category filter into a set of matching package names
+    let category_names: Option<HashSet<String>> =
+        resolve_category_packages(packages, filters, categories);
+
     // First pass: apply direct filters
     let mut matched: Vec<Package> = packages
         .iter()
-        .filter(|pkg| matches_filters(pkg, filters))
+        .filter(|pkg| {
+            matches_filters(pkg, filters)
+                && category_names
+                    .as_ref()
+                    .is_none_or(|names| names.contains(&pkg.name))
+        })
         .cloned()
         .collect();
 
@@ -120,6 +136,122 @@ fn matches_filters(pkg: &Package, filters: &PackageFilters) -> bool {
     }
 
     true
+}
+
+/// Resolve category filter into a set of package names that belong to any of the requested categories.
+///
+/// Returns `None` if no category filter is set (meaning no category restriction).
+/// Returns `Some(set)` with matching package names if a category filter is active.
+fn resolve_category_packages(
+    packages: &[Package],
+    filters: &PackageFilters,
+    categories: &HashMap<String, Vec<String>>,
+) -> Option<HashSet<String>> {
+    let category_filter = filters.category.as_ref()?;
+    if category_filter.is_empty() {
+        return None;
+    }
+
+    let mut matching = HashSet::new();
+
+    for requested_category in category_filter {
+        if let Some(patterns) = categories.get(requested_category) {
+            for pkg in packages {
+                let in_category = patterns.iter().any(|pattern| {
+                    glob::Pattern::new(pattern)
+                        .map(|p| p.matches(&pkg.name))
+                        .unwrap_or_else(|_| pkg.name.contains(pattern))
+                });
+                if in_category {
+                    matching.insert(pkg.name.clone());
+                }
+            }
+        }
+    }
+
+    Some(matching)
+}
+
+/// Topological sort of packages by their dependency relationships.
+///
+/// Returns packages in dependency order: packages with no local dependencies come first,
+/// followed by packages that depend on them, etc. This is useful for `--order-dependents`
+/// in exec and for bootstrap (ensuring dependencies are bootstrapped before dependents).
+///
+/// Uses Kahn's algorithm. If there are cycles, the cyclic packages are appended
+/// at the end (not silently dropped).
+#[allow(dead_code)]
+pub fn topological_sort(packages: &[Package]) -> Vec<Package> {
+    let known: HashSet<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+    let pkg_map: HashMap<&str, &Package> = packages.iter().map(|p| (p.name.as_str(), p)).collect();
+
+    // Build adjacency list and in-degree map
+    // Edge direction: dependency -> dependent (so deps come first in sort)
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+
+    for pkg in packages {
+        dependents.entry(pkg.name.as_str()).or_default();
+        in_degree.entry(pkg.name.as_str()).or_insert(0);
+
+        for dep in pkg.dependencies.iter().chain(pkg.dev_dependencies.iter()) {
+            if known.contains(dep.as_str()) {
+                dependents
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(pkg.name.as_str());
+                *in_degree.entry(pkg.name.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Kahn's algorithm
+    let mut queue: VecDeque<&str> = in_degree
+        .iter()
+        .filter(|&(_, &deg)| deg == 0)
+        .map(|(&name, _)| name)
+        .collect();
+
+    // Sort the initial queue for deterministic output
+    let mut sorted_queue: Vec<&str> = queue.drain(..).collect();
+    sorted_queue.sort();
+    queue.extend(sorted_queue);
+
+    let mut result: Vec<Package> = Vec::with_capacity(packages.len());
+
+    while let Some(node) = queue.pop_front() {
+        if let Some(&pkg) = pkg_map.get(node) {
+            result.push(pkg.clone());
+        }
+
+        // Collect and sort neighbors for deterministic output
+        if let Some(neighbors) = dependents.get(node) {
+            let mut ready = Vec::new();
+            for &neighbor in neighbors {
+                if let Some(deg) = in_degree.get_mut(neighbor) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        ready.push(neighbor);
+                    }
+                }
+            }
+            ready.sort();
+            queue.extend(ready);
+        }
+    }
+
+    // Append any remaining packages (part of cycles) to avoid dropping them
+    if result.len() < packages.len() {
+        let in_result: HashSet<String> = result.iter().map(|p| p.name.clone()).collect();
+        let remaining: Vec<Package> = packages
+            .iter()
+            .filter(|p| !in_result.contains(&p.name))
+            .cloned()
+            .collect();
+        result.extend(remaining);
+    }
+
+    result
 }
 
 /// Determine which packages have changed files since a git ref.
@@ -228,30 +360,6 @@ fn expand_with_dependents(matched: &[Package], all_packages: &[Package]) -> Vec<
         .collect()
 }
 
-/// Parse CLI-style exec flags into PackageFilters
-///
-/// Handles flags like:
-///   --depends-on="build_runner"
-///   --flutter / --no-flutter
-///   --file-exists="pubspec.yaml"
-///   --dir-exists="test"
-#[allow(dead_code)]
-pub fn filters_from_exec_flags(
-    depends_on: &Option<String>,
-    flutter: Option<bool>,
-    file_exists: &Option<String>,
-    dir_exists: &Option<String>,
-) -> PackageFilters {
-    PackageFilters {
-        flutter,
-        dir_exists: dir_exists.clone(),
-        file_exists: file_exists.clone(),
-        depends_on: depends_on
-            .as_ref()
-            .map(|d| d.split(',').map(|s| s.trim().to_string()).collect()),
-        ..Default::default()
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -542,5 +650,105 @@ mod tests {
         assert!(names.contains(&"core"));
         assert!(names.contains(&"app"));
         assert!(!names.contains(&"unrelated"));
+    }
+
+    #[test]
+    fn test_category_filter() {
+        let packages = vec![
+            make_package("app_main", true, vec!["flutter"]),
+            make_package("app_settings", true, vec!["flutter"]),
+            make_package("core_lib", false, vec![]),
+            make_package("utils", false, vec![]),
+        ];
+
+        let mut categories = HashMap::new();
+        categories.insert(
+            "apps".to_string(),
+            vec!["app_*".to_string()],
+        );
+        categories.insert(
+            "libraries".to_string(),
+            vec!["core_*".to_string(), "utils".to_string()],
+        );
+
+        // Filter to "apps" category only
+        let filters = PackageFilters {
+            category: Some(vec!["apps".to_string()]),
+            ..Default::default()
+        };
+
+        let result =
+            apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "app_main");
+        assert_eq!(result[1].name, "app_settings");
+
+        // Filter to "libraries" category
+        let filters = PackageFilters {
+            category: Some(vec!["libraries".to_string()]),
+            ..Default::default()
+        };
+        let result =
+            apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "core_lib");
+        assert_eq!(result[1].name, "utils");
+
+        // Filter to nonexistent category -> empty result
+        let filters = PackageFilters {
+            category: Some(vec!["nonexistent".to_string()]),
+            ..Default::default()
+        };
+        let result =
+            apply_filters_with_categories(&packages, &filters, None, &categories).unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_topological_sort_basic() {
+        // utils has no deps, core depends on utils, app depends on core
+        let packages = vec![
+            make_package("app", false, vec!["core"]),
+            make_package("core", false, vec!["utils"]),
+            make_package("utils", false, vec![]),
+        ];
+
+        let sorted = topological_sort(&packages);
+        let names: Vec<&str> = sorted.iter().map(|p| p.name.as_str()).collect();
+        // utils must come before core, core must come before app
+        assert_eq!(names, vec!["utils", "core", "app"]);
+    }
+
+    #[test]
+    fn test_topological_sort_independent() {
+        // All independent packages - sorted alphabetically (deterministic)
+        let packages = vec![
+            make_package("charlie", false, vec![]),
+            make_package("alpha", false, vec![]),
+            make_package("bravo", false, vec![]),
+        ];
+
+        let sorted = topological_sort(&packages);
+        let names: Vec<&str> = sorted.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "bravo", "charlie"]);
+    }
+
+    #[test]
+    fn test_topological_sort_with_cycle() {
+        // a -> b -> a (cycle), c is independent
+        let packages = vec![
+            make_package("a", false, vec!["b"]),
+            make_package("b", false, vec!["a"]),
+            make_package("c", false, vec![]),
+        ];
+
+        let sorted = topological_sort(&packages);
+        // c has no deps so comes first; a and b are cyclic but still included
+        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted[0].name, "c");
+        // The cyclic packages a, b are appended at the end
+        let cyclic: Vec<&str> = sorted[1..].iter().map(|p| p.name.as_str()).collect();
+        assert!(cyclic.contains(&"a"));
+        assert!(cyclic.contains(&"b"));
     }
 }

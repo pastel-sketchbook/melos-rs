@@ -61,7 +61,6 @@ pub struct PackageFilters {
 
     /// Only include packages in these categories (from melos.yaml categories config)
     #[serde(default)]
-    #[allow(dead_code)]
     pub category: Option<Vec<String>>,
 
     /// Also include transitive dependencies of matched packages

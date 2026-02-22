@@ -4,7 +4,7 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters;
+use crate::package::filter::apply_filters_with_categories;
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
 
@@ -38,7 +38,7 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
 
     // Apply filters from CLI flags
     let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters(&workspace.packages, &filters, Some(&workspace.root_path))?;
+    let packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
 
     if packages.is_empty() {
         println!("{}", "No packages matched the given filters.".yellow());

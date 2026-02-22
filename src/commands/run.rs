@@ -6,7 +6,7 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::config::ScriptEntry;
-use crate::package::filter::apply_filters;
+use crate::package::filter::apply_filters_with_categories;
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
 
@@ -49,8 +49,10 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
         script_name.bold()
     );
 
-    // Build env vars with MELOS_ROOT_PATH and any script-level env in the future
-    let env_vars = workspace.env_vars();
+    // Build env vars with MELOS_ROOT_PATH and any script-level env
+    let mut env_vars = workspace.env_vars();
+    // Merge script-level env vars (they take precedence over workspace vars)
+    env_vars.extend(script.env().iter().map(|(k, v)| (k.clone(), v.clone())));
 
     // Substitute env vars in the command string (e.g. $MELOS_ROOT_PATH)
     let substituted = substitute_env_vars(run_command, &env_vars);
@@ -98,7 +100,7 @@ async fn run_exec_script(
 ) -> Result<()> {
     // Apply script-level packageFilters if present
     let packages = if let Some(filters) = script.package_filters() {
-        apply_filters(&workspace.packages, filters, Some(&workspace.root_path))?
+            apply_filters_with_categories(&workspace.packages, filters, Some(&workspace.root_path), &workspace.config.categories)?
     } else {
         workspace.packages.clone()
     };
@@ -243,18 +245,44 @@ fn extract_exec_concurrency(command: &str) -> usize {
 
 /// Substitute environment variables in a command string.
 ///
-/// Replaces `$VAR_NAME` and `${VAR_NAME}` with their values from the env map.
+/// Replaces `${VAR_NAME}` (braced form) and `$VAR_NAME` (bare form) with their
+/// values from the env map. The bare `$VAR` form uses word-boundary matching to
+/// avoid replacing `$MELOS_ROOT_PATH` when `$MELOS_ROOT` is also defined.
 fn substitute_env_vars(command: &str, env: &HashMap<String, String>) -> String {
     let mut result = command.to_string();
 
-    for (key, value) in env {
-        // Replace ${VAR} form
+    // Sort keys by length descending so longer variable names are replaced first.
+    // This prevents `$MELOS_ROOT` from matching before `$MELOS_ROOT_PATH`.
+    let mut sorted_keys: Vec<&String> = env.keys().collect();
+    sorted_keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
+
+    for key in sorted_keys {
+        let value = &env[key];
+        // Replace ${VAR} form (always safe - braces delimit the name)
         result = result.replace(&format!("${{{}}}", key), value);
-        // Replace $VAR form (only when followed by non-alphanumeric or end)
-        let pattern = format!("${}", key);
-        if result.contains(&pattern) {
-            // Simple replacement - works for most cases
-            result = result.replace(&pattern, value);
+
+        // Replace $VAR form with word-boundary awareness:
+        // Match $KEY only when NOT followed by another alphanumeric or underscore.
+        // Since the regex crate doesn't support lookahead, we use a replacement
+        // closure that checks the character after the match.
+        let pattern = format!(r"\${}", regex::escape(key));
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            let bytes = result.clone();
+            let bytes = bytes.as_bytes();
+            result = re
+                .replace_all(&result.clone(), |caps: &regex::Captures| {
+                    let m = caps.get(0).unwrap();
+                    let end = m.end();
+                    // If followed by an alphanumeric or underscore, don't replace
+                    if end < bytes.len() {
+                        let next = bytes[end];
+                        if next.is_ascii_alphanumeric() || next == b'_' {
+                            return caps[0].to_string();
+                        }
+                    }
+                    value.clone()
+                })
+                .to_string();
         }
     }
 
@@ -268,19 +296,36 @@ fn substitute_env_vars(command: &str, env: &HashMap<String, String>) -> String {
 ///   "melos run generate:dart && melos run generate:flutter"
 /// becomes:
 ///   ["melos-rs run generate:dart", "melos-rs run generate:flutter"]
+///
+/// Uses word-boundary-aware replacement to avoid mangling `melos-rs` into `melos-rs-rs`.
 fn expand_command(command: &str) -> Result<Vec<String>> {
     let trimmed = command.trim();
+
+    // Match standalone `melos` as a word. We then check in the replacement
+    // whether it's followed by `-rs` (in which case we leave it alone).
+    let re = regex::Regex::new(r"\bmelos\b")
+        .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
 
     // Split on `&&` to handle chained commands
     let parts: Vec<String> = trimmed
         .split("&&")
         .map(|part| {
-            let part = part.trim().to_string();
-            // Replace `melos run` with `melos-rs run` so it calls back into ourselves
-            // Replace `melos exec` with `melos-rs exec`
-            let part = part.replace("melos exec", "melos-rs exec");
-            let part = part.replace("melos run", "melos-rs run");
-            part.replace("melos version", "melos-rs version")
+            let part = part.trim();
+            // Use replace_all with a closure that checks context after the match
+            let bytes = part.as_bytes();
+            re.replace_all(part, |caps: &regex::Captures| {
+                let m = caps.get(0).unwrap();
+                let end = m.end();
+                // If followed by `-rs`, don't replace (it's already melos-rs)
+                if end < bytes.len() && bytes[end] == b'-' {
+                    // Check for "-rs" suffix
+                    if part[end..].starts_with("-rs") {
+                        return "melos".to_string();
+                    }
+                }
+                "melos-rs".to_string()
+            })
+            .to_string()
         })
         .collect();
 
@@ -318,6 +363,16 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_preserves_melos_rs() {
+        // Must NOT turn `melos-rs` into `melos-rs-rs`
+        let result = expand_command("melos-rs run generate && melos run build").unwrap();
+        assert_eq!(
+            result,
+            vec!["melos-rs run generate", "melos-rs run build"]
+        );
+    }
+
+    #[test]
     fn test_substitute_env_vars() {
         let mut env = HashMap::new();
         env.insert("MELOS_ROOT_PATH".to_string(), "/workspace".to_string());
@@ -329,6 +384,45 @@ mod tests {
         assert_eq!(
             substitute_env_vars("echo ${MELOS_ROOT_PATH}/bin", &env),
             "echo /workspace/bin"
+        );
+    }
+
+    #[test]
+    fn test_substitute_env_vars_word_boundary() {
+        // When both $MELOS_ROOT and $MELOS_ROOT_PATH are defined,
+        // $MELOS_ROOT must NOT match inside $MELOS_ROOT_PATH.
+        let mut env = HashMap::new();
+        env.insert("MELOS_ROOT".to_string(), "/root".to_string());
+        env.insert("MELOS_ROOT_PATH".to_string(), "/workspace".to_string());
+
+        // Bare $MELOS_ROOT_PATH should resolve to /workspace, not /root_PATH
+        assert_eq!(
+            substitute_env_vars("echo $MELOS_ROOT_PATH", &env),
+            "echo /workspace"
+        );
+
+        // Bare $MELOS_ROOT alone should still resolve
+        assert_eq!(
+            substitute_env_vars("echo $MELOS_ROOT end", &env),
+            "echo /root end"
+        );
+
+        // Both in the same string
+        assert_eq!(
+            substitute_env_vars("$MELOS_ROOT and $MELOS_ROOT_PATH", &env),
+            "/root and /workspace"
+        );
+
+        // Braced forms should always be unambiguous
+        assert_eq!(
+            substitute_env_vars("${MELOS_ROOT} and ${MELOS_ROOT_PATH}", &env),
+            "/root and /workspace"
+        );
+
+        // $MELOS_ROOT at end of string (no trailing char)
+        assert_eq!(
+            substitute_env_vars("path=$MELOS_ROOT", &env),
+            "path=/root"
         );
     }
 

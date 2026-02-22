@@ -25,6 +25,10 @@ pub struct MelosConfig {
     /// Named scripts
     #[serde(default)]
     pub scripts: HashMap<String, ScriptEntry>,
+
+    /// Category definitions: category_name -> list of package name glob patterns
+    #[serde(default)]
+    pub categories: HashMap<String, Vec<String>>,
 }
 
 /// A script entry can be either a simple string or a full config object
@@ -55,33 +59,42 @@ impl ScriptEntry {
     }
 
     /// Get package filters if available
-    #[allow(dead_code)]
     pub fn package_filters(&self) -> Option<&filter::PackageFilters> {
         match self {
             ScriptEntry::Simple(_) => None,
             ScriptEntry::Full(config) => config.package_filters.as_ref(),
         }
     }
+
+    /// Get script-level environment variables
+    pub fn env(&self) -> &HashMap<String, String> {
+        static EMPTY: std::sync::LazyLock<HashMap<String, String>> =
+            std::sync::LazyLock::new(HashMap::new);
+        match self {
+            ScriptEntry::Simple(_) => &EMPTY,
+            ScriptEntry::Full(config) => &config.env,
+        }
+    }
 }
 
 /// Configuration for the `command` section
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct CommandConfig {
     /// Version command config
     pub version: Option<VersionCommandConfig>,
 
     /// Bootstrap command config
+    #[allow(dead_code)]
     pub bootstrap: Option<BootstrapCommandConfig>,
 
     /// Clean command config
+    #[allow(dead_code)]
     pub clean: Option<CleanCommandConfig>,
 }
 
 /// Configuration for the `version` command
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct VersionCommandConfig {
     /// Branch to use for versioning (validates current branch matches)
     pub branch: Option<String>,
@@ -91,6 +104,7 @@ pub struct VersionCommandConfig {
 
     /// Whether to include scopes in conventional commit changelogs
     #[serde(default)]
+    #[allow(dead_code)]
     pub include_scopes: Option<bool>,
 
     /// Whether to create a tag for the versioned commit
@@ -109,6 +123,7 @@ pub struct VersionCommandConfig {
 
     /// Link to packages on pub.dev in changelogs
     #[serde(default)]
+    #[allow(dead_code)]
     pub link_to_commits: Option<bool>,
 
     /// Workspace-level changelog (aggregates all package changes)
@@ -143,7 +158,6 @@ impl VersionCommandConfig {
 /// Changelog-specific configuration
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct ChangelogConfig {
     /// Include commit bodies in changelog
     #[serde(default)]
@@ -227,6 +241,7 @@ packages:
         assert_eq!(config.name, "test_project");
         assert_eq!(config.packages, vec!["packages/**"]);
         assert!(config.scripts.is_empty());
+        assert!(config.categories.is_empty());
     }
 
     #[test]
@@ -281,9 +296,60 @@ scripts:
         let analyze = &config.scripts["analyze"];
         assert_eq!(analyze.run_command(), "flutter analyze .");
         assert_eq!(analyze.description(), Some("Run analysis"));
+        assert!(analyze.env().is_empty());
 
         let format = &config.scripts["format"];
         assert_eq!(format.run_command(), "dart format .");
         assert_eq!(format.description(), None);
+    }
+
+    #[test]
+    fn test_parse_script_with_env() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+scripts:
+  build:
+    run: dart run build_runner build
+    description: Run code generation
+    env:
+      DART_DEFINE: "flavor=production"
+      API_URL: "https://api.example.com"
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let build = &config.scripts["build"];
+        assert_eq!(build.run_command(), "dart run build_runner build");
+
+        let env = build.env();
+        assert_eq!(env.len(), 2);
+        assert_eq!(env["DART_DEFINE"], "flavor=production");
+        assert_eq!(env["API_URL"], "https://api.example.com");
+    }
+
+    #[test]
+    fn test_parse_config_with_categories() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+categories:
+  apps:
+    - app_*
+    - "*_app"
+  libraries:
+    - core_*
+    - utils
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert_eq!(config.categories.len(), 2);
+        assert_eq!(
+            config.categories["apps"],
+            vec!["app_*".to_string(), "*_app".to_string()]
+        );
+        assert_eq!(
+            config.categories["libraries"],
+            vec!["core_*".to_string(), "utils".to_string()]
+        );
     }
 }

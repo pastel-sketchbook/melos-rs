@@ -52,21 +52,6 @@ impl Workspace {
         );
         env
     }
-
-    /// Build per-package environment variables
-    #[allow(dead_code)]
-    pub fn package_env_vars(&self, pkg: &Package) -> HashMap<String, String> {
-        let mut env = self.env_vars();
-        env.insert("MELOS_PACKAGE_NAME".to_string(), pkg.name.clone());
-        env.insert(
-            "MELOS_PACKAGE_PATH".to_string(),
-            pkg.path.display().to_string(),
-        );
-        if let Some(ref version) = pkg.version {
-            env.insert("MELOS_PACKAGE_VERSION".to_string(), version.clone());
-        }
-        env
-    }
 }
 
 /// Search for melos.yaml starting from the current directory and walking up
