@@ -368,3 +368,25 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - Deduplicates by name, re-sorts after adding nested packages
   - Wired into `Workspace::find_and_load()` after initial discovery
 - [x] Tests: 18 new unit tests (304 total: 290 unit + 14 integration)
+
+### Batch 22: Test Coverage
+
+- [x] `analyze` command unit tests (6 tests)
+  - Extracted `build_analyze_command()` from inline logic in `run()`
+  - Tests: default command, `--fatal-warnings`, `--fatal-infos`, both fatal, `--no-fatal` override, `--no-fatal` alone
+- [x] `format` command unit tests (7 tests)
+  - Extracted `build_format_command()` from inline logic in `run()`
+  - Tests: default command, `--set-exit-if-changed`, `--output=json`, `--output=none`, `--line-length`, all flags combined, write output not added
+- [x] `clean` command unit tests (6 tests)
+  - Tests: `DEEP_CLEAN_DIRS` constant, `DEEP_CLEAN_FILES` constant, `remove_pubspec_overrides` removes existing files, no-op when no file, multiple packages (partial), empty packages list
+- [x] `publish` command unit tests (5 tests)
+  - Extracted `build_publish_command()` and `build_git_tag()` from inline logic in `run()`
+  - Tests: dry-run command, real publish command, git tag format, prerelease tag, zero version tag
+- [x] Integration tests (6 tests)
+  - `test_clean_dart_packages` — verifies build/ dirs removed for pure Dart packages
+  - `test_clean_deep` — verifies `--deep` removes `.dart_tool/`, `build/`, `pubspec.lock`
+  - `test_exec_with_scope_filter` — exec with `--scope` runs only in matched package
+  - `test_list_with_ignore_filter` — list with `--ignore` excludes matched package
+  - `test_list_with_no_private_filter` — list with `--no-private` excludes `publish_to: none`
+  - `test_init_7x_with_apps` — init with apps directory accepted creates both packages/ and apps/
+- [x] Tests: 30 new tests (334 total: 314 unit + 20 integration)

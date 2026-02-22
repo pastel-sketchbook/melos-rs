@@ -349,3 +349,188 @@ fn test_list_with_scope_filter() {
         .stdout(predicate::str::contains("billing").not())
         .stdout(predicate::str::contains("core").not());
 }
+
+// ---------------------------------------------------------------------------
+// Clean command tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_clean_dart_packages() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "clean_test",
+        &[
+            ("pkg_a", "1.0.0", false, &[]),
+            ("pkg_b", "1.0.0", false, &[]),
+        ],
+    );
+
+    // Create build/ directories to be cleaned
+    let build_a = dir.path().join("packages/pkg_a/build");
+    let build_b = dir.path().join("packages/pkg_b/build");
+    fs::create_dir_all(&build_a).unwrap();
+    fs::create_dir_all(&build_b).unwrap();
+    fs::write(build_a.join("output.js"), "// compiled").unwrap();
+
+    assert!(build_a.exists());
+    assert!(build_b.exists());
+
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["clean", "--quiet"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CLEANED"));
+
+    // build/ directories should be removed for pure Dart packages
+    assert!(!build_a.exists(), "pkg_a/build should be removed");
+    assert!(!build_b.exists(), "pkg_b/build should be removed");
+}
+
+#[test]
+fn test_clean_deep() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "deep_clean_test",
+        &[("mylib", "1.0.0", false, &[])],
+    );
+
+    let pkg_dir = dir.path().join("packages/mylib");
+
+    // Create artifacts that deep clean should remove
+    let dart_tool = pkg_dir.join(".dart_tool");
+    let build_dir = pkg_dir.join("build");
+    let lock_file = pkg_dir.join("pubspec.lock");
+    fs::create_dir_all(&dart_tool).unwrap();
+    fs::create_dir_all(&build_dir).unwrap();
+    fs::write(&lock_file, "# lock file").unwrap();
+
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["clean", "--deep", "--quiet"])
+        .assert()
+        .success();
+
+    assert!(
+        !dart_tool.exists(),
+        ".dart_tool should be removed by deep clean"
+    );
+    assert!(!build_dir.exists(), "build should be removed by deep clean");
+    assert!(
+        !lock_file.exists(),
+        "pubspec.lock should be removed by deep clean"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Exec with scope filter test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_exec_with_scope_filter() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "exec_scope_test",
+        &[
+            ("alpha", "1.0.0", false, &[]),
+            ("beta", "1.0.0", false, &[]),
+        ],
+    );
+
+    // Only execute in "alpha" package
+    let output = melos_cmd()
+        .current_dir(dir.path())
+        .args([
+            "exec", "--scope", "alpha", "--quiet", "--", "echo", "FOUND_IT",
+        ])
+        .output()
+        .expect("command should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("FOUND_IT"), "Should see echo output");
+    // Should only run in alpha, not beta
+    assert!(stdout.contains("alpha"), "Should mention alpha package");
+}
+
+// ---------------------------------------------------------------------------
+// List with ignore filter test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_list_with_ignore_filter() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "ignore_test",
+        &[
+            ("core", "1.0.0", false, &[]),
+            ("internal", "1.0.0", false, &[]),
+            ("utils", "1.0.0", false, &[]),
+        ],
+    );
+
+    // Ignore "internal" package
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["list", "--ignore", "internal", "--quiet"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("core"))
+        .stdout(predicate::str::contains("utils"))
+        .stdout(predicate::str::contains("internal").not());
+}
+
+// ---------------------------------------------------------------------------
+// List with no-private filter test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_list_with_no_private_filter() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "private_test",
+        &[("public_pkg", "1.0.0", false, &[])],
+    );
+
+    // Create a private package manually (publish_to: none)
+    let private_dir = dir.path().join("packages/private_pkg");
+    fs::create_dir_all(&private_dir).unwrap();
+    fs::write(
+        private_dir.join("pubspec.yaml"),
+        "name: private_pkg\nversion: 1.0.0\npublish_to: none\n",
+    )
+    .unwrap();
+
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["list", "--no-private", "--quiet"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("public_pkg"))
+        .stdout(predicate::str::contains("private_pkg").not());
+}
+
+// ---------------------------------------------------------------------------
+// Init with apps directory test
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_init_7x_with_apps() {
+    let dir = TempDir::new().unwrap();
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["init", "apps_ws", "-d", "."])
+        .write_stdin("y\n") // accept apps directory
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created:"));
+
+    // Should have both packages/ and apps/ dirs
+    assert!(dir.path().join("packages").is_dir());
+    assert!(dir.path().join("apps").is_dir());
+}

@@ -124,13 +124,7 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     }
 
     // Build the publish command
-    let mut cmd = String::from("dart pub publish");
-    if args.dry_run {
-        cmd.push_str(" --dry-run");
-    } else {
-        // --force skips the pub.dev confirmation prompt
-        cmd.push_str(" --force");
-    }
+    let cmd = build_publish_command(args.dry_run);
 
     let pb = create_progress_bar(packages.len() as u64, "publishing");
     let runner = ProcessRunner::new(args.concurrency, false);
@@ -152,7 +146,7 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         for pkg_name in &succeeded {
             if let Some(pkg) = packages.iter().find(|p| &p.name == pkg_name) {
                 let version = pkg.version.as_deref().unwrap_or("0.0.0");
-                let tag = format!("{}-v{}", pkg_name, version);
+                let tag = build_git_tag(pkg_name, version);
                 let tag_result = std::process::Command::new("git")
                     .args(["tag", "-a", &tag, "-m", &format!("Release {} v{}", pkg_name, version)])
                     .current_dir(&workspace.root_path)
@@ -211,4 +205,56 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     };
     println!("\n{}", format!("All packages {}.", action).green());
     Ok(())
+}
+
+/// Build the `dart pub publish` command string.
+fn build_publish_command(dry_run: bool) -> String {
+    let mut cmd = String::from("dart pub publish");
+    if dry_run {
+        cmd.push_str(" --dry-run");
+    } else {
+        // --force skips the pub.dev confirmation prompt
+        cmd.push_str(" --force");
+    }
+    cmd
+}
+
+/// Build the git tag name for a published package.
+fn build_git_tag(package_name: &str, version: &str) -> String {
+    format!("{}-v{}", package_name, version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_publish_command_dry_run() {
+        let cmd = build_publish_command(true);
+        assert_eq!(cmd, "dart pub publish --dry-run");
+    }
+
+    #[test]
+    fn test_build_publish_command_real() {
+        let cmd = build_publish_command(false);
+        assert_eq!(cmd, "dart pub publish --force");
+    }
+
+    #[test]
+    fn test_build_git_tag() {
+        assert_eq!(build_git_tag("my_package", "1.2.3"), "my_package-v1.2.3");
+    }
+
+    #[test]
+    fn test_build_git_tag_prerelease() {
+        assert_eq!(
+            build_git_tag("core", "2.0.0-beta.1"),
+            "core-v2.0.0-beta.1"
+        );
+    }
+
+    #[test]
+    fn test_build_git_tag_zero_version() {
+        assert_eq!(build_git_tag("utils", "0.0.0"), "utils-v0.0.0");
+    }
 }

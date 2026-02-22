@@ -265,3 +265,95 @@ fn remove_pubspec_overrides(packages: &[crate::package::Package]) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::package::Package;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn make_package(name: &str, path: PathBuf) -> Package {
+        Package {
+            name: name.to_string(),
+            path,
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_deep_clean_dirs_constant() {
+        assert!(DEEP_CLEAN_DIRS.contains(&".dart_tool"));
+        assert!(DEEP_CLEAN_DIRS.contains(&"build"));
+        assert_eq!(DEEP_CLEAN_DIRS.len(), 2);
+    }
+
+    #[test]
+    fn test_deep_clean_files_constant() {
+        assert!(DEEP_CLEAN_FILES.contains(&"pubspec.lock"));
+        assert_eq!(DEEP_CLEAN_FILES.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_pubspec_overrides_removes_existing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+
+        // Create the override file
+        let override_path = pkg_dir.join("pubspec_overrides.yaml");
+        std::fs::write(&override_path, "dependency_overrides:\n  core:\n    path: ../core\n").unwrap();
+        assert!(override_path.exists());
+
+        let pkg = make_package("app", pkg_dir.clone());
+        remove_pubspec_overrides(&[pkg]);
+
+        assert!(!override_path.exists(), "pubspec_overrides.yaml should be removed");
+    }
+
+    #[test]
+    fn test_remove_pubspec_overrides_no_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+
+        let override_path = pkg_dir.join("pubspec_overrides.yaml");
+        assert!(!override_path.exists());
+
+        let pkg = make_package("app", pkg_dir.clone());
+        // Should not panic when file doesn't exist
+        remove_pubspec_overrides(&[pkg]);
+    }
+
+    #[test]
+    fn test_remove_pubspec_overrides_multiple_packages() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_a_dir = dir.path().join("packages").join("a");
+        let pkg_b_dir = dir.path().join("packages").join("b");
+        std::fs::create_dir_all(&pkg_a_dir).unwrap();
+        std::fs::create_dir_all(&pkg_b_dir).unwrap();
+
+        // Only pkg_a has an override file
+        let override_a = pkg_a_dir.join("pubspec_overrides.yaml");
+        std::fs::write(&override_a, "# overrides").unwrap();
+
+        let pkg_a = make_package("a", pkg_a_dir);
+        let pkg_b = make_package("b", pkg_b_dir.clone());
+
+        remove_pubspec_overrides(&[pkg_a, pkg_b]);
+
+        assert!(!override_a.exists(), "a's override should be removed");
+        assert!(!pkg_b_dir.join("pubspec_overrides.yaml").exists(), "b never had one");
+    }
+
+    #[test]
+    fn test_remove_pubspec_overrides_empty_packages() {
+        // Should not panic with empty list
+        remove_pubspec_overrides(&[]);
+    }
+}

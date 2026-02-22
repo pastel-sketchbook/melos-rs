@@ -57,25 +57,7 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
     }
     println!();
 
-    // Build the dart analyze command with flags
-    let mut cmd_parts = vec!["dart".to_string(), "analyze".to_string()];
-
-    if !args.no_fatal {
-        if args.fatal_warnings {
-            cmd_parts.push("--fatal-warnings".to_string());
-        }
-        if args.fatal_infos {
-            cmd_parts.push("--fatal-infos".to_string());
-        }
-    } else {
-        cmd_parts.push("--no-fatal-warnings".to_string());
-        cmd_parts.push("--no-fatal-infos".to_string());
-    }
-
-    // Analyze the current directory (package root)
-    cmd_parts.push(".".to_string());
-
-    let cmd_str = cmd_parts.join(" ");
+    let cmd_str = build_analyze_command(args.fatal_warnings, args.fatal_infos, args.no_fatal);
 
     let pb = create_progress_bar(packages.len() as u64, "analyzing");
     let runner = ProcessRunner::new(args.concurrency, false);
@@ -92,4 +74,68 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
 
     println!("\n{}", "All packages passed analysis.".green());
     Ok(())
+}
+
+/// Build the `dart analyze` command string from flags.
+fn build_analyze_command(fatal_warnings: bool, fatal_infos: bool, no_fatal: bool) -> String {
+    let mut cmd_parts = vec!["dart".to_string(), "analyze".to_string()];
+
+    if !no_fatal {
+        if fatal_warnings {
+            cmd_parts.push("--fatal-warnings".to_string());
+        }
+        if fatal_infos {
+            cmd_parts.push("--fatal-infos".to_string());
+        }
+    } else {
+        cmd_parts.push("--no-fatal-warnings".to_string());
+        cmd_parts.push("--no-fatal-infos".to_string());
+    }
+
+    // Analyze the current directory (package root)
+    cmd_parts.push(".".to_string());
+
+    cmd_parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_analyze_command_default() {
+        let cmd = build_analyze_command(false, false, false);
+        assert_eq!(cmd, "dart analyze .");
+    }
+
+    #[test]
+    fn test_build_analyze_command_fatal_warnings() {
+        let cmd = build_analyze_command(true, false, false);
+        assert_eq!(cmd, "dart analyze --fatal-warnings .");
+    }
+
+    #[test]
+    fn test_build_analyze_command_fatal_infos() {
+        let cmd = build_analyze_command(false, true, false);
+        assert_eq!(cmd, "dart analyze --fatal-infos .");
+    }
+
+    #[test]
+    fn test_build_analyze_command_both_fatal() {
+        let cmd = build_analyze_command(true, true, false);
+        assert_eq!(cmd, "dart analyze --fatal-warnings --fatal-infos .");
+    }
+
+    #[test]
+    fn test_build_analyze_command_no_fatal_overrides() {
+        // --no-fatal overrides both --fatal-warnings and --fatal-infos
+        let cmd = build_analyze_command(true, true, true);
+        assert_eq!(cmd, "dart analyze --no-fatal-warnings --no-fatal-infos .");
+    }
+
+    #[test]
+    fn test_build_analyze_command_no_fatal_alone() {
+        let cmd = build_analyze_command(false, false, true);
+        assert_eq!(cmd, "dart analyze --no-fatal-warnings --no-fatal-infos .");
+    }
 }
