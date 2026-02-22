@@ -36,9 +36,10 @@ pub struct VersionArgs {
     #[arg(long)]
     pub conventional_commits: bool,
 
-    /// Git ref to find conventional commits since (used with --conventional-commits)
-    #[arg(long, default_value = "HEAD~10")]
-    pub since_ref: String,
+    /// Git ref to find conventional commits since (used with --conventional-commits).
+    /// If not provided, defaults to the latest git tag or HEAD~10 if no tags exist.
+    #[arg(long)]
+    pub since_ref: Option<String>,
 
     /// Skip changelog generation
     #[arg(long)]
@@ -618,6 +619,29 @@ pub fn git_fetch_tags(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Find the latest git tag in the repository.
+///
+/// Uses `git describe --tags --abbrev=0` to find the most recent tag reachable
+/// from HEAD. Returns `None` if no tags exist or the command fails.
+pub fn find_latest_git_tag(root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["describe", "--tags", "--abbrev=0"])
+        .current_dir(root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Version computation
 // ---------------------------------------------------------------------------
@@ -1072,11 +1096,16 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
     // Collect conventional commits if requested
     let conventional_commits = if args.conventional_commits {
-        let commits = parse_commits_since(&workspace.root_path, &args.since_ref)?;
+        // Resolve since_ref: CLI flag -> latest git tag -> fallback "HEAD~10"
+        let since_ref = args.since_ref.clone().unwrap_or_else(|| {
+            find_latest_git_tag(&workspace.root_path)
+                .unwrap_or_else(|| "HEAD~10".to_string())
+        });
+        let commits = parse_commits_since(&workspace.root_path, &since_ref)?;
         println!(
             "  Found {} conventional commit(s) since {}",
             commits.len().to_string().bold(),
-            args.since_ref
+            since_ref
         );
         let mapped = map_commits_to_packages(&workspace.root_path, &commits, &workspace.packages)?;
         Some(mapped)
@@ -1485,8 +1514,9 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             "$".cyan(),
             pre_commit
         );
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
+        let (shell, shell_flag) = crate::runner::shell_command();
+        let status = tokio::process::Command::new(shell)
+            .arg(shell_flag)
             .arg(pre_commit)
             .current_dir(&workspace.root_path)
             .status()
@@ -1527,8 +1557,9 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             "$".cyan(),
             post_commit
         );
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
+        let (shell, shell_flag) = crate::runner::shell_command();
+        let status = tokio::process::Command::new(shell)
+            .arg(shell_flag)
             .arg(post_commit)
             .current_dir(&workspace.root_path)
             .status()
@@ -2232,6 +2263,57 @@ command:
         assert_eq!(hooks.post.as_deref(), Some("echo post-clean"));
     }
 
+    #[test]
+    fn test_parse_test_config_with_hooks() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  test:
+    hooks:
+      pre: echo pre-test
+      post: echo post-test
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let test_config = config.command.unwrap().test.unwrap();
+        let hooks = test_config.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("echo pre-test"));
+        assert_eq!(hooks.post.as_deref(), Some("echo post-test"));
+    }
+
+    #[test]
+    fn test_parse_test_config_pre_only() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  test:
+    hooks:
+      pre: dart run build_runner build
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let test_config = config.command.unwrap().test.unwrap();
+        let hooks = test_config.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("dart run build_runner build"));
+        assert_eq!(hooks.post, None);
+    }
+
+    #[test]
+    fn test_parse_test_config_absent() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        assert!(config.command.unwrap().test.is_none());
+    }
+
     // -----------------------------------------------------------------------
     // Batch 15: releaseUrl config + CLI flag
     // -----------------------------------------------------------------------
@@ -2724,5 +2806,72 @@ command:
         let changelogs = version_config.changelogs.unwrap();
         assert_eq!(changelogs.len(), 1);
         assert_eq!(changelogs[0].path, "CHANGELOG_MOBILE.md");
+    }
+
+    // -----------------------------------------------------------------------
+    // find_latest_git_tag tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_find_latest_git_tag_no_repo() {
+        // A temp dir with no git repo should return None
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(find_latest_git_tag(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn test_find_latest_git_tag_no_tags() {
+        // A git repo with no tags should return None
+        let tmp = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        // Make an initial commit so HEAD exists
+        std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init", "--author", "Test <test@test.com>"])
+            .current_dir(tmp.path())
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+        assert!(find_latest_git_tag(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn test_find_latest_git_tag_with_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init", "--author", "Test <test@test.com>"])
+            .current_dir(tmp.path())
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["tag", "v1.0.0"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let tag = find_latest_git_tag(tmp.path());
+        assert_eq!(tag.as_deref(), Some("v1.0.0"));
     }
 }

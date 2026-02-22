@@ -390,3 +390,40 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - `test_list_with_no_private_filter` — list with `--no-private` excludes `publish_to: none`
   - `test_init_7x_with_apps` — init with apps directory accepted creates both packages/ and apps/
 - [x] Tests: 30 new tests (334 total: 314 unit + 20 integration)
+
+### Batch 23: Runner Output Buffering, Version Auto-Detect, Missing Commands & Cross-Platform
+
+- [x] Theme A: Runner output buffering
+  - Changed `Stdio::inherit()` → `Stdio::piped()` in `runner/mod.rs`
+  - Added `output_lock: Arc<std::sync::Mutex<()>>` for atomic output printing
+  - Captures `(success, stdout_buf, stderr_buf)` tuple per package
+  - Prints all buffered output lines with package prefix under lock after completion
+  - Prevents interleaved output in concurrent mode
+- [x] Theme B: Version command auto-detect since-ref
+  - Added `find_latest_git_tag(root: &Path) -> Option<String>` using `git describe --tags --abbrev=0`
+  - Changed `since_ref` from `String` with default `"HEAD~10"` to `Option<String>`
+  - Resolution chain: CLI flag → latest git tag → `"HEAD~10"` fallback
+- [x] Theme C1: `pub add` / `pub remove` subcommands
+  - Added `Add(PubAddArgs)` and `Remove(PubRemoveArgs)` variants to `PubCommand` enum
+  - `PubAddArgs`: package name, `--dev` flag, concurrency, filters
+  - `PubRemoveArgs`: package name, concurrency, filters
+  - `build_pub_add_command()` and `build_pub_remove_command()` helpers
+  - Wired into `pub` command dispatch
+- [x] Theme C2: `--update-goldens` flag for test command
+  - Added `#[arg(long)] pub update_goldens: bool` to `TestArgs`
+  - Wired into `build_extra_flags()` to append `--update-goldens`
+- [x] Theme C3: Test command hooks (pre/post) + `TestCommandConfig`
+  - Added `TestCommandConfig` and `TestHooks` structs in `config/mod.rs`
+  - Added `test: Option<TestCommandConfig>` to `CommandConfig`
+  - Added pre-test and post-test hook execution in `test.rs` (following `clean.rs` pattern)
+  - Hooks run once per `melos test` invocation (before/after all packages)
+- [x] Theme D: Cross-platform shell support
+  - Added `pub fn shell_command() -> (&'static str, &'static str)` in `runner/mod.rs`
+  - Returns `("cmd", "/C")` on Windows, `("sh", "-c")` on Unix
+  - Updated all 9 call sites: `runner/mod.rs`, `version.rs` (2), `clean.rs` (2), `publish.rs` (2), `bootstrap.rs` (1), `run.rs` (2)
+- [x] Tests: 13 new tests (347 total: 327 unit + 20 integration)
+  - `test_shell_command_returns_platform_appropriate_values`
+  - `test_find_latest_git_tag_no_repo`, `test_find_latest_git_tag_no_tags`, `test_find_latest_git_tag_with_tag`
+  - `test_build_pub_add_command_regular`, `test_build_pub_add_command_dev`, `test_build_pub_add_command_with_version`, `test_build_pub_remove_command`
+  - `test_build_extra_flags_update_goldens_only`, `test_build_test_command_with_update_goldens`
+  - `test_parse_test_config_with_hooks`, `test_parse_test_config_pre_only`, `test_parse_test_config_absent`

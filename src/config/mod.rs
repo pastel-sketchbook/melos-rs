@@ -425,6 +425,9 @@ pub struct CommandConfig {
 
     /// Publish command config
     pub publish: Option<PublishCommandConfig>,
+
+    /// Test command config
+    pub test: Option<TestCommandConfig>,
 }
 
 /// Configuration for the `version` command
@@ -747,6 +750,25 @@ pub struct CleanHooks {
     pub pre: Option<String>,
 
     /// Script to run after cleaning
+    pub post: Option<String>,
+}
+
+/// Configuration for the `test` command
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCommandConfig {
+    /// Lifecycle hooks (pre/post)
+    pub hooks: Option<TestHooks>,
+}
+
+/// Hooks for the test command
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestHooks {
+    /// Script to run before testing
+    pub pre: Option<String>,
+
+    /// Script to run after testing
     pub post: Option<String>,
 }
 

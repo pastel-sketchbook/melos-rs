@@ -8,6 +8,18 @@ use tokio::sync::Semaphore;
 
 use crate::package::Package;
 
+/// Return the platform-appropriate shell executable and flag for running commands.
+///
+/// On Windows, returns `("cmd", "/C")` to invoke `cmd.exe /C <command>`.
+/// On Unix-like systems, returns `("sh", "-c")` to invoke `sh -c <command>`.
+pub fn shell_command() -> (&'static str, &'static str) {
+    if cfg!(target_os = "windows") {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    }
+}
+
 /// Create a styled progress bar for package processing.
 ///
 /// Uses a consistent style across all commands:
@@ -94,6 +106,9 @@ impl ProcessRunner {
         let semaphore = std::sync::Arc::new(Semaphore::new(self.concurrency));
         let results = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Mutex used to serialize output blocks so concurrent package output
+        // does not interleave.
+        let output_lock = std::sync::Arc::new(std::sync::Mutex::new(()));
 
         let mut handles = Vec::new();
 
@@ -106,6 +121,7 @@ impl ProcessRunner {
             let sem = semaphore.clone();
             let results = results.clone();
             let failed = failed.clone();
+            let output_lock = output_lock.clone();
             let fail_fast = self.fail_fast;
             let command = command.to_string();
             let pkg_name = pkg.name.clone();
@@ -129,56 +145,86 @@ impl ProcessRunner {
                 let prefix = format!("[{}]", pkg_name).color(color).bold();
                 println!("{} running...", prefix);
 
-                let child = tokio::process::Command::new("sh")
-                    .arg("-c")
+                let (shell, shell_flag) = shell_command();
+                let child = tokio::process::Command::new(shell)
+                    .arg(shell_flag)
                     .arg(&command)
                     .current_dir(&pkg_path)
                     .envs(&env)
-                    .stdout(std::process::Stdio::inherit())
-                    .stderr(std::process::Stdio::inherit())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
                     .spawn();
 
-                let success = match child {
+                // Collect output and determine success.
+                // stdout/stderr are buffered and printed atomically after completion.
+                let (success, stdout_buf, stderr_buf) = match child {
                     Ok(child) => {
                         if let Some(dur) = timeout {
-                            // Apply timeout: wait for the child or kill it
                             match tokio::time::timeout(dur, child.wait_with_output()).await {
-                                Ok(Ok(output)) => output.status.success(),
+                                Ok(Ok(output)) => (
+                                    output.status.success(),
+                                    output.stdout,
+                                    output.stderr,
+                                ),
                                 Ok(Err(e)) => {
-                                    eprintln!("{} {} {}", prefix, "ERROR".red(), e);
-                                    false
+                                    let msg = format!("{} {} {}\n", prefix, "ERROR".red(), e);
+                                    (false, Vec::new(), msg.into_bytes())
                                 }
                                 Err(_) => {
-                                    eprintln!(
-                                        "{} {} timed out after {}s",
+                                    let msg = format!(
+                                        "{} {} timed out after {}s\n",
                                         prefix,
                                         "TIMEOUT".red().bold(),
                                         dur.as_secs()
                                     );
-                                    false
+                                    (false, Vec::new(), msg.into_bytes())
                                 }
                             }
                         } else {
-                            // No timeout: wait normally
                             match child.wait_with_output().await {
-                                Ok(output) => output.status.success(),
+                                Ok(output) => (
+                                    output.status.success(),
+                                    output.stdout,
+                                    output.stderr,
+                                ),
                                 Err(e) => {
-                                    eprintln!("{} {} {}", prefix, "ERROR".red(), e);
-                                    false
+                                    let msg = format!("{} {} {}\n", prefix, "ERROR".red(), e);
+                                    (false, Vec::new(), msg.into_bytes())
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("{} {} {}", prefix, "ERROR".red(), e);
-                        false
+                        let msg = format!("{} {} {}\n", prefix, "ERROR".red(), e);
+                        (false, Vec::new(), msg.into_bytes())
                     }
                 };
 
-                if success {
-                    println!("{} {}", prefix, "SUCCESS".green());
-                } else {
-                    eprintln!("{} {}", prefix, "FAILED".red());
+                // Atomically print the entire output block under the lock
+                {
+                    // Safety: the lock is never poisoned in practice since we
+                    // never panic while holding it; using expect for clarity.
+                    let _guard = output_lock.lock().expect("output lock poisoned");
+
+                    if !stdout_buf.is_empty() {
+                        for line in String::from_utf8_lossy(&stdout_buf).lines() {
+                            println!("{} {}", prefix, line);
+                        }
+                    }
+                    if !stderr_buf.is_empty() {
+                        for line in String::from_utf8_lossy(&stderr_buf).lines() {
+                            eprintln!("{} {}", prefix, line);
+                        }
+                    }
+
+                    if success {
+                        println!("{} {}", prefix, "SUCCESS".green());
+                    } else {
+                        eprintln!("{} {}", prefix, "FAILED".red());
+                    }
+                }
+
+                if !success {
                     failed.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
 
@@ -296,6 +342,20 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+        }
+    }
+
+    // ── shell_command tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_shell_command_returns_platform_appropriate_values() {
+        let (shell, flag) = super::shell_command();
+        if cfg!(target_os = "windows") {
+            assert_eq!(shell, "cmd");
+            assert_eq!(flag, "/C");
+        } else {
+            assert_eq!(shell, "sh");
+            assert_eq!(flag, "-c");
         }
     }
 

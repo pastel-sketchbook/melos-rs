@@ -373,8 +373,9 @@ async fn run_script_recursive(
 
                 println!("{}{} {}", indent, ">".dimmed(), cmd.dimmed());
 
-                let status = tokio::process::Command::new("sh")
-                    .arg("-c")
+                let (shell, shell_flag) = crate::runner::shell_command();
+                let status = tokio::process::Command::new(shell)
+                    .arg(shell_flag)
                     .arg(cmd)
                     .current_dir(&workspace.root_path)
                     .envs(&env_vars)
@@ -449,8 +450,9 @@ async fn run_steps(
             for cmd in &expanded {
                 println!("{}{} {}", "  ".repeat(depth + 1), ">".dimmed(), cmd.dimmed());
 
-                let status = tokio::process::Command::new("sh")
-                    .arg("-c")
+                let (shell, shell_flag) = crate::runner::shell_command();
+                let status = tokio::process::Command::new(shell)
+                    .arg(shell_flag)
                     .arg(cmd)
                     .current_dir(&workspace.root_path)
                     .envs(env_vars)

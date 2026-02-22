@@ -466,8 +466,9 @@ async fn run_hook(workspace: &Workspace, phase: HookPhase) -> Result<()> {
             label,
             hook
         );
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
+        let (shell, shell_flag) = crate::runner::shell_command();
+        let status = tokio::process::Command::new(shell)
+            .arg(shell_flag)
             .arg(hook)
             .current_dir(&workspace.root_path)
             .status()
@@ -673,6 +674,7 @@ mod tests {
                     bootstrap: bootstrap_config,
                     clean: None,
                     publish: None,
+                    test: None,
                 }),
                 scripts: HashMap::new(),
                 ignore: None,
@@ -1243,6 +1245,7 @@ mod tests {
                     }),
                     clean: None,
                     publish: None,
+                    test: None,
                 }),
                 scripts: HashMap::new(),
                 ignore: None,

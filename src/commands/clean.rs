@@ -46,8 +46,9 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
             "$".cyan(),
             pre_hook
         );
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
+        let (shell, shell_flag) = crate::runner::shell_command();
+        let status = tokio::process::Command::new(shell)
+            .arg(shell_flag)
             .arg(pre_hook)
             .current_dir(&workspace.root_path)
             .status()
@@ -211,8 +212,9 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
             "$".cyan(),
             post_hook
         );
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
+        let (shell, shell_flag) = crate::runner::shell_command();
+        let status = tokio::process::Command::new(shell)
+            .arg(shell_flag)
             .arg(post_hook)
             .current_dir(&workspace.root_path)
             .status()

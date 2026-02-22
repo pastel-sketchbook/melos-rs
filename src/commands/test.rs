@@ -27,6 +27,10 @@ pub struct TestArgs {
     #[arg(long)]
     pub test_randomize_ordering_seed: Option<String>,
 
+    /// Update golden files (passes --update-goldens to flutter test)
+    #[arg(long)]
+    pub update_goldens: bool,
+
     /// Do not run tests; only list available test files
     #[arg(long)]
     pub no_run: bool,
@@ -63,6 +67,33 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
     if testable_packages.is_empty() {
         println!("{}", "No packages with test/ directory found.".yellow());
         return Ok(());
+    }
+
+    // Run pre-test hook if configured
+    if let Some(test_config) = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.test.as_ref())
+        && let Some(hooks) = &test_config.hooks
+        && let Some(ref pre_hook) = hooks.pre
+    {
+        println!(
+            "\n{} Running pre-test hook: {}",
+            "$".cyan(),
+            pre_hook
+        );
+        let (shell, shell_flag) = crate::runner::shell_command();
+        let status = tokio::process::Command::new(shell)
+            .arg(shell_flag)
+            .arg(pre_hook)
+            .current_dir(&workspace.root_path)
+            .status()
+            .await?;
+
+        if !status.success() {
+            anyhow::bail!("Pre-test hook failed with exit code: {}", status.code().unwrap_or(-1));
+        }
     }
 
     println!(
@@ -116,6 +147,34 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
     }
 
     println!("\n{}", format!("All {} package(s) passed testing.", passed).green());
+
+    // Run post-test hook if configured
+    if let Some(test_config) = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.test.as_ref())
+        && let Some(hooks) = &test_config.hooks
+        && let Some(ref post_hook) = hooks.post
+    {
+        println!(
+            "\n{} Running post-test hook: {}",
+            "$".cyan(),
+            post_hook
+        );
+        let (shell, shell_flag) = crate::runner::shell_command();
+        let status = tokio::process::Command::new(shell)
+            .arg(shell_flag)
+            .arg(post_hook)
+            .current_dir(&workspace.root_path)
+            .status()
+            .await?;
+
+        if !status.success() {
+            anyhow::bail!("Post-test hook failed with exit code: {}", status.code().unwrap_or(-1));
+        }
+    }
+
     Ok(())
 }
 
@@ -133,6 +192,10 @@ fn build_extra_flags(args: &TestArgs) -> Vec<String> {
 
     if args.no_run {
         flags.push("--no-run".to_string());
+    }
+
+    if args.update_goldens {
+        flags.push("--update-goldens".to_string());
     }
 
     flags
@@ -186,6 +249,7 @@ mod tests {
             coverage: false,
             test_randomize_ordering_seed: None,
             no_run: false,
+            update_goldens: false,
             extra_args: vec![],
             filters: GlobalFilterArgs::default(),
         };
@@ -201,13 +265,38 @@ mod tests {
             coverage: true,
             test_randomize_ordering_seed: Some("0".to_string()),
             no_run: true,
+            update_goldens: true,
             extra_args: vec![],
             filters: GlobalFilterArgs::default(),
         };
         let flags = build_extra_flags(&args);
-        assert_eq!(flags.len(), 3);
+        assert_eq!(flags.len(), 4);
         assert!(flags.contains(&"--coverage".to_string()));
         assert!(flags.contains(&"--test-randomize-ordering-seed=0".to_string()));
         assert!(flags.contains(&"--no-run".to_string()));
+        assert!(flags.contains(&"--update-goldens".to_string()));
+    }
+
+    #[test]
+    fn test_build_extra_flags_update_goldens_only() {
+        let args = TestArgs {
+            concurrency: 1,
+            fail_fast: false,
+            coverage: false,
+            test_randomize_ordering_seed: None,
+            no_run: false,
+            update_goldens: true,
+            extra_args: vec![],
+            filters: GlobalFilterArgs::default(),
+        };
+        let flags = build_extra_flags(&args);
+        assert_eq!(flags, vec!["--update-goldens"]);
+    }
+
+    #[test]
+    fn test_build_test_command_with_update_goldens() {
+        let flags = vec!["--update-goldens".to_string()];
+        let cmd = build_test_command("flutter", &flags, &[]);
+        assert_eq!(cmd, "flutter test --update-goldens");
     }
 }
