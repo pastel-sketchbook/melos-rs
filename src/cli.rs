@@ -3,7 +3,8 @@ use clap_complete::Shell;
 
 use crate::commands::{
     analyze::AnalyzeArgs, exec::ExecArgs, format::FormatArgs, health::HealthArgs, init::InitArgs,
-    list::ListArgs, pub_cmds::PubArgs, publish::PublishArgs, run::RunArgs, version::VersionArgs,
+    list::ListArgs, pub_cmds::PubArgs, publish::PublishArgs, run::RunArgs, test::TestArgs,
+    version::VersionArgs,
 };
 
 /// melos-rs: A Rust CLI for Flutter/Dart monorepo management
@@ -190,6 +191,9 @@ pub enum Commands {
 
     /// Run a script defined in melos.yaml
     Run(RunArgs),
+
+    /// Run tests across packages using `dart test` / `flutter test`
+    Test(TestArgs),
 
     /// Manage package versions
     Version(VersionArgs),

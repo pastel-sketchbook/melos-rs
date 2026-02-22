@@ -55,6 +55,14 @@ pub struct MelosConfig {
     /// root is itself a publishable Dart/Flutter package.
     #[serde(default)]
     pub use_root_as_package: Option<bool>,
+
+    /// When true, recursively discover packages inside nested Dart workspaces.
+    ///
+    /// After initial package discovery, any discovered pubspec.yaml with a
+    /// `workspace:` field is treated as a nested workspace root, and its
+    /// listed workspace paths are also scanned for packages.
+    #[serde(default)]
+    pub discover_nested_workspaces: Option<bool>,
 }
 
 impl MelosConfig {
@@ -694,6 +702,30 @@ pub struct BootstrapCommandConfig {
     #[serde(default)]
     pub dependency_override_paths: Option<Vec<String>>,
 
+    /// Shared environment SDK constraints to sync across all packages.
+    ///
+    /// Example:
+    /// ```yaml
+    /// environment:
+    ///   sdk: ">=3.0.0 <4.0.0"
+    ///   flutter: ">=3.0.0 <4.0.0"
+    /// ```
+    #[serde(default)]
+    pub environment: Option<HashMap<String, String>>,
+
+    /// Shared dependencies to sync across all packages.
+    ///
+    /// If a package lists one of these dependencies, its version constraint
+    /// will be updated to match the one defined here during bootstrap.
+    #[serde(default)]
+    pub dependencies: Option<HashMap<String, yaml_serde::Value>>,
+
+    /// Shared dev_dependencies to sync across all packages.
+    ///
+    /// Same behavior as `dependencies` but for dev_dependencies.
+    #[serde(default)]
+    pub dev_dependencies: Option<HashMap<String, yaml_serde::Value>>,
+
     /// Lifecycle hooks (pre/post)
     #[serde(default)]
     pub hooks: Option<BootstrapHooks>,
@@ -821,6 +853,10 @@ struct MelosSection {
     /// When true, include the workspace root directory as a package.
     #[serde(default)]
     use_root_as_package: Option<bool>,
+
+    /// When true, recursively discover nested workspaces.
+    #[serde(default)]
+    discover_nested_workspaces: Option<bool>,
 }
 ///
 /// - **6.x (`melos.yaml`)**: Direct deserialization to `MelosConfig`.
@@ -876,6 +912,7 @@ pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
                 ignore: wrapper.melos.ignore,
                 categories: wrapper.melos.categories,
                 use_root_as_package: wrapper.melos.use_root_as_package,
+                discover_nested_workspaces: wrapper.melos.discover_nested_workspaces,
             })
         }
     }
@@ -1107,6 +1144,7 @@ melos:
             ignore: None,
             categories: HashMap::new(),
             use_root_as_package: None,
+            discover_nested_workspaces: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1130,6 +1168,7 @@ melos:
             ignore: None,
             categories: HashMap::new(),
             use_root_as_package: None,
+            discover_nested_workspaces: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1153,6 +1192,7 @@ melos:
             ignore: None,
             categories: HashMap::new(),
             use_root_as_package: None,
+            discover_nested_workspaces: None,
         };
         let warnings = config.validate();
         assert!(warnings.is_empty());
@@ -1175,6 +1215,7 @@ melos:
             ignore: None,
             categories: HashMap::new(),
             use_root_as_package: None,
+            discover_nested_workspaces: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1210,6 +1251,7 @@ melos:
             ignore: None,
             categories: HashMap::new(),
             use_root_as_package: None,
+            discover_nested_workspaces: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1498,6 +1540,7 @@ scripts:
             ignore: None,
             categories: HashMap::new(),
             use_root_as_package: None,
+            discover_nested_workspaces: None,
         };
         let warnings = config.validate();
         assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
@@ -1530,6 +1573,7 @@ scripts:
             ignore: None,
             categories: HashMap::new(),
             use_root_as_package: None,
+            discover_nested_workspaces: None,
         };
         let warnings = config.validate();
         assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);

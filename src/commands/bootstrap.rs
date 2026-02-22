@@ -71,6 +71,9 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         enforce_versions(&packages, &workspace.packages)?;
     }
 
+    // Sync shared dependencies if configured
+    sync_shared_dependencies(&packages, workspace)?;
+
     // Build the pub get command with extra flags
     let flutter_cmd = build_pub_get_command("flutter", enforce_lockfile, args.no_example, offline);
     let dart_cmd = build_pub_get_command("dart", enforce_lockfile, args.no_example, offline);
@@ -190,6 +193,158 @@ fn config_enforce_versions(workspace: &Workspace) -> bool {
         .and_then(|c| c.bootstrap.as_ref())
         .and_then(|b| b.enforce_versions_for_dependency_resolution)
         .unwrap_or(false)
+}
+
+/// Sync shared dependency versions from bootstrap config into each package's pubspec.yaml.
+///
+/// If the bootstrap config defines `environment`, `dependencies`, or `dev_dependencies`,
+/// this function reads each package's pubspec.yaml and updates matching entries to use
+/// the version constraints from the shared config. The pubspec.yaml is rewritten only
+/// if changes were made.
+///
+/// This mirrors Melos's `command.bootstrap.dependencies` / `dev_dependencies` /
+/// `environment` feature that keeps dependency versions consistent across all packages.
+fn sync_shared_dependencies(packages: &[Package], workspace: &Workspace) -> Result<()> {
+    let bootstrap_config = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref());
+
+    let shared_env = bootstrap_config.and_then(|b| b.environment.as_ref());
+    let shared_deps = bootstrap_config.and_then(|b| b.dependencies.as_ref());
+    let shared_dev_deps = bootstrap_config.and_then(|b| b.dev_dependencies.as_ref());
+
+    // Nothing to sync?
+    if shared_env.is_none() && shared_deps.is_none() && shared_dev_deps.is_none() {
+        return Ok(());
+    }
+
+    let mut synced_count = 0u32;
+
+    for pkg in packages {
+        let pubspec_path = pkg.path.join("pubspec.yaml");
+        let content = std::fs::read_to_string(&pubspec_path)
+            .with_context(|| format!("Failed to read pubspec.yaml for '{}'", pkg.name))?;
+
+        let mut changed = false;
+        let mut lines: Vec<String> = content.lines().map(String::from).collect();
+
+        // Sync environment SDK constraints
+        if let Some(env) = shared_env {
+            changed |= sync_yaml_section(&mut lines, "environment", env);
+        }
+
+        // Sync dependencies
+        if let Some(deps) = shared_deps {
+            let string_deps: HashMap<String, String> = deps
+                .iter()
+                .filter_map(|(k, v)| yaml_value_to_constraint(v).map(|c| (k.clone(), c)))
+                .collect();
+            changed |= sync_yaml_section(&mut lines, "dependencies", &string_deps);
+        }
+
+        // Sync dev_dependencies
+        if let Some(dev_deps) = shared_dev_deps {
+            let string_deps: HashMap<String, String> = dev_deps
+                .iter()
+                .filter_map(|(k, v)| yaml_value_to_constraint(v).map(|c| (k.clone(), c)))
+                .collect();
+            changed |= sync_yaml_section(&mut lines, "dev_dependencies", &string_deps);
+        }
+
+        if changed {
+            let new_content = lines.join("\n") + "\n";
+            std::fs::write(&pubspec_path, new_content).with_context(|| {
+                format!(
+                    "Failed to write updated pubspec.yaml for '{}'",
+                    pkg.name
+                )
+            })?;
+            synced_count += 1;
+        }
+    }
+
+    if synced_count > 0 {
+        println!(
+            "  {} Synced shared dependencies in {} package{}",
+            "OK".green(),
+            synced_count,
+            if synced_count == 1 { "" } else { "s" }
+        );
+    }
+
+    Ok(())
+}
+
+/// Convert a YAML value (from shared deps config) to a version constraint string.
+///
+/// Supports:
+/// - String: `"^1.0.0"` -> `Some("^1.0.0")`
+/// - Null: -> `Some("any")` (null means accept any version)
+/// - Other (mapping, etc.): -> `None` (complex deps like git can't be synced as simple strings)
+fn yaml_value_to_constraint(value: &yaml_serde::Value) -> Option<String> {
+    match value {
+        yaml_serde::Value::String(s) => Some(s.clone()),
+        yaml_serde::Value::Null => Some("any".to_string()),
+        _ => None, // Complex deps (git, path, etc.) are not synced
+    }
+}
+
+/// Sync version constraints for entries in a YAML section (e.g., `dependencies:`)
+/// by doing line-level text replacement.
+///
+/// This approach avoids a full YAML parse-modify-serialize cycle which would lose
+/// comments and formatting. It finds the section header (e.g., `dependencies:`),
+/// then looks for lines matching `  <key>: <old_value>` and replaces them with
+/// `  <key>: <new_value>`.
+///
+/// Returns `true` if any lines were modified.
+fn sync_yaml_section(lines: &mut [String], section: &str, values: &HashMap<String, String>) -> bool {
+    if values.is_empty() {
+        return false;
+    }
+
+    let section_header = format!("{}:", section);
+    let mut in_section = false;
+    let mut changed = false;
+
+    for line in lines.iter_mut() {
+        let trimmed = line.trim();
+
+        // Check if we're entering the target section
+        if trimmed == section_header {
+            in_section = true;
+            continue;
+        }
+
+        // If we hit another top-level key (no leading whitespace), exit the section
+        if in_section && !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+            in_section = false;
+        }
+
+        if !in_section {
+            continue;
+        }
+
+        // Check if this line is a simple `  key: value` entry
+        // (2-space indent, which is standard YAML for pubspec.yaml)
+        for (key, new_value) in values {
+            if trimmed.starts_with(&format!("{}:", key)) {
+                // Determine current indentation
+                let indent = line.len() - line.trim_start().len();
+                let indent_str: String = line.chars().take(indent).collect();
+                let new_line = format!("{}{}: {}", indent_str, key, new_value);
+                if *line != new_line {
+                    *line = new_line;
+                    changed = true;
+                }
+                break;
+            }
+        }
+    }
+
+    changed
 }
 
 /// Validate that workspace packages' version constraints on sibling packages are
@@ -523,6 +678,7 @@ mod tests {
                 ignore: None,
                 categories: HashMap::new(),
                 use_root_as_package: None,
+                discover_nested_workspaces: None,
             },
             packages: vec![],
             sdk_path: None,
@@ -575,6 +731,9 @@ mod tests {
             enforce_lockfile: None,
             run_pub_get_offline: None,
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 5), 1);
@@ -588,6 +747,9 @@ mod tests {
             enforce_lockfile: None,
             run_pub_get_offline: None,
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 8), 8);
@@ -601,6 +763,9 @@ mod tests {
             enforce_lockfile: None,
             run_pub_get_offline: None,
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 3), 3);
@@ -652,6 +817,9 @@ mod tests {
             enforce_lockfile: Some(true),
             run_pub_get_offline: None,
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert!(config_enforce_lockfile(&ws));
@@ -665,6 +833,9 @@ mod tests {
             enforce_lockfile: Some(false),
             run_pub_get_offline: None,
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert!(!config_enforce_lockfile(&ws));
@@ -746,6 +917,9 @@ mod tests {
             enforce_lockfile: None,
             run_pub_get_offline: None,
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert!(config_enforce_versions(&ws));
@@ -763,6 +937,9 @@ mod tests {
             enforce_lockfile: None,
             run_pub_get_offline: Some(true),
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert!(config_run_pub_get_offline(&ws));
@@ -776,6 +953,9 @@ mod tests {
             enforce_lockfile: None,
             run_pub_get_offline: Some(false),
             dependency_override_paths: None,
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         assert!(!config_run_pub_get_offline(&ws));
@@ -799,6 +979,9 @@ mod tests {
             enforce_lockfile: None,
             run_pub_get_offline: None,
             dependency_override_paths: Some(vec!["../external".to_string(), "../other".to_string()]),
+            environment: None,
+            dependencies: None,
+            dev_dependencies: None,
             hooks: None,
         }));
         let paths = config_dependency_override_paths(&ws);
@@ -891,5 +1074,224 @@ mod tests {
         assert!(overrides_path.exists());
         let content = std::fs::read_to_string(&overrides_path).unwrap();
         assert!(content.contains("core:"));
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_yaml_section tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sync_yaml_section_updates_dependency() {
+        let mut lines: Vec<String> = vec![
+            "name: my_app".to_string(),
+            "version: 1.0.0".to_string(),
+            "dependencies:".to_string(),
+            "  http: ^0.13.0".to_string(),
+            "  intl: ^0.17.0".to_string(),
+            "dev_dependencies:".to_string(),
+            "  test: ^1.0.0".to_string(),
+        ];
+        let mut values = HashMap::new();
+        values.insert("http".to_string(), "^1.0.0".to_string());
+
+        let changed = sync_yaml_section(&mut lines, "dependencies", &values);
+        assert!(changed);
+        assert_eq!(lines[3], "  http: ^1.0.0");
+        // intl should be unchanged
+        assert_eq!(lines[4], "  intl: ^0.17.0");
+    }
+
+    #[test]
+    fn test_sync_yaml_section_no_change_if_same() {
+        let mut lines: Vec<String> = vec![
+            "dependencies:".to_string(),
+            "  http: ^1.0.0".to_string(),
+        ];
+        let mut values = HashMap::new();
+        values.insert("http".to_string(), "^1.0.0".to_string());
+
+        let changed = sync_yaml_section(&mut lines, "dependencies", &values);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn test_sync_yaml_section_environment() {
+        let mut lines: Vec<String> = vec![
+            "name: my_app".to_string(),
+            "environment:".to_string(),
+            "  sdk: '>=2.0.0 <3.0.0'".to_string(),
+            "dependencies:".to_string(),
+            "  http: ^0.13.0".to_string(),
+        ];
+        let mut values = HashMap::new();
+        values.insert("sdk".to_string(), "'>=3.0.0 <4.0.0'".to_string());
+
+        let changed = sync_yaml_section(&mut lines, "environment", &values);
+        assert!(changed);
+        assert_eq!(lines[2], "  sdk: '>=3.0.0 <4.0.0'");
+        // dependencies section should be unaffected
+        assert_eq!(lines[4], "  http: ^0.13.0");
+    }
+
+    #[test]
+    fn test_sync_yaml_section_only_matches_existing_keys() {
+        let mut lines: Vec<String> = vec![
+            "dependencies:".to_string(),
+            "  http: ^0.13.0".to_string(),
+        ];
+        let mut values = HashMap::new();
+        // This key doesn't exist in the file, so no change
+        values.insert("dio".to_string(), "^5.0.0".to_string());
+
+        let changed = sync_yaml_section(&mut lines, "dependencies", &values);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn test_sync_yaml_section_empty_values() {
+        let mut lines: Vec<String> = vec![
+            "dependencies:".to_string(),
+            "  http: ^0.13.0".to_string(),
+        ];
+        let values = HashMap::new();
+
+        let changed = sync_yaml_section(&mut lines, "dependencies", &values);
+        assert!(!changed);
+    }
+
+    // -----------------------------------------------------------------------
+    // yaml_value_to_constraint tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_yaml_value_to_constraint_string() {
+        let v = yaml_serde::Value::String("^1.0.0".to_string());
+        assert_eq!(yaml_value_to_constraint(&v), Some("^1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_yaml_value_to_constraint_null() {
+        let v = yaml_serde::Value::Null;
+        assert_eq!(yaml_value_to_constraint(&v), Some("any".to_string()));
+    }
+
+    #[test]
+    fn test_yaml_value_to_constraint_mapping_returns_none() {
+        let mut map = yaml_serde::Mapping::new();
+        map.insert(
+            yaml_serde::Value::String("git".to_string()),
+            yaml_serde::Value::String("https://github.com/org/repo".to_string()),
+        );
+        let v = yaml_serde::Value::Mapping(map);
+        assert_eq!(yaml_value_to_constraint(&v), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // sync_shared_dependencies integration test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sync_shared_dependencies_updates_pubspec() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: app\nversion: 1.0.0\nenvironment:\n  sdk: '>=2.0.0 <3.0.0'\ndependencies:\n  http: ^0.13.0\n  intl: ^0.17.0\ndev_dependencies:\n  test: ^1.0.0\n",
+        ).unwrap();
+
+        let app = Package {
+            name: "app".to_string(),
+            path: pkg_dir.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["http".to_string(), "intl".to_string()],
+            dev_dependencies: vec!["test".to_string()],
+            dependency_versions: HashMap::new(),
+        };
+
+        let mut shared_deps = HashMap::new();
+        shared_deps.insert("http".to_string(), yaml_serde::Value::String("^1.0.0".to_string()));
+
+        let mut shared_dev_deps = HashMap::new();
+        shared_dev_deps.insert("test".to_string(), yaml_serde::Value::String("^2.0.0".to_string()));
+
+        let mut shared_env = HashMap::new();
+        shared_env.insert("sdk".to_string(), "'>=3.0.0 <4.0.0'".to_string());
+
+        let ws = Workspace {
+            root_path: dir.path().to_path_buf(),
+            config_source: ConfigSource::MelosYaml(dir.path().join("melos.yaml")),
+            config: MelosConfig {
+                name: "test".to_string(),
+                packages: vec!["packages/**".to_string()],
+                repository: None,
+                sdk_path: None,
+                command: Some(CommandConfig {
+                    version: None,
+                    bootstrap: Some(BootstrapCommandConfig {
+                        run_pub_get_in_parallel: None,
+                        enforce_versions_for_dependency_resolution: None,
+                        enforce_lockfile: None,
+                        run_pub_get_offline: None,
+                        dependency_override_paths: None,
+                        environment: Some(shared_env),
+                        dependencies: Some(shared_deps),
+                        dev_dependencies: Some(shared_dev_deps),
+                        hooks: None,
+                    }),
+                    clean: None,
+                    publish: None,
+                }),
+                scripts: HashMap::new(),
+                ignore: None,
+                categories: HashMap::new(),
+                use_root_as_package: None,
+                discover_nested_workspaces: None,
+            },
+            packages: vec![app.clone()],
+            sdk_path: None,
+        };
+
+        let result = sync_shared_dependencies(&[app], &ws);
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(pkg_dir.join("pubspec.yaml")).unwrap();
+        assert!(content.contains("http: ^1.0.0"), "http should be updated to ^1.0.0, got:\n{}", content);
+        assert!(content.contains("test: ^2.0.0"), "test should be updated to ^2.0.0, got:\n{}", content);
+        assert!(content.contains("sdk: '>=3.0.0 <4.0.0'"), "sdk should be updated, got:\n{}", content);
+        // intl should remain unchanged
+        assert!(content.contains("intl: ^0.17.0"), "intl should be unchanged, got:\n{}", content);
+    }
+
+    #[test]
+    fn test_sync_shared_dependencies_no_config() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: app\nversion: 1.0.0\ndependencies:\n  http: ^0.13.0\n",
+        ).unwrap();
+
+        let app = Package {
+            name: "app".to_string(),
+            path: pkg_dir.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["http".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+        };
+
+        let ws = make_workspace(None);
+        let result = sync_shared_dependencies(&[app], &ws);
+        assert!(result.is_ok());
+
+        // File should be unchanged
+        let content = std::fs::read_to_string(pkg_dir.join("pubspec.yaml")).unwrap();
+        assert!(content.contains("http: ^0.13.0"));
     }
 }

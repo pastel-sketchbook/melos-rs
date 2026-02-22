@@ -15,7 +15,7 @@ use colored::Colorize;
 /// Note: `run`, `init`, and `completion` are excluded because they are never overridden.
 /// The `bs` alias for `bootstrap` is resolved by clap before reaching our code.
 const OVERRIDABLE_COMMANDS: &[&str] = &[
-    "analyze", "bootstrap", "clean", "exec", "format", "health", "list", "pub", "publish", "version",
+    "analyze", "bootstrap", "clean", "exec", "format", "health", "list", "pub", "publish", "test", "version",
 ];
 
 #[tokio::main]
@@ -120,6 +120,7 @@ async fn main() -> Result<()> {
             Commands::Pub(args) => commands::pub_cmds::run(&workspace, args).await,
             Commands::Publish(args) => commands::publish::run(&workspace, args).await,
             Commands::Run(args) => commands::run::run(&workspace, args).await,
+            Commands::Test(args) => commands::test::run(&workspace, args).await,
             Commands::Version(args) => commands::version::run(&workspace, args).await,
         }
     };
@@ -152,6 +153,7 @@ fn get_overridable_command_name(command: &Commands) -> Option<&'static str> {
         Commands::Pub(_) => "pub",
         Commands::Publish(_) => "publish",
         Commands::Version(_) => "version",
+        Commands::Test(_) => "test",
         // `run`, `init`, `completion` are never overridden
         Commands::Run(_) | Commands::Init(_) | Commands::Completion(_) => return None,
     };

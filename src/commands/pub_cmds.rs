@@ -27,6 +27,9 @@ pub enum PubCommand {
 
     /// Run `dart pub upgrade` in each package
     Upgrade(PubUpgradeArgs),
+
+    /// Run `dart pub downgrade` in each package
+    Downgrade(PubDowngradeArgs),
 }
 
 /// Arguments for `pub get`
@@ -66,12 +69,24 @@ pub struct PubUpgradeArgs {
     pub filters: GlobalFilterArgs,
 }
 
+/// Arguments for `pub downgrade`
+#[derive(Args, Debug)]
+pub struct PubDowngradeArgs {
+    /// Maximum number of concurrent processes
+    #[arg(short = 'c', long, default_value = "5")]
+    pub concurrency: usize,
+
+    #[command(flatten)]
+    pub filters: GlobalFilterArgs,
+}
+
 /// Dispatch to the appropriate pub sub-subcommand
 pub async fn run(workspace: &Workspace, args: PubArgs) -> Result<()> {
     match args.command {
         PubCommand::Get(a) => run_pub_get(workspace, a).await,
         PubCommand::Outdated(a) => run_pub_outdated(workspace, a).await,
         PubCommand::Upgrade(a) => run_pub_upgrade(workspace, a).await,
+        PubCommand::Downgrade(a) => run_pub_downgrade(workspace, a).await,
     }
 }
 
@@ -174,6 +189,35 @@ async fn run_pub_upgrade(workspace: &Workspace, args: PubUpgradeArgs) -> Result<
     println!();
 
     run_pub_in_packages(&packages, subcmd, args.concurrency, &workspace.env_vars(), &workspace.packages).await
+}
+
+/// Run `dart pub downgrade` in each matching package
+async fn run_pub_downgrade(workspace: &Workspace, args: PubDowngradeArgs) -> Result<()> {
+    let filters: PackageFilters = (&args.filters).into();
+    let packages = apply_filters_with_categories(
+        &workspace.packages,
+        &filters,
+        Some(&workspace.root_path),
+        &workspace.config.categories,
+    )?;
+
+    println!(
+        "\n{} Running pub downgrade in {} package(s)...\n",
+        "$".cyan(),
+        packages.len()
+    );
+
+    if packages.is_empty() {
+        println!("{}", "No packages matched the given filters.".yellow());
+        return Ok(());
+    }
+
+    for pkg in &packages {
+        println!("  {} {} ({})", "->".cyan(), pkg.name, pub_cmd(pkg));
+    }
+    println!();
+
+    run_pub_in_packages(&packages, "pub downgrade", args.concurrency, &workspace.env_vars(), &workspace.packages).await
 }
 
 /// Run a `pub` subcommand in each package, using the appropriate SDK (flutter vs dart).

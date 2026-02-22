@@ -7,7 +7,9 @@ use clap::Args;
 use colored::Colorize;
 use semver::{Prerelease, Version};
 
+use crate::config::filter::PackageFilters;
 use crate::config::RepositoryConfig;
+use crate::package::filter::apply_filters_with_categories;
 use crate::package::Package;
 use crate::workspace::Workspace;
 
@@ -96,6 +98,9 @@ pub struct VersionArgs {
     /// Generates prefilled release creation page links for each package.
     #[arg(long, short = 'r')]
     pub release_url: bool,
+
+    #[command(flatten)]
+    pub filters: crate::cli::GlobalFilterArgs,
 }
 
 /// Parse a version override flag like "anmobile:patch"
@@ -976,6 +981,20 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Apply global filters to narrow down which packages are eligible for versioning.
+    // This allows `melos-rs version --scope core_* --all patch` to bump only matching packages.
+    let filters: PackageFilters = (&args.filters).into();
+    let eligible_packages = if filters.is_empty() {
+        workspace.packages.clone()
+    } else {
+        apply_filters_with_categories(
+            &workspace.packages,
+            &filters,
+            Some(&workspace.root_path),
+            &workspace.config.categories,
+        )?
+    };
+
     // Get version command config (if any)
     let version_config = workspace
         .config
@@ -1077,8 +1096,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     // is either a bump type ("patch", "minor") or an explicit version ("1.2.0-dev.0").
     let packages_to_version: Vec<(&Package, String)> = if args.graduate {
         // Graduate mode: strip prerelease suffix from all prerelease packages
-        let graduated: Vec<_> = workspace
-            .packages
+        let graduated: Vec<_> = eligible_packages
             .iter()
             .filter(|p| {
                 let v = p.version.as_deref().unwrap_or("0.0.0");
@@ -1106,8 +1124,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         graduated
     } else if is_coordinated {
         // Coordinated versioning: bump ALL packages to the same version.
-        let highest_current = workspace
-            .packages
+        let highest_current = eligible_packages
             .iter()
             .filter_map(|p| {
                 let v_str = p.version.as_deref().unwrap_or("0.0.0");
@@ -1135,8 +1152,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             explicit.green()
         );
 
-        workspace
-            .packages
+        eligible_packages
             .iter()
             .map(|p| (p, explicit.clone()))
             .collect()
@@ -1145,8 +1161,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         args.overrides
             .iter()
             .filter_map(|(name, bump)| {
-                workspace
-                    .packages
+                eligible_packages
                     .iter()
                     .find(|p| p.name.contains(name))
                     .map(|p| {
@@ -1167,8 +1182,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         let mapped = conventional_commits
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("conventional commits not loaded; this is a bug"))?;
-        workspace
-            .packages
+        eligible_packages
             .iter()
             .filter_map(|p| {
                 let commits = mapped.get(&p.name)?;
@@ -1189,8 +1203,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     } else if args.all {
         // Apply to all packages with the default bump type
         if args.prerelease {
-            workspace
-                .packages
+            eligible_packages
                 .iter()
                 .map(|p| {
                     let current = p.version.as_deref().unwrap_or("0.0.0");
@@ -1201,8 +1214,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                 })
                 .collect()
         } else {
-            workspace
-                .packages
+            eligible_packages
                 .iter()
                 .map(|p| (p, args.bump.clone()))
                 .collect()

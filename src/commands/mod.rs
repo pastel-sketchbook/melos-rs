@@ -9,4 +9,5 @@ pub mod list;
 pub mod pub_cmds;
 pub mod publish;
 pub mod run;
+pub mod test;
 pub mod version;

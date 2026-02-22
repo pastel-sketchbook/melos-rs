@@ -385,6 +385,7 @@ mod tests {
                     ignore: None,
                     categories: Default::default(),
                     use_root_as_package: None,
+                    discover_nested_workspaces: None,
                 },
                 packages: packages.clone(),
                 sdk_path: None,

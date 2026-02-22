@@ -75,6 +75,26 @@ impl Workspace {
 
         let mut packages = package::discover_packages(&root_path, &config.packages)?;
 
+        // Discover packages from nested workspaces if enabled
+        if config.discover_nested_workspaces == Some(true) {
+            let nested = discover_nested_workspace_packages(&root_path, &packages)?;
+            if !nested.is_empty() {
+                let new_count = nested.len();
+                for pkg in nested {
+                    if !packages.iter().any(|p| p.name == pkg.name) {
+                        packages.push(pkg);
+                    }
+                }
+                // Re-sort after adding nested packages
+                packages.sort_by(|a, b| a.name.cmp(&b.name));
+                eprintln!(
+                    "{} Discovered {} package(s) from nested workspaces",
+                    "i".blue(),
+                    new_count
+                );
+            }
+        }
+
         // If useRootAsPackage is enabled, include the workspace root as a package
         if config.use_root_as_package == Some(true) {
             let pubspec_path = root_path.join("pubspec.yaml");
@@ -206,6 +226,85 @@ fn pubspec_has_melos_key(path: &Path) -> bool {
         .is_some_and(|m| m.contains_key(yaml_serde::Value::String("melos".to_string())))
 }
 
+/// Discover packages from nested Dart workspaces.
+///
+/// Scans each already-discovered package's `pubspec.yaml` for a `workspace:` field.
+/// If found, treats it as a nested workspace root and discovers packages from the
+/// listed workspace paths. This is recursive — nested workspaces can themselves
+/// contain nested workspaces.
+fn discover_nested_workspace_packages(
+    _root_path: &Path,
+    existing_packages: &[Package],
+) -> Result<Vec<Package>> {
+    let mut nested_packages = Vec::new();
+    let mut visited_roots = std::collections::HashSet::new();
+
+    // Collect paths from existing packages that might be nested workspace roots
+    let mut candidates: Vec<PathBuf> = existing_packages.iter().map(|p| p.path.clone()).collect();
+
+    while let Some(pkg_path) = candidates.pop() {
+        if visited_roots.contains(&pkg_path) {
+            continue;
+        }
+        visited_roots.insert(pkg_path.clone());
+
+        let pubspec_path = pkg_path.join("pubspec.yaml");
+        if !pubspec_path.exists() {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(&pubspec_path) else {
+            continue;
+        };
+
+        let Ok(value) = yaml_serde::from_str::<yaml_serde::Value>(&content) else {
+            continue;
+        };
+
+        // Check for a `workspace:` field listing nested package paths
+        let workspace_paths = value
+            .as_mapping()
+            .and_then(|m| m.get(yaml_serde::Value::String("workspace".to_string())))
+            .and_then(|v| v.as_sequence());
+
+        let Some(ws_paths) = workspace_paths else {
+            continue;
+        };
+
+        for ws_path_value in ws_paths {
+            let Some(ws_path_str) = ws_path_value.as_str() else {
+                continue;
+            };
+
+            let nested_dir = pkg_path.join(ws_path_str);
+            if !nested_dir.is_dir() {
+                continue;
+            }
+
+            let nested_pubspec = nested_dir.join("pubspec.yaml");
+            if nested_pubspec.exists() {
+                match Package::from_path(&nested_dir) {
+                    Ok(pkg) => {
+                        // Add as a candidate for further nested workspace discovery
+                        candidates.push(pkg.path.clone());
+                        nested_packages.push(pkg);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "  {} Failed to parse nested workspace package at {}: {}",
+                            "WARN".yellow(),
+                            nested_dir.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(nested_packages)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +344,72 @@ mod tests {
 
         let pubspec = ConfigSource::PubspecYaml(PathBuf::from("pubspec.yaml"));
         assert!(!pubspec.is_legacy());
+    }
+
+    #[test]
+    fn test_discover_nested_workspace_packages_finds_nested() {
+        let dir = TempDir::new().unwrap();
+
+        // Create a "host" package with a workspace: field
+        let host_dir = dir.path().join("host_pkg");
+        fs::create_dir_all(&host_dir).unwrap();
+        fs::write(
+            host_dir.join("pubspec.yaml"),
+            "name: host_pkg\nversion: 1.0.0\nworkspace:\n  - sub_a\n  - sub_b\n",
+        )
+        .unwrap();
+
+        // Create nested packages
+        let sub_a = host_dir.join("sub_a");
+        fs::create_dir_all(&sub_a).unwrap();
+        fs::write(sub_a.join("pubspec.yaml"), "name: sub_a\nversion: 0.1.0\n").unwrap();
+
+        let sub_b = host_dir.join("sub_b");
+        fs::create_dir_all(&sub_b).unwrap();
+        fs::write(sub_b.join("pubspec.yaml"), "name: sub_b\nversion: 0.2.0\n").unwrap();
+
+        let host_pkg = Package::from_path(&host_dir).unwrap();
+        let nested = discover_nested_workspace_packages(dir.path(), &[host_pkg]).unwrap();
+
+        assert_eq!(nested.len(), 2);
+        let names: Vec<&str> = nested.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"sub_a"));
+        assert!(names.contains(&"sub_b"));
+    }
+
+    #[test]
+    fn test_discover_nested_workspace_packages_no_workspace_field() {
+        let dir = TempDir::new().unwrap();
+
+        // Create a regular package without workspace: field
+        let pkg_dir = dir.path().join("regular_pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: regular_pkg\nversion: 1.0.0\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        let nested = discover_nested_workspace_packages(dir.path(), &[pkg]).unwrap();
+        assert!(nested.is_empty());
+    }
+
+    #[test]
+    fn test_discover_nested_workspace_packages_missing_nested_dir() {
+        let dir = TempDir::new().unwrap();
+
+        // Create a package with workspace: field pointing to non-existent directory
+        let pkg_dir = dir.path().join("host_pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: host_pkg\nversion: 1.0.0\nworkspace:\n  - nonexistent\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        let nested = discover_nested_workspace_packages(dir.path(), &[pkg]).unwrap();
+        assert!(nested.is_empty());
     }
 }

@@ -335,3 +335,36 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - `test_health_check_no_issues` — `health --version-drift` reports no issues on clean workspace
   - `test_list_with_scope_filter` — `list --scope` correctly filters packages
 - [x] Tests: 14 new integration tests (286 total: 272 unit + 14 integration)
+
+## Batch 21: Melos Parity Features
+
+- [x] `pub downgrade` subcommand
+  - Added `Downgrade(PubDowngradeArgs)` variant to `PubCommand` enum
+  - Added `PubDowngradeArgs` struct with concurrency + filters
+  - Added `run_pub_downgrade()` function following `run_pub_upgrade()` pattern
+  - Wired into `pub` command dispatch
+- [x] `test` command
+  - Created `src/commands/test.rs` with `TestArgs` struct
+  - Supports: `--coverage`, `--fail-fast`, `--test-randomize-ordering-seed`, `--no-run`, `-c` concurrency, extra args via `--`
+  - Filters packages to only those with a `test/` directory
+  - Uses flutter/dart SDK detection per package
+  - Progress bar with `indicatif`
+  - Wired into `cli.rs`, `commands/mod.rs`, `main.rs` (including `OVERRIDABLE_COMMANDS` and `get_overridable_command_name`)
+- [x] Version command filter support
+  - Added `#[command(flatten)] pub filters: GlobalFilterArgs` to `VersionArgs`
+  - Added filtering step at start of `run()` that creates `eligible_packages`
+  - Applied filters to all 5 package-selection branches (graduate, coordinated, overrides, conventional_commits, --all)
+  - Kept `workspace.packages` for dependent constraint updates
+- [x] Bootstrap shared dependencies
+  - Added `environment`, `dependencies`, `dev_dependencies` fields to `BootstrapCommandConfig`
+  - Implemented `sync_shared_dependencies()` — reads each package's pubspec.yaml, updates matching deps to shared version constraints
+  - Uses line-level YAML manipulation (`sync_yaml_section`) to preserve comments and formatting
+  - `yaml_value_to_constraint()` converts shared dep values (string, null) to constraint strings
+  - Integrated into bootstrap flow (runs after enforce_versions, before pub get)
+- [x] `discoverNestedWorkspaces` config option
+  - Added `discover_nested_workspaces: Option<bool>` to `MelosConfig` and `MelosSection`
+  - Implemented `discover_nested_workspace_packages()` — scans packages with `workspace:` field in pubspec.yaml
+  - Recursively discovers packages from nested workspace paths
+  - Deduplicates by name, re-sorts after adding nested packages
+  - Wired into `Workspace::find_and_load()` after initial discovery
+- [x] Tests: 18 new unit tests (304 total: 290 unit + 14 integration)
