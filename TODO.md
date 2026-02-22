@@ -25,7 +25,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] `--depends-on=<pkg>` filter (multiple allowed)
 - [x] `--no-depends-on=<pkg>` filter (multiple allowed)
 - [x] `--no-private` filter (exclude publish_to: none packages)
-- [x] `--category=<cat>` flag (parsed, not yet applied - needs melos.yaml categories config)
+- [x] `--category=<cat>` flag (resolved via `apply_filters_with_categories()` using `MelosConfig.categories`)
 - [x] `--include-dependencies` transitive dependency expansion
 - [x] `--include-dependents` transitive dependent expansion
 - [x] `PackageFilters::merge()` for combining CLI + script-level filters
@@ -40,7 +40,7 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Global filters (`--scope`, `--ignore`, `--depends-on`, etc.) via flattened GlobalFilterArgs
 - [x] Per-package env vars injected during exec (MELOS_PACKAGE_NAME, VERSION, PATH)
 - [x] Colored per-package output prefixing (10 rotating colors)
-- [ ] `--no-select` flag (skip package selection prompt)
+- [ ] `--order-dependents` flag (topological sort for dependency-ordered execution)
 
 ### `run` Command
 - [x] Basic run: execute named scripts from config
@@ -124,15 +124,17 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 
 ### Script Execution Engine
 - [ ] Full `melos exec` flag parsing when invoked from `run` command
+- [x] Script-level `env` field support (merged into run command environment)
 - [ ] Recursive `melos run X` expansion (handle nested script references)
 - [ ] Timeout support for long-running commands
 - [ ] Dry-run mode (`--dry-run`)
 
 ### Package Management
-- [ ] Topological sort for dependency-ordered execution
-- [ ] Circular dependency detection
+- [x] Topological sort for dependency-ordered execution (Kahn's algorithm, not yet wired to commands)
+- [x] Circular dependency detection (`list --cycles`)
+- [x] Category-based package filtering (`categories` config field)
 - [ ] `pub:get`, `pub:outdated`, `pub:upgrade` built-in commands
-- [ ] Workspace-level pubspec overrides
+- [ ] Workspace-level pubspec overrides (pubspec_overrides.yaml for local linking)
 
 ### Build Commands (from melos.yaml scripts)
 - [ ] `build:android` / `build:ios` wrapper commands

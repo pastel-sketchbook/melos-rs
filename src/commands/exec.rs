@@ -4,7 +4,7 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters_with_categories;
+use crate::package::filter::{apply_filters_with_categories, topological_sort};
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
 
@@ -23,6 +23,10 @@ pub struct ExecArgs {
     #[arg(long)]
     pub fail_fast: bool,
 
+    /// Execute packages in dependency order (topological sort)
+    #[arg(long)]
+    pub order_dependents: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -38,11 +42,20 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
 
     // Apply filters from CLI flags
     let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
+    let mut packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
 
     if packages.is_empty() {
         println!("{}", "No packages matched the given filters.".yellow());
         return Ok(());
+    }
+
+    // Apply topological sort if requested
+    if args.order_dependents {
+        packages = topological_sort(&packages);
+        println!(
+            "{} Packages ordered by dependencies (topological sort)\n",
+            "i".blue()
+        );
     }
 
     println!(

@@ -180,7 +180,6 @@ fn resolve_category_packages(
 ///
 /// Uses Kahn's algorithm. If there are cycles, the cyclic packages are appended
 /// at the end (not silently dropped).
-#[allow(dead_code)]
 pub fn topological_sort(packages: &[Package]) -> Vec<Package> {
     let known: HashSet<&str> = packages.iter().map(|p| p.name.as_str()).collect();
     let pkg_map: HashMap<&str, &Package> = packages.iter().map(|p| (p.name.as_str(), p)).collect();

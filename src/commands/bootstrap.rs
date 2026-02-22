@@ -4,17 +4,20 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::cli::BootstrapArgs;
 use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters_with_categories;
+use crate::package::filter::{apply_filters_with_categories, topological_sort};
 use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
 
 /// Bootstrap the workspace: run `flutter pub get` / `dart pub get` in each package
 pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     let filters: PackageFilters = (&args.filters).into();
-    let packages = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
+    let filtered = apply_filters_with_categories(&workspace.packages, &filters, Some(&workspace.root_path), &workspace.config.categories)?;
+
+    // Topological sort ensures dependencies are bootstrapped before dependents
+    let packages = topological_sort(&filtered);
 
     println!(
-        "\n{} Bootstrapping {} packages (concurrency: {})...\n",
+        "\n{} Bootstrapping {} packages (concurrency: {}, dependency order)...\n",
         "$".cyan(),
         packages.len(),
         args.concurrency
