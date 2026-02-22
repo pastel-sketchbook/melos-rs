@@ -532,7 +532,7 @@ async fn run_exec_config_script(
 
     let runner = ProcessRunner::new(concurrency, fail_fast);
     let results = runner
-        .run_in_packages(&packages, &substituted, env_vars, None)
+        .run_in_packages(&packages, &substituted, env_vars, None, &workspace.packages)
         .await?;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
@@ -676,7 +676,7 @@ async fn run_exec_script(
 
     let runner = ProcessRunner::new(flags.concurrency, flags.fail_fast);
     let results = runner
-        .run_in_packages(&packages, &actual_cmd, env_vars, flags.timeout)
+        .run_in_packages(&packages, &actual_cmd, env_vars, flags.timeout, &workspace.packages)
         .await?;
 
     let failed = results.iter().filter(|(_, success)| !success).count();

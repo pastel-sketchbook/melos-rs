@@ -48,6 +48,13 @@ pub struct MelosConfig {
     /// Category definitions: category_name -> list of package name glob patterns
     #[serde(default)]
     pub categories: HashMap<String, Vec<String>>,
+
+    /// When true, include the workspace root directory as a package.
+    ///
+    /// The root must contain a `pubspec.yaml`. Useful for workspaces where the
+    /// root is itself a publishable Dart/Flutter package.
+    #[serde(default)]
+    pub use_root_as_package: Option<bool>,
 }
 
 impl MelosConfig {
@@ -675,6 +682,18 @@ pub struct BootstrapCommandConfig {
     #[serde(default)]
     pub enforce_lockfile: Option<bool>,
 
+    /// Pass --offline to pub get when true
+    #[serde(default)]
+    pub run_pub_get_offline: Option<bool>,
+
+    /// Additional paths to include as dependency overrides in pubspec_overrides.yaml.
+    ///
+    /// Each path is resolved relative to the workspace root and scanned for
+    /// packages whose names match workspace dependencies. Matched packages are
+    /// added as `dependency_overrides` entries alongside sibling packages.
+    #[serde(default)]
+    pub dependency_override_paths: Option<Vec<String>>,
+
     /// Lifecycle hooks (pre/post)
     #[serde(default)]
     pub hooks: Option<BootstrapHooks>,
@@ -798,9 +817,11 @@ struct MelosSection {
     /// Category definitions
     #[serde(default)]
     categories: HashMap<String, Vec<String>>,
-}
 
-/// Parse workspace config from the given config source.
+    /// When true, include the workspace root directory as a package.
+    #[serde(default)]
+    use_root_as_package: Option<bool>,
+}
 ///
 /// - **6.x (`melos.yaml`)**: Direct deserialization to `MelosConfig`.
 /// - **7.x (`pubspec.yaml`)**: Deserialize wrapper, then assemble `MelosConfig`
@@ -854,6 +875,7 @@ pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
                 scripts: wrapper.melos.scripts,
                 ignore: wrapper.melos.ignore,
                 categories: wrapper.melos.categories,
+                use_root_as_package: wrapper.melos.use_root_as_package,
             })
         }
     }
@@ -1084,6 +1106,7 @@ melos:
             scripts: HashMap::new(),
             ignore: None,
             categories: HashMap::new(),
+            use_root_as_package: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1106,6 +1129,7 @@ melos:
             scripts,
             ignore: None,
             categories: HashMap::new(),
+            use_root_as_package: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1128,6 +1152,7 @@ melos:
             scripts,
             ignore: None,
             categories: HashMap::new(),
+            use_root_as_package: None,
         };
         let warnings = config.validate();
         assert!(warnings.is_empty());
@@ -1149,6 +1174,7 @@ melos:
             scripts,
             ignore: None,
             categories: HashMap::new(),
+            use_root_as_package: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1183,6 +1209,7 @@ melos:
             scripts,
             ignore: None,
             categories: HashMap::new(),
+            use_root_as_package: None,
         };
         let warnings = config.validate();
         assert_eq!(warnings.len(), 1);
@@ -1470,6 +1497,7 @@ scripts:
             scripts,
             ignore: None,
             categories: HashMap::new(),
+            use_root_as_package: None,
         };
         let warnings = config.validate();
         assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
@@ -1501,6 +1529,7 @@ scripts:
             scripts,
             ignore: None,
             categories: HashMap::new(),
+            use_root_as_package: None,
         };
         let warnings = config.validate();
         assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);

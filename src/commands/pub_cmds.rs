@@ -6,7 +6,7 @@ use crate::cli::GlobalFilterArgs;
 use crate::config::filter::PackageFilters;
 use crate::package::Package;
 use crate::package::filter::apply_filters_with_categories;
-use crate::runner::ProcessRunner;
+use crate::runner::{ProcessRunner, create_progress_bar};
 use crate::workspace::Workspace;
 
 /// Arguments for the `pub` command
@@ -107,7 +107,7 @@ async fn run_pub_get(workspace: &Workspace, args: PubGetArgs) -> Result<()> {
     println!();
 
     // Run each package with its appropriate command (flutter vs dart)
-    run_pub_in_packages(&packages, "pub get", args.concurrency, &workspace.env_vars()).await
+    run_pub_in_packages(&packages, "pub get", args.concurrency, &workspace.env_vars(), &workspace.packages).await
 }
 
 /// Run `dart pub outdated` in each matching package
@@ -137,7 +137,7 @@ async fn run_pub_outdated(workspace: &Workspace, args: PubOutdatedArgs) -> Resul
     println!();
 
     // pub outdated is informational — don't fail on non-zero exit (outdated deps are expected)
-    run_pub_in_packages(&packages, "pub outdated", args.concurrency, &workspace.env_vars()).await
+    run_pub_in_packages(&packages, "pub outdated", args.concurrency, &workspace.env_vars(), &workspace.packages).await
 }
 
 /// Run `dart pub upgrade` in each matching package
@@ -173,7 +173,7 @@ async fn run_pub_upgrade(workspace: &Workspace, args: PubUpgradeArgs) -> Result<
     }
     println!();
 
-    run_pub_in_packages(&packages, subcmd, args.concurrency, &workspace.env_vars()).await
+    run_pub_in_packages(&packages, subcmd, args.concurrency, &workspace.env_vars(), &workspace.packages).await
 }
 
 /// Run a `pub` subcommand in each package, using the appropriate SDK (flutter vs dart).
@@ -185,27 +185,33 @@ async fn run_pub_in_packages(
     pub_subcmd: &str,
     concurrency: usize,
     env_vars: &std::collections::HashMap<String, String>,
+    all_packages: &[Package],
 ) -> Result<()> {
     // Group packages by SDK to batch them efficiently
     let flutter_pkgs: Vec<&Package> = packages.iter().filter(|p| p.is_flutter).collect();
     let dart_pkgs: Vec<&Package> = packages.iter().filter(|p| !p.is_flutter).collect();
 
+    let pb = create_progress_bar(packages.len() as u64, pub_subcmd);
     let runner = ProcessRunner::new(concurrency, false);
     let mut all_results = Vec::new();
 
     if !flutter_pkgs.is_empty() {
         let cmd = format!("flutter {}", pub_subcmd);
         let pkgs: Vec<Package> = flutter_pkgs.into_iter().cloned().collect();
-        let results = runner.run_in_packages(&pkgs, &cmd, env_vars, None).await?;
+        pb.set_message(format!("flutter {}...", pub_subcmd));
+        let results = runner.run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages).await?;
         all_results.extend(results);
     }
 
     if !dart_pkgs.is_empty() {
         let cmd = format!("dart {}", pub_subcmd);
         let pkgs: Vec<Package> = dart_pkgs.into_iter().cloned().collect();
-        let results = runner.run_in_packages(&pkgs, &cmd, env_vars, None).await?;
+        pb.set_message(format!("dart {}...", pub_subcmd));
+        let results = runner.run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages).await?;
         all_results.extend(results);
     }
+
+    pb.finish_and_clear();
 
     let failed = all_results.iter().filter(|(_, success)| !success).count();
     if failed > 0 {

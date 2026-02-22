@@ -286,3 +286,24 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - Works with all script modes: steps, exec config, and shell commands
 - [x] `PackageFilters::is_empty()` helper for detecting unfiltered state
 - [x] Tests: 29 new tests (watcher unit tests, integration tests, CLI flag parsing, filter tests)
+
+## Batch 19: Melos Config Parity
+
+- [x] Parent package environment variables for example packages
+  - Added `find_parent_package()` in runner that finds the deepest parent package containing an example
+  - `build_package_env()` now accepts `all_packages` and sets `MELOS_PARENT_PACKAGE_NAME`, `MELOS_PARENT_PACKAGE_VERSION`, `MELOS_PARENT_PACKAGE_PATH`
+  - Updated `run_in_packages()` and `run_in_packages_with_progress()` signatures across all 12 call sites
+- [x] `dependencyOverridePaths` bootstrap config
+  - Added `dependency_override_paths: Option<Vec<String>>` to `BootstrapCommandConfig`
+  - `generate_pubspec_overrides()` scans override paths for packages (single dir or immediate subdirs)
+  - Adds discovered packages as `dependency_overrides` entries alongside workspace siblings
+- [x] Progress bars for pub commands (`pub get`/`pub upgrade`/`pub downgrade`)
+  - Updated `run_pub_in_packages()` to use `create_progress_bar` and `run_in_packages_with_progress`
+- [x] `runPubGetOffline` bootstrap config
+  - Added `run_pub_get_offline: Option<bool>` to `BootstrapCommandConfig`
+  - Wired into bootstrap: `let offline = args.offline || config_run_pub_get_offline(workspace);`
+- [x] `useRootAsPackage` config
+  - Added `use_root_as_package: Option<bool>` to `MelosConfig` and `MelosSection`
+  - Wired into `Workspace::find_and_load()` — includes root dir as a package via `Package::from_path()`
+  - Propagated from `MelosSection` in the `from_pubspec_yaml` constructor
+- [x] Tests: 17 new tests (parent env vars, dependency override paths, offline config, override path helpers)

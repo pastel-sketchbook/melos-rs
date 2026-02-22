@@ -89,6 +89,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
                 &workspace.env_vars(),
                 None,
                 Some(&pb),
+                &workspace.packages,
             )
             .await?;
 

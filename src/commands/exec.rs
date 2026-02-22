@@ -135,7 +135,7 @@ async fn run_exec_once(
     let pb = create_progress_bar(packages.len() as u64, "exec");
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let results = runner
-        .run_in_packages_with_progress(packages, cmd_str, &workspace.env_vars(), timeout, Some(&pb))
+        .run_in_packages_with_progress(packages, cmd_str, &workspace.env_vars(), timeout, Some(&pb), &workspace.packages)
         .await?;
     pb.finish_and_clear();
 
@@ -230,7 +230,7 @@ async fn run_watch_loop(
         let pb = create_progress_bar(affected.len() as u64, "exec");
         let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
         let results = runner
-            .run_in_packages_with_progress(&affected, cmd_str, &workspace.env_vars(), timeout, Some(&pb))
+            .run_in_packages_with_progress(&affected, cmd_str, &workspace.env_vars(), timeout, Some(&pb), &workspace.packages)
             .await;
         pb.finish_and_clear();
 

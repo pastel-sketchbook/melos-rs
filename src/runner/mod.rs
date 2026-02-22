@@ -58,10 +58,14 @@ impl ProcessRunner {
     /// Run a command in each package directory, respecting concurrency limits.
     ///
     /// Per-package env vars (MELOS_PACKAGE_NAME, MELOS_PACKAGE_VERSION,
-    /// MELOS_PACKAGE_PATH) are automatically injected alongside workspace env vars.
+    /// MELOS_PACKAGE_PATH, and MELOS_PARENT_PACKAGE_*) are automatically
+    /// injected alongside workspace env vars.
     /// Each package gets colored output prefixing to distinguish concurrent output.
     ///
     /// If `timeout` is `Some(duration)`, each command is killed after the duration elapses.
+    ///
+    /// `all_packages` is the full workspace package list, used for parent package detection.
+    /// If empty, parent package env vars are not set.
     ///
     /// Returns a vec of (package_name, success) results.
     pub async fn run_in_packages(
@@ -70,8 +74,9 @@ impl ProcessRunner {
         command: &str,
         env_vars: &HashMap<String, String>,
         timeout: Option<Duration>,
+        all_packages: &[Package],
     ) -> Result<Vec<(String, bool)>> {
-        self.run_in_packages_with_progress(packages, command, env_vars, timeout, None)
+        self.run_in_packages_with_progress(packages, command, env_vars, timeout, None, all_packages)
             .await
     }
 
@@ -84,6 +89,7 @@ impl ProcessRunner {
         env_vars: &HashMap<String, String>,
         timeout: Option<Duration>,
         progress: Option<&ProgressBar>,
+        all_packages: &[Package],
     ) -> Result<Vec<(String, bool)>> {
         let semaphore = std::sync::Arc::new(Semaphore::new(self.concurrency));
         let results = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
@@ -107,7 +113,7 @@ impl ProcessRunner {
             let color = PKG_COLORS[idx % PKG_COLORS.len()];
 
             // Build per-package env vars merged with workspace vars
-            let env = build_package_env(env_vars, pkg);
+            let env = build_package_env(env_vars, pkg, all_packages);
             let pb = progress.cloned();
 
             let handle = tokio::spawn(async move {
@@ -196,9 +202,14 @@ impl ProcessRunner {
 
 /// Build environment variables for a specific package, merging workspace-level
 /// vars with per-package Melos env vars.
+///
+/// Also sets `MELOS_PARENT_PACKAGE_*` vars when the package is an "example"
+/// child of another workspace package (name ends with `example` and its path
+/// is a subdirectory of the parent's path).
 fn build_package_env(
     workspace_env: &HashMap<String, String>,
     pkg: &Package,
+    all_packages: &[Package],
 ) -> HashMap<String, String> {
     let mut env = workspace_env.clone();
     env.insert("MELOS_PACKAGE_NAME".to_string(), pkg.name.clone());
@@ -209,5 +220,194 @@ fn build_package_env(
     if let Some(ref version) = pkg.version {
         env.insert("MELOS_PACKAGE_VERSION".to_string(), version.clone());
     }
+
+    // Detect parent package: if the current package name ends with "example"
+    // and its directory is a child of another package's directory, set parent env vars.
+    if let Some(parent) = find_parent_package(pkg, all_packages) {
+        env.insert(
+            "MELOS_PARENT_PACKAGE_NAME".to_string(),
+            parent.name.clone(),
+        );
+        env.insert(
+            "MELOS_PARENT_PACKAGE_PATH".to_string(),
+            parent.path.display().to_string(),
+        );
+        if let Some(ref version) = parent.version {
+            env.insert(
+                "MELOS_PARENT_PACKAGE_VERSION".to_string(),
+                version.clone(),
+            );
+        }
+    }
+
     env
+}
+
+/// Find the parent package for an example package.
+///
+/// A package is considered a child if:
+/// 1. Its name ends with `example` (e.g., `my_pkg_example` or just `example`)
+/// 2. Its path is a subdirectory of another workspace package's path
+///
+/// If multiple candidates match, the one with the longest (deepest) path wins.
+fn find_parent_package<'a>(pkg: &Package, all_packages: &'a [Package]) -> Option<&'a Package> {
+    if !pkg.name.ends_with("example") {
+        return None;
+    }
+
+    let mut best: Option<&'a Package> = None;
+
+    for candidate in all_packages {
+        // Don't match ourselves
+        if candidate.name == pkg.name {
+            continue;
+        }
+
+        // Check if pkg's path is under candidate's path
+        if pkg.path.starts_with(&candidate.path) {
+            match best {
+                None => best = Some(candidate),
+                Some(current_best) => {
+                    // Pick the deepest (most specific) parent
+                    if candidate.path.as_os_str().len() > current_best.path.as_os_str().len() {
+                        best = Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    best
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn make_pkg(name: &str, path: &str) -> Package {
+        Package {
+            name: name.to_string(),
+            path: PathBuf::from(path),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+        }
+    }
+
+    // ── find_parent_package tests ──────────────────────────────────────
+
+    #[test]
+    fn test_find_parent_package_example_child() {
+        let parent = make_pkg("my_lib", "/workspace/packages/my_lib");
+        let child = make_pkg("my_lib_example", "/workspace/packages/my_lib/example");
+        let all = vec![parent.clone(), child.clone()];
+
+        let result = find_parent_package(&child, &all);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "my_lib");
+    }
+
+    #[test]
+    fn test_find_parent_package_bare_example() {
+        let parent = make_pkg("my_lib", "/workspace/packages/my_lib");
+        let child = make_pkg("example", "/workspace/packages/my_lib/example");
+        let all = vec![parent.clone(), child.clone()];
+
+        let result = find_parent_package(&child, &all);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "my_lib");
+    }
+
+    #[test]
+    fn test_find_parent_package_not_example() {
+        let pkg = make_pkg("my_lib", "/workspace/packages/my_lib");
+        let other = make_pkg("core", "/workspace/packages/core");
+        let all = vec![pkg.clone(), other.clone()];
+
+        assert!(find_parent_package(&pkg, &all).is_none());
+    }
+
+    #[test]
+    fn test_find_parent_package_deepest_wins() {
+        let root = make_pkg("app", "/workspace/packages/app");
+        let inner = make_pkg("app_feature", "/workspace/packages/app/feature");
+        let child = make_pkg("app_feature_example", "/workspace/packages/app/feature/example");
+        let all = vec![root.clone(), inner.clone(), child.clone()];
+
+        let result = find_parent_package(&child, &all);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "app_feature");
+    }
+
+    #[test]
+    fn test_find_parent_package_no_match_when_not_under_parent_path() {
+        let parent = make_pkg("my_lib", "/workspace/packages/my_lib");
+        let child = make_pkg("other_example", "/workspace/packages/other/example");
+        let all = vec![parent.clone(), child.clone()];
+
+        // child name ends with "example" but its path is NOT under my_lib's path
+        assert!(find_parent_package(&child, &all).is_none());
+    }
+
+    #[test]
+    fn test_find_parent_package_empty_packages() {
+        let child = make_pkg("example", "/workspace/packages/example");
+        assert!(find_parent_package(&child, &[]).is_none());
+    }
+
+    // ── build_package_env tests ────────────────────────────────────────
+
+    #[test]
+    fn test_build_package_env_basic() {
+        let mut ws_env = HashMap::new();
+        ws_env.insert("MELOS_ROOT_PATH".to_string(), "/workspace".to_string());
+
+        let pkg = make_pkg("core", "/workspace/packages/core");
+        let env = build_package_env(&ws_env, &pkg, &[]);
+
+        assert_eq!(env.get("MELOS_PACKAGE_NAME").unwrap(), "core");
+        assert_eq!(env.get("MELOS_PACKAGE_PATH").unwrap(), "/workspace/packages/core");
+        assert_eq!(env.get("MELOS_PACKAGE_VERSION").unwrap(), "1.0.0");
+        assert_eq!(env.get("MELOS_ROOT_PATH").unwrap(), "/workspace");
+        // No parent env vars
+        assert!(env.get("MELOS_PARENT_PACKAGE_NAME").is_none());
+    }
+
+    #[test]
+    fn test_build_package_env_with_parent() {
+        let ws_env = HashMap::new();
+        let parent = make_pkg("my_lib", "/workspace/packages/my_lib");
+        let child = make_pkg("my_lib_example", "/workspace/packages/my_lib/example");
+        let all = vec![parent.clone(), child.clone()];
+
+        let env = build_package_env(&ws_env, &child, &all);
+
+        assert_eq!(env.get("MELOS_PARENT_PACKAGE_NAME").unwrap(), "my_lib");
+        assert_eq!(env.get("MELOS_PARENT_PACKAGE_PATH").unwrap(), "/workspace/packages/my_lib");
+        assert_eq!(env.get("MELOS_PARENT_PACKAGE_VERSION").unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn test_build_package_env_no_parent_for_non_example() {
+        let ws_env = HashMap::new();
+        let pkg = make_pkg("core", "/workspace/packages/core");
+        let all = vec![pkg.clone()];
+
+        let env = build_package_env(&ws_env, &pkg, &all);
+        assert!(env.get("MELOS_PARENT_PACKAGE_NAME").is_none());
+    }
+
+    #[test]
+    fn test_build_package_env_no_version() {
+        let ws_env = HashMap::new();
+        let mut pkg = make_pkg("core", "/workspace/packages/core");
+        pkg.version = None;
+
+        let env = build_package_env(&ws_env, &pkg, &[]);
+        assert!(env.get("MELOS_PACKAGE_VERSION").is_none());
+    }
 }

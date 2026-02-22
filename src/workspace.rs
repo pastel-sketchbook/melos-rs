@@ -75,6 +75,33 @@ impl Workspace {
 
         let mut packages = package::discover_packages(&root_path, &config.packages)?;
 
+        // If useRootAsPackage is enabled, include the workspace root as a package
+        if config.use_root_as_package == Some(true) {
+            let pubspec_path = root_path.join("pubspec.yaml");
+            if pubspec_path.exists() {
+                match Package::from_path(&root_path) {
+                    Ok(root_pkg) => {
+                        // Only add if not already discovered (avoid duplicates)
+                        if !packages.iter().any(|p| p.path == root_path) {
+                            packages.push(root_pkg);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "{} useRootAsPackage is enabled but root pubspec.yaml could not be parsed: {}",
+                            "WARNING:".yellow().bold(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                eprintln!(
+                    "{} useRootAsPackage is enabled but no pubspec.yaml found at workspace root",
+                    "WARNING:".yellow().bold(),
+                );
+            }
+        }
+
         // Apply top-level ignore patterns (global exclusion before any command-level filters)
         if let Some(ref ignore_patterns) = config.ignore {
             packages.retain(|pkg| {

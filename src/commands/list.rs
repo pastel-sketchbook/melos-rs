@@ -384,6 +384,7 @@ mod tests {
                     scripts: Default::default(),
                     ignore: None,
                     categories: Default::default(),
+                    use_root_as_package: None,
                 },
                 packages: packages.clone(),
                 sdk_path: None,

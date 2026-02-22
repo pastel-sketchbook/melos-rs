@@ -75,7 +75,7 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
     let pb = create_progress_bar(packages.len() as u64, "formatting");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), None, Some(&pb))
+        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), None, Some(&pb), &workspace.packages)
         .await?;
     pb.finish_and_clear();
 

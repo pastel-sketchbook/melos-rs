@@ -36,6 +36,9 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         args.enforce_lockfile || config_enforce_lockfile(workspace)
     };
 
+    // CLI --offline overrides config runPubGetOffline
+    let offline = args.offline || config_run_pub_get_offline(workspace);
+
     println!(
         "\n{} Bootstrapping {} packages (concurrency: {}, dependency order)...\n",
         "$".cyan(),
@@ -59,7 +62,8 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 
     // In 6.x mode, generate pubspec_overrides.yaml for local package linking
     if workspace.config_source.is_legacy() {
-        generate_pubspec_overrides(&packages, &workspace.packages)?;
+        let override_paths = config_dependency_override_paths(workspace);
+        generate_pubspec_overrides(&packages, &workspace.packages, &override_paths, &workspace.root_path)?;
     }
 
     // Validate version constraints if configured
@@ -68,8 +72,8 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     }
 
     // Build the pub get command with extra flags
-    let flutter_cmd = build_pub_get_command("flutter", enforce_lockfile, args.no_example, args.offline);
-    let dart_cmd = build_pub_get_command("dart", enforce_lockfile, args.no_example, args.offline);
+    let flutter_cmd = build_pub_get_command("flutter", enforce_lockfile, args.no_example, offline);
+    let dart_cmd = build_pub_get_command("dart", enforce_lockfile, args.no_example, offline);
 
     let flutter_packages: Vec<_> = packages.iter().filter(|p| p.is_flutter).cloned().collect();
     let dart_packages: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
@@ -87,6 +91,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
                 &flutter_cmd,
                 &workspace.env_vars(),
                 None,
+                &workspace.packages,
             )
             .await?;
 
@@ -104,7 +109,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         pb.set_message("dart pub get...");
         let runner = ProcessRunner::new(concurrency, true);
         let results = runner
-            .run_in_packages(&dart_packages, &dart_cmd, &workspace.env_vars(), None)
+            .run_in_packages(&dart_packages, &dart_cmd, &workspace.env_vars(), None, &workspace.packages)
             .await?;
 
         for (name, success) in &results {
@@ -152,6 +157,28 @@ fn config_enforce_lockfile(workspace: &Workspace) -> bool {
         .and_then(|c| c.bootstrap.as_ref())
         .and_then(|b| b.enforce_lockfile)
         .unwrap_or(false)
+}
+
+/// Check if `run_pub_get_offline` is set in bootstrap config.
+fn config_run_pub_get_offline(workspace: &Workspace) -> bool {
+    workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref())
+        .and_then(|b| b.run_pub_get_offline)
+        .unwrap_or(false)
+}
+
+/// Get `dependencyOverridePaths` from bootstrap config, if set.
+fn config_dependency_override_paths(workspace: &Workspace) -> Vec<String> {
+    workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.bootstrap.as_ref())
+        .and_then(|b| b.dependency_override_paths.clone())
+        .unwrap_or_default()
 }
 
 /// Check if `enforce_versions_for_dependency_resolution` is set in bootstrap config.
@@ -305,10 +332,64 @@ async fn run_hook(workspace: &Workspace, phase: HookPhase) -> Result<()> {
 /// `pubspec_overrides.yaml` with `dependency_overrides:` entries pointing to
 /// the sibling package via a relative path.
 ///
+/// If `dependency_override_paths` is non-empty, packages discovered in those
+/// directories are also used as override sources (for deps that match by name).
+///
 /// This allows `pub get` to resolve workspace packages locally without
 /// modifying the actual `pubspec.yaml`.
-fn generate_pubspec_overrides(packages: &[Package], all_workspace_packages: &[Package]) -> Result<()> {
-    let workspace_names: HashSet<&str> = all_workspace_packages
+fn generate_pubspec_overrides(
+    packages: &[Package],
+    all_workspace_packages: &[Package],
+    dependency_override_paths: &[String],
+    workspace_root: &Path,
+) -> Result<()> {
+    // Discover extra packages from dependencyOverridePaths
+    let mut extra_packages = Vec::new();
+    for override_path_str in dependency_override_paths {
+        let override_dir = workspace_root.join(override_path_str);
+        if !override_dir.exists() {
+            eprintln!(
+                "  {} dependencyOverridePaths: '{}' does not exist, skipping",
+                "WARN".yellow(),
+                override_path_str
+            );
+            continue;
+        }
+        // Try to parse as a single package directory
+        match Package::from_path(&override_dir) {
+            Ok(pkg) => {
+                extra_packages.push(pkg);
+            }
+            Err(_) => {
+                // Not a package — try scanning immediate subdirectories
+                if let Ok(entries) = std::fs::read_dir(&override_dir) {
+                    for entry in entries.flatten() {
+                        if entry.file_type().is_ok_and(|ft| ft.is_dir())
+                            && let Ok(pkg) = Package::from_path(&entry.path())
+                        {
+                            extra_packages.push(pkg);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !extra_packages.is_empty() {
+        println!(
+            "  {} Found {} extra package(s) from dependencyOverridePaths",
+            "i".blue(),
+            extra_packages.len()
+        );
+    }
+
+    // Build a combined set of all override sources
+    let all_override_sources: Vec<&Package> = all_workspace_packages
+        .iter()
+        .chain(extra_packages.iter())
+        .collect();
+
+    let override_names: HashSet<&str> = all_override_sources
         .iter()
         .map(|p| p.name.as_str())
         .collect();
@@ -316,13 +397,13 @@ fn generate_pubspec_overrides(packages: &[Package], all_workspace_packages: &[Pa
     let mut generated = 0u32;
 
     for pkg in packages {
-        // Find all dependencies (regular + dev) that are workspace packages
+        // Find all dependencies (regular + dev) that match override sources
         let local_deps: Vec<&Package> = pkg
             .dependencies
             .iter()
             .chain(pkg.dev_dependencies.iter())
-            .filter(|dep| workspace_names.contains(dep.as_str()))
-            .filter_map(|dep| all_workspace_packages.iter().find(|p| p.name == *dep))
+            .filter(|dep| override_names.contains(dep.as_str()))
+            .filter_map(|dep| all_override_sources.iter().find(|p| p.name == **dep).copied())
             .collect();
 
         let override_path = pkg.path.join("pubspec_overrides.yaml");
@@ -441,6 +522,7 @@ mod tests {
                 scripts: HashMap::new(),
                 ignore: None,
                 categories: HashMap::new(),
+                use_root_as_package: None,
             },
             packages: vec![],
             sdk_path: None,
@@ -491,6 +573,8 @@ mod tests {
             run_pub_get_in_parallel: Some(false),
             enforce_versions_for_dependency_resolution: None,
             enforce_lockfile: None,
+            run_pub_get_offline: None,
+            dependency_override_paths: None,
             hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 5), 1);
@@ -502,6 +586,8 @@ mod tests {
             run_pub_get_in_parallel: Some(true),
             enforce_versions_for_dependency_resolution: None,
             enforce_lockfile: None,
+            run_pub_get_offline: None,
+            dependency_override_paths: None,
             hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 8), 8);
@@ -513,6 +599,8 @@ mod tests {
             run_pub_get_in_parallel: None,
             enforce_versions_for_dependency_resolution: None,
             enforce_lockfile: None,
+            run_pub_get_offline: None,
+            dependency_override_paths: None,
             hooks: None,
         }));
         assert_eq!(effective_concurrency(&ws, 3), 3);
@@ -562,6 +650,8 @@ mod tests {
             run_pub_get_in_parallel: None,
             enforce_versions_for_dependency_resolution: None,
             enforce_lockfile: Some(true),
+            run_pub_get_offline: None,
+            dependency_override_paths: None,
             hooks: None,
         }));
         assert!(config_enforce_lockfile(&ws));
@@ -573,6 +663,8 @@ mod tests {
             run_pub_get_in_parallel: None,
             enforce_versions_for_dependency_resolution: None,
             enforce_lockfile: Some(false),
+            run_pub_get_offline: None,
+            dependency_override_paths: None,
             hooks: None,
         }));
         assert!(!config_enforce_lockfile(&ws));
@@ -652,8 +744,152 @@ mod tests {
             run_pub_get_in_parallel: None,
             enforce_versions_for_dependency_resolution: Some(true),
             enforce_lockfile: None,
+            run_pub_get_offline: None,
+            dependency_override_paths: None,
             hooks: None,
         }));
         assert!(config_enforce_versions(&ws));
+    }
+
+    // -----------------------------------------------------------------------
+    // runPubGetOffline config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_config_run_pub_get_offline_true() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: None,
+            enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: None,
+            run_pub_get_offline: Some(true),
+            dependency_override_paths: None,
+            hooks: None,
+        }));
+        assert!(config_run_pub_get_offline(&ws));
+    }
+
+    #[test]
+    fn test_config_run_pub_get_offline_false() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: None,
+            enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: None,
+            run_pub_get_offline: Some(false),
+            dependency_override_paths: None,
+            hooks: None,
+        }));
+        assert!(!config_run_pub_get_offline(&ws));
+    }
+
+    #[test]
+    fn test_config_run_pub_get_offline_none() {
+        let ws = make_workspace(None);
+        assert!(!config_run_pub_get_offline(&ws));
+    }
+
+    // -----------------------------------------------------------------------
+    // dependencyOverridePaths config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_config_dependency_override_paths_some() {
+        let ws = make_workspace(Some(BootstrapCommandConfig {
+            run_pub_get_in_parallel: None,
+            enforce_versions_for_dependency_resolution: None,
+            enforce_lockfile: None,
+            run_pub_get_offline: None,
+            dependency_override_paths: Some(vec!["../external".to_string(), "../other".to_string()]),
+            hooks: None,
+        }));
+        let paths = config_dependency_override_paths(&ws);
+        assert_eq!(paths, vec!["../external", "../other"]);
+    }
+
+    #[test]
+    fn test_config_dependency_override_paths_none() {
+        let ws = make_workspace(None);
+        let paths = config_dependency_override_paths(&ws);
+        assert!(paths.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // generate_pubspec_overrides with dependency_override_paths tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_generate_pubspec_overrides_with_extra_packages() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+
+        let app = Package {
+            name: "app".to_string(),
+            path: pkg_dir.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["core".to_string(), "external_lib".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+        };
+
+        let core = make_package("core", &dir.path().join("packages/core").to_string_lossy(), vec![]);
+
+        // Create an external package directory
+        let ext_dir = dir.path().join("external").join("external_lib");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        std::fs::write(
+            ext_dir.join("pubspec.yaml"),
+            "name: external_lib\nversion: 2.0.0\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
+        ).unwrap();
+
+        let result = generate_pubspec_overrides(
+            &[app],
+            &[core],
+            &["external".to_string()],
+            dir.path(),
+        );
+        assert!(result.is_ok());
+
+        let overrides_path = pkg_dir.join("pubspec_overrides.yaml");
+        assert!(overrides_path.exists());
+        let content = std::fs::read_to_string(&overrides_path).unwrap();
+        assert!(content.contains("core:"));
+        assert!(content.contains("external_lib:"));
+    }
+
+    #[test]
+    fn test_generate_pubspec_overrides_no_extra_paths() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+
+        let app = Package {
+            name: "app".to_string(),
+            path: pkg_dir.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["core".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+        };
+
+        let core_dir = dir.path().join("packages").join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+        let core = make_package("core", &core_dir.to_string_lossy(), vec![]);
+
+        let result = generate_pubspec_overrides(
+            &[app],
+            &[core],
+            &[],
+            dir.path(),
+        );
+        assert!(result.is_ok());
+
+        let overrides_path = pkg_dir.join("pubspec_overrides.yaml");
+        assert!(overrides_path.exists());
+        let content = std::fs::read_to_string(&overrides_path).unwrap();
+        assert!(content.contains("core:"));
     }
 }

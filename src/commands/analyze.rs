@@ -80,7 +80,7 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
     let pb = create_progress_bar(packages.len() as u64, "analyzing");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), None, Some(&pb))
+        .run_in_packages_with_progress(&packages, &cmd_str, &workspace.env_vars(), None, Some(&pb), &workspace.packages)
         .await?;
     pb.finish_and_clear();
 
