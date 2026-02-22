@@ -83,6 +83,11 @@ pub struct VersionArgs {
     /// Only effective with --dependent-constraints and --conventional-commits.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub dependent_versions: bool,
+
+    /// Print release URL links after versioning (requires `repository` in config).
+    /// Generates prefilled release creation page links for each package.
+    #[arg(long, short = 'r')]
+    pub release_url: bool,
 }
 
 /// Parse a version override flag like "anmobile:patch"
@@ -293,22 +298,29 @@ pub fn highest_bump(commits: &[ConventionalCommit]) -> BumpType {
 /// Options controlling changelog entry generation.
 pub struct ChangelogOptions<'a> {
     pub include_body: bool,
+    /// When true, only include commit bodies for breaking changes (default: true).
+    /// Only has effect when `include_body` is true.
+    pub only_breaking_bodies: bool,
     pub include_hash: bool,
     pub include_scopes: bool,
     pub repository: Option<&'a RepositoryConfig>,
     pub include_types: Option<&'a [String]>,
     pub exclude_types: Option<&'a [String]>,
+    /// Whether to include the date in the version header (default: false per Melos docs).
+    pub include_date: bool,
 }
 
 impl Default for ChangelogOptions<'_> {
     fn default() -> Self {
         Self {
             include_body: false,
+            only_breaking_bodies: true,
             include_hash: false,
             include_scopes: true,
             repository: None,
             include_types: None,
             exclude_types: None,
+            include_date: false,
         }
     }
 }
@@ -372,8 +384,10 @@ pub fn generate_changelog_entry(
 
         let mut entry = format!("- {}{}{}", scope_prefix, commit.description, hash_suffix);
 
+        // Include body if configured, respecting only_breaking_bodies filter
         if opts.include_body
             && let Some(ref body) = commit.body
+            && (!opts.only_breaking_bodies || commit.breaking)
         {
             entry.push_str(&format!("\n  {}", body.replace('\n', "\n  ")));
         }
@@ -385,8 +399,12 @@ pub fn generate_changelog_entry(
         sections.entry(section).or_default().push(entry);
     }
 
-    let date = chrono_date_today();
-    let mut output = format!("## {} ({})\n", version, date);
+    let mut output = if opts.include_date {
+        let date = chrono_date_today();
+        format!("## {} ({})\n", version, date)
+    } else {
+        format!("## {}\n", version)
+    };
 
     // Emit sections in a stable order
     let section_order = [
@@ -826,6 +844,115 @@ fn update_dependency_constraint(
 }
 
 // ---------------------------------------------------------------------------
+// Aggregate changelog filter helper
+// ---------------------------------------------------------------------------
+
+/// Check if a package name matches the given aggregate changelog filters.
+///
+/// This is a simplified filter check for aggregate changelogs — it only
+/// evaluates `scope` and `ignore` glob patterns against the package name.
+fn package_matches_filters(
+    pkg_name: &str,
+    filters: &crate::config::filter::PackageFilters,
+    _packages: &[Package],
+) -> bool {
+    // Scope filter: if set, package name must match at least one scope glob
+    if let Some(ref scopes) = filters.scope {
+        let matches_scope = scopes.iter().any(|pattern| {
+            glob::Pattern::new(pattern)
+                .map(|p| p.matches(pkg_name))
+                .unwrap_or(false)
+        });
+        if !matches_scope {
+            return false;
+        }
+    }
+
+    // Ignore filter: if set, exclude packages matching any ignore glob
+    if let Some(ref ignores) = filters.ignore {
+        let matches_ignore = ignores.iter().any(|pattern| {
+            glob::Pattern::new(pattern)
+                .map(|p| p.matches(pkg_name))
+                .unwrap_or(false)
+        });
+        if matches_ignore {
+            return false;
+        }
+    }
+
+    true
+}
+
+// ---------------------------------------------------------------------------
+// Git tag ref updating
+// ---------------------------------------------------------------------------
+
+/// Update git tag references in dependent packages' pubspec.yaml files.
+///
+/// When a package is versioned, other packages that depend on it via a git
+/// dependency with `ref:` pointing to a tag may need their `ref:` updated
+/// to point to the new tag.
+///
+/// Returns the number of files updated.
+fn update_git_tag_refs(
+    root: &Path,
+    packages: &[Package],
+    versioned: &[(String, String)],
+) -> Result<usize> {
+    let mut updated_count = 0;
+
+    for pkg in packages {
+        let pubspec_path = pkg.path.join("pubspec.yaml");
+        if !pubspec_path.exists() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&pubspec_path)
+            .with_context(|| format!("Failed to read {}", pubspec_path.display()))?;
+
+        let mut new_content = content.clone();
+
+        for (dep_name, new_version) in versioned {
+            // Look for git dependency blocks like:
+            //   dep_name:
+            //     git:
+            //       ...
+            //       ref: dep_name-v1.2.3
+            // We need to find the `ref:` line that contains a tag for this dependency
+            let old_tag_pattern = format!(
+                r"(?m)(^\s+{}:\s*\n(?:\s+\w[^\n]*\n)*?\s+ref:\s*)({}-v\S+)",
+                regex::escape(dep_name),
+                regex::escape(dep_name),
+            );
+            let new_tag = format!("{}-v{}", dep_name, new_version);
+
+            if let Ok(re) = regex::Regex::new(&old_tag_pattern) {
+                new_content = re
+                    .replace(&new_content, format!("${{1}}{}", new_tag))
+                    .to_string();
+            }
+        }
+
+        if new_content != content {
+            std::fs::write(&pubspec_path, &new_content)
+                .with_context(|| format!("Failed to write {}", pubspec_path.display()))?;
+
+            let rel_path = pubspec_path
+                .strip_prefix(root)
+                .unwrap_or(&pubspec_path);
+            println!(
+                "  {} Updated git tag refs in {}",
+                "OK".green(),
+                rel_path.display()
+            );
+            updated_count += 1;
+        }
+    }
+
+    Ok(updated_count)
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
@@ -877,10 +1004,22 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     } else {
         version_config.is_none_or(|c| c.should_tag())
     };
-    let include_body = version_config
-        .and_then(|c| c.changelog_config.as_ref())
-        .and_then(|cc| cc.include_commit_body)
-        .unwrap_or(false);
+
+    // Resolve commit body inclusion: changelogCommitBodies takes precedence over
+    // changelogConfig.includeCommitBody for backward compatibility.
+    let (include_body, only_breaking_bodies) = if let Some(bodies_cfg) = version_config
+        .and_then(|c| c.changelog_commit_bodies.as_ref())
+    {
+        (bodies_cfg.include, bodies_cfg.only_breaking)
+    } else {
+        let body = version_config
+            .and_then(|c| c.changelog_config.as_ref())
+            .and_then(|cc| cc.include_commit_body)
+            .unwrap_or(false);
+        // Legacy includeCommitBody includes ALL bodies (not just breaking)
+        (body, false)
+    };
+
     let include_hash = version_config
         .and_then(|c| c.changelog_config.as_ref())
         .and_then(|cc| cc.include_commit_id)
@@ -890,6 +1029,11 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     let include_scopes = version_config
         .and_then(|c| c.include_scopes)
         .unwrap_or(true); // Melos includes scopes by default
+
+    // Resolve changelogFormat.includeDate (default: false per Melos docs)
+    let include_date = version_config
+        .map(|c| c.should_include_date())
+        .unwrap_or(false);
 
     // Changelog commit type filtering
     let changelog_include_types: Option<Vec<String>> = version_config
@@ -1174,11 +1318,13 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .unwrap_or("unknown");
                     let changelog_opts = ChangelogOptions {
                         include_body,
+                        only_breaking_bodies,
                         include_hash,
                         include_scopes,
                         repository: repo,
                         include_types: changelog_include_types.as_deref(),
                         exclude_types: changelog_exclude_types.as_deref(),
+                        include_date,
                     };
                     let entry = generate_changelog_entry(new_ver, commits, &changelog_opts);
                     write_changelog(&pkg.path, &entry)?;
@@ -1204,11 +1350,13 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .unwrap_or("0.0.0");
                     let changelog_opts = ChangelogOptions {
                         include_body,
+                        only_breaking_bodies,
                         include_hash,
                         include_scopes,
                         repository: repo,
                         include_types: changelog_include_types.as_deref(),
                         exclude_types: changelog_exclude_types.as_deref(),
+                        include_date,
                     };
                     let entry = generate_changelog_entry(
                         summary_version,
@@ -1222,11 +1370,86 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                     );
                 }
             }
+
+            // Aggregate changelogs
+            if let Some(agg_configs) = version_config.and_then(|c| c.changelogs.as_ref()) {
+                for agg in agg_configs {
+                    let agg_path = workspace.root_path.join(&agg.path);
+
+                    // Filter commits to only those from packages matching the aggregate filters
+                    let agg_commits: Vec<ConventionalCommit> = if let Some(ref filters) = agg.package_filters {
+                        mapped
+                            .iter()
+                            .filter(|(pkg_name, _)| {
+                                package_matches_filters(pkg_name, filters, &workspace.packages)
+                            })
+                            .flat_map(|(_, commits)| commits.iter().cloned())
+                            .collect()
+                    } else {
+                        // No filters — include all commits
+                        mapped.values().flatten().cloned().collect()
+                    };
+
+                    if !agg_commits.is_empty() {
+                        let agg_version = versioned
+                            .first()
+                            .map(|(_, v)| v.as_str())
+                            .unwrap_or("0.0.0");
+                        let changelog_opts = ChangelogOptions {
+                            include_body,
+                            only_breaking_bodies,
+                            include_hash,
+                            include_scopes,
+                            repository: repo,
+                            include_types: changelog_include_types.as_deref(),
+                            exclude_types: changelog_exclude_types.as_deref(),
+                            include_date,
+                        };
+                        let entry = generate_changelog_entry(agg_version, &agg_commits, &changelog_opts);
+
+                        // If the file has a description configured, ensure it's at the top
+                        let full_entry = if let Some(ref desc) = agg.description {
+                            if !agg_path.exists() {
+                                format!("# Changelog\n\n{}\n\n{}", desc, entry)
+                            } else {
+                                entry
+                            }
+                        } else {
+                            entry
+                        };
+
+                        write_changelog(&agg_path, &full_entry)?;
+                        println!(
+                            "  {} Updated aggregate changelog {}",
+                            "OK".green(),
+                            agg.path.bold()
+                        );
+                    }
+                }
+            }
         } else {
             println!(
                 "\n{} Changelog generation requires --conventional-commits; skipping.",
                 "NOTE:".yellow()
             );
+        }
+    }
+
+    // Update git tag references in dependent packages if configured
+    let should_update_refs = version_config
+        .map(|c| c.should_update_git_tag_refs())
+        .unwrap_or(false);
+    if should_update_refs && !versioned.is_empty() {
+        println!("\n{} Updating git tag references...", "$".cyan());
+        let count = update_git_tag_refs(&workspace.root_path, &workspace.packages, &versioned)?;
+        if count > 0 {
+            println!(
+                "  {} Updated git tag refs in {} file(s)",
+                "OK".green(),
+                count
+            );
+        } else {
+            println!("  {} No git tag refs to update", "OK".green());
         }
     }
 
@@ -1313,6 +1536,28 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         git_push(&workspace.root_path, should_tag)?;
         println!("  {} Pushed commits{}", "OK".green(),
             if should_tag { " and tags" } else { "" });
+    }
+
+    // Print release URLs if requested (CLI flag or config)
+    let should_release_url = args.release_url
+        || version_config
+            .map(|c| c.should_release_url())
+            .unwrap_or(false);
+    if should_release_url {
+        if let Some(ref repo) = workspace.config.repository {
+            println!("\n{} Release URLs:", "$".cyan());
+            for (pkg_name, version) in &versioned {
+                let tag = format!("{}-v{}", pkg_name, version);
+                let title = format!("{} v{}", pkg_name, version);
+                let url = repo.release_url(&tag, &title);
+                println!("  {} {}", pkg_name.bold(), url);
+            }
+        } else {
+            println!(
+                "\n{} --release-url requires `repository` in config; skipping.",
+                "WARN:".yellow()
+            );
+        }
     }
 
     Ok(())
@@ -1963,5 +2208,497 @@ command:
         let hooks = clean_config.hooks.unwrap();
         assert_eq!(hooks.pre.as_deref(), Some("echo pre-clean"));
         assert_eq!(hooks.post.as_deref(), Some("echo post-clean"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 15: releaseUrl config + CLI flag
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_release_url_config() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    releaseUrl: true
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(version_config.should_release_url());
+    }
+
+    #[test]
+    fn test_parse_release_url_default_false() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(!version_config.should_release_url());
+    }
+
+    #[test]
+    fn test_repository_release_url() {
+        let repo = RepositoryConfig {
+            url: "https://github.com/invertase/melos".to_string(),
+        };
+        let url = repo.release_url("my_pkg-v1.2.0", "my_pkg v1.2.0");
+        assert!(url.starts_with("https://github.com/invertase/melos/releases/new?"));
+        assert!(url.contains("tag=my_pkg-v1.2.0"));
+        assert!(url.contains("title=my_pkg%20v1.2.0"));
+    }
+
+    #[test]
+    fn test_repository_release_url_special_chars() {
+        let repo = RepositoryConfig {
+            url: "https://github.com/org/repo".to_string(),
+        };
+        let url = repo.release_url("pkg-v2.0.0-beta.1", "pkg v2.0.0-beta.1");
+        assert!(url.contains("tag=pkg-v2.0.0-beta.1"));
+        // Spaces should be encoded as %20
+        assert!(url.contains("title=pkg%20v2.0.0-beta.1"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 15: aggregate changelogs config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_aggregate_changelogs_config() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    changelogs:
+      - path: CHANGELOG_APPS.md
+        packageFilters:
+          scope:
+            - "app_*"
+        description: "Changes in application packages"
+      - path: CHANGELOG_LIBS.md
+        packageFilters:
+          scope:
+            - "core_*"
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        let changelogs = version_config.changelogs.unwrap();
+        assert_eq!(changelogs.len(), 2);
+        assert_eq!(changelogs[0].path, "CHANGELOG_APPS.md");
+        assert_eq!(
+            changelogs[0].description.as_deref(),
+            Some("Changes in application packages")
+        );
+        let filters = changelogs[0].package_filters.as_ref().unwrap();
+        assert_eq!(filters.scope, Some(vec!["app_*".to_string()]));
+        assert_eq!(changelogs[1].path, "CHANGELOG_LIBS.md");
+        assert!(changelogs[1].description.is_none());
+    }
+
+    #[test]
+    fn test_parse_aggregate_changelogs_default_none() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(version_config.changelogs.is_none());
+    }
+
+    #[test]
+    fn test_package_matches_filters_scope() {
+        let filters = crate::config::filter::PackageFilters {
+            scope: Some(vec!["app_*".to_string()]),
+            ..Default::default()
+        };
+        assert!(package_matches_filters("app_mobile", &filters, &[]));
+        assert!(package_matches_filters("app_web", &filters, &[]));
+        assert!(!package_matches_filters("core_utils", &filters, &[]));
+    }
+
+    #[test]
+    fn test_package_matches_filters_ignore() {
+        let filters = crate::config::filter::PackageFilters {
+            ignore: Some(vec!["*_example".to_string()]),
+            ..Default::default()
+        };
+        assert!(package_matches_filters("app_mobile", &filters, &[]));
+        assert!(!package_matches_filters("app_example", &filters, &[]));
+    }
+
+    #[test]
+    fn test_package_matches_filters_scope_and_ignore() {
+        let filters = crate::config::filter::PackageFilters {
+            scope: Some(vec!["app_*".to_string()]),
+            ignore: Some(vec!["app_example".to_string()]),
+            ..Default::default()
+        };
+        assert!(package_matches_filters("app_mobile", &filters, &[]));
+        assert!(!package_matches_filters("app_example", &filters, &[]));
+        assert!(!package_matches_filters("core_utils", &filters, &[]));
+    }
+
+    #[test]
+    fn test_package_matches_filters_no_filters() {
+        let filters = crate::config::filter::PackageFilters::default();
+        assert!(package_matches_filters("anything", &filters, &[]));
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 15: changelogCommitBodies config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_changelog_commit_bodies_config() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    changelogCommitBodies:
+      include: true
+      onlyBreaking: true
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        let bodies = version_config.changelog_commit_bodies.unwrap();
+        assert!(bodies.include);
+        assert!(bodies.only_breaking);
+    }
+
+    #[test]
+    fn test_parse_changelog_commit_bodies_only_breaking_default() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    changelogCommitBodies:
+      include: true
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        let bodies = version_config.changelog_commit_bodies.unwrap();
+        assert!(bodies.include);
+        assert!(bodies.only_breaking, "onlyBreaking should default to true");
+    }
+
+    #[test]
+    fn test_parse_changelog_commit_bodies_all_bodies() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    changelogCommitBodies:
+      include: true
+      onlyBreaking: false
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        let bodies = version_config.changelog_commit_bodies.unwrap();
+        assert!(bodies.include);
+        assert!(!bodies.only_breaking);
+    }
+
+    #[test]
+    fn test_changelog_only_breaking_bodies() {
+        // Breaking commit with body should include body
+        let breaking_commit = ConventionalCommit {
+            commit_type: "feat".to_string(),
+            scope: None,
+            breaking: true,
+            description: "new API".to_string(),
+            body: Some("This changes the entire API surface.".to_string()),
+            hash: "abc".to_string(),
+        };
+        // Non-breaking commit with body should NOT include body
+        let normal_commit = ConventionalCommit {
+            commit_type: "fix".to_string(),
+            scope: None,
+            breaking: false,
+            description: "fix null check".to_string(),
+            body: Some("Fixed a null pointer issue.".to_string()),
+            hash: "def".to_string(),
+        };
+        let entry = generate_changelog_entry("1.0.0", &[breaking_commit, normal_commit], &ChangelogOptions {
+            include_body: true,
+            only_breaking_bodies: true,
+            ..ChangelogOptions::default()
+        });
+        // Breaking commit's body should be included
+        assert!(entry.contains("This changes the entire API surface."));
+        // Non-breaking commit's body should NOT be included
+        assert!(!entry.contains("Fixed a null pointer issue."));
+    }
+
+    #[test]
+    fn test_changelog_all_bodies() {
+        let breaking_commit = ConventionalCommit {
+            commit_type: "feat".to_string(),
+            scope: None,
+            breaking: true,
+            description: "new API".to_string(),
+            body: Some("Breaking body.".to_string()),
+            hash: "abc".to_string(),
+        };
+        let normal_commit = ConventionalCommit {
+            commit_type: "fix".to_string(),
+            scope: None,
+            breaking: false,
+            description: "fix null check".to_string(),
+            body: Some("Normal body.".to_string()),
+            hash: "def".to_string(),
+        };
+        let entry = generate_changelog_entry("1.0.0", &[breaking_commit, normal_commit], &ChangelogOptions {
+            include_body: true,
+            only_breaking_bodies: false,
+            ..ChangelogOptions::default()
+        });
+        // Both bodies should be included
+        assert!(entry.contains("Breaking body."));
+        assert!(entry.contains("Normal body."));
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 15: changelogFormat.includeDate config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_changelog_format_include_date() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    changelogFormat:
+      includeDate: true
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(version_config.should_include_date());
+    }
+
+    #[test]
+    fn test_parse_changelog_format_default_no_date() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(!version_config.should_include_date());
+    }
+
+    #[test]
+    fn test_changelog_without_date() {
+        let commits = vec![
+            parse_conventional_commit("abc", "feat: something new").unwrap(),
+        ];
+        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
+            include_date: false,
+            ..ChangelogOptions::default()
+        });
+        // Should be "## 1.0.0\n" without a date
+        assert!(entry.starts_with("## 1.0.0\n"));
+        // Should NOT contain a date pattern like (2026-02-22)
+        assert!(!entry.contains("(20"));
+    }
+
+    #[test]
+    fn test_changelog_with_date() {
+        let commits = vec![
+            parse_conventional_commit("abc", "feat: something new").unwrap(),
+        ];
+        let entry = generate_changelog_entry("1.0.0", &commits, &ChangelogOptions {
+            include_date: true,
+            ..ChangelogOptions::default()
+        });
+        // Should be "## 1.0.0 (YYYY-MM-DD)\n" with a date
+        assert!(entry.starts_with("## 1.0.0 ("));
+        // Check date pattern
+        let re = regex::Regex::new(r"## 1\.0\.0 \(\d{4}-\d{2}-\d{2}\)").unwrap();
+        assert!(re.is_match(&entry), "Expected date in header, got: {}", entry);
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 15: updateGitTagRefs config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_update_git_tag_refs_config() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    updateGitTagRefs: true
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(version_config.should_update_git_tag_refs());
+    }
+
+    #[test]
+    fn test_parse_update_git_tag_refs_default_false() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(!version_config.should_update_git_tag_refs());
+    }
+
+    #[test]
+    fn test_update_git_tag_refs_in_pubspec() {
+        // Create a temp dir with a package that has a git dependency ref
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg_path = tmp.path().join("packages").join("my_app");
+        std::fs::create_dir_all(&pkg_path).unwrap();
+
+        let pubspec_content = r#"name: my_app
+version: 1.0.0
+dependencies:
+  core_lib:
+    git:
+      url: https://github.com/org/repo.git
+      path: packages/core_lib
+      ref: core_lib-v1.0.0
+"#;
+        std::fs::write(pkg_path.join("pubspec.yaml"), pubspec_content).unwrap();
+
+        let packages = vec![
+            Package {
+                name: "my_app".to_string(),
+                path: pkg_path.clone(),
+                version: Some("1.0.0".to_string()),
+                is_flutter: false,
+                dependencies: vec!["core_lib".to_string()],
+                dev_dependencies: vec![],
+                publish_to: None,
+            },
+        ];
+        let versioned = vec![("core_lib".to_string(), "2.0.0".to_string())];
+
+        let count = update_git_tag_refs(tmp.path(), &packages, &versioned).unwrap();
+        assert_eq!(count, 1);
+
+        let updated = std::fs::read_to_string(pkg_path.join("pubspec.yaml")).unwrap();
+        assert!(updated.contains("ref: core_lib-v2.0.0"), "Expected updated ref, got:\n{}", updated);
+        assert!(!updated.contains("ref: core_lib-v1.0.0"));
+    }
+
+    #[test]
+    fn test_update_git_tag_refs_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg_path = tmp.path().join("packages").join("my_app");
+        std::fs::create_dir_all(&pkg_path).unwrap();
+
+        // This pubspec has a path dependency, not a git ref
+        let pubspec_content = r#"name: my_app
+version: 1.0.0
+dependencies:
+  core_lib:
+    path: ../core_lib
+"#;
+        std::fs::write(pkg_path.join("pubspec.yaml"), pubspec_content).unwrap();
+
+        let packages = vec![
+            Package {
+                name: "my_app".to_string(),
+                path: pkg_path,
+                version: Some("1.0.0".to_string()),
+                is_flutter: false,
+                dependencies: vec!["core_lib".to_string()],
+                dev_dependencies: vec![],
+                publish_to: None,
+            },
+        ];
+        let versioned = vec![("core_lib".to_string(), "2.0.0".to_string())];
+
+        let count = update_git_tag_refs(tmp.path(), &packages, &versioned).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 15: url_encode helper
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_url_encode_basic() {
+        assert_eq!(crate::config::url_encode("hello"), "hello");
+        assert_eq!(crate::config::url_encode("hello world"), "hello%20world");
+        assert_eq!(crate::config::url_encode("a+b"), "a%2Bb");
+        assert_eq!(crate::config::url_encode("v1.0.0-beta.1"), "v1.0.0-beta.1");
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 15: combined config parsing test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_all_batch15_config_fields() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+repository: https://github.com/org/repo
+command:
+  version:
+    releaseUrl: true
+    updateGitTagRefs: true
+    changelogFormat:
+      includeDate: true
+    changelogCommitBodies:
+      include: true
+      onlyBreaking: false
+    changelogs:
+      - path: CHANGELOG_MOBILE.md
+        packageFilters:
+          scope:
+            - "mobile_*"
+        description: "Mobile changes"
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(version_config.should_release_url());
+        assert!(version_config.should_update_git_tag_refs());
+        assert!(version_config.should_include_date());
+
+        let bodies = version_config.changelog_commit_bodies.unwrap();
+        assert!(bodies.include);
+        assert!(!bodies.only_breaking);
+
+        let changelogs = version_config.changelogs.unwrap();
+        assert_eq!(changelogs.len(), 1);
+        assert_eq!(changelogs[0].path, "CHANGELOG_MOBILE.md");
     }
 }

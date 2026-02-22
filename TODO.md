@@ -182,8 +182,12 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 - [x] Dependent constraint auto-updates (`--dependent-constraints`, `--dependent-versions`)
 - [x] Custom commit message (`--message`/`-m` with `{new_package_versions}` placeholder)
 - [x] Repository config for changelog commit links (`repository:` URL string or object form)
-- [ ] `fetchTags` config option (run `git fetch --tags` before conventional commit analysis)
-- [ ] Aggregate `changelogs` config (filter which commit types appear in changelogs)
+- [x] `fetchTags` config option (run `git fetch --tags` before conventional commit analysis)
+- [x] Aggregate `changelogs` config (multiple changelogs with path, packageFilters, description; type filtering)
+- [x] `--release-url` / `-r` flag for version command (prefilled GitHub release creation page links)
+- [x] `changelogCommitBodies` config (include/onlyBreaking options for commit body inclusion)
+- [x] `changelogFormat.includeDate` config (optional date in version headers, default false)
+- [x] `updateGitTagRefs` config (update git dependency `ref:` tags in pubspec.yaml)
 - [ ] Release branch management
 
 ### Developer Experience
@@ -196,13 +200,21 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 
 ## Batch 14: Bootstrap Maturity & Version Polish
 
-- [ ] `--enforce-lockfile` CLI flag for bootstrap (pass through to `pub get`)
-- [ ] Bootstrap lifecycle hooks (pre/post hooks, matching clean/version pattern)
-- [ ] Clean pre-hook support (`command.clean.hooks.pre`)
-- [ ] `--no-example` / `--offline` flags for bootstrap (pass through to `pub get`)
-- [ ] `fetchTags` config option for version command (`git fetch --tags` before analysis)
-- [ ] Changelog commit type filtering (include/exclude conventional commit types)
-- [ ] `bs` alias for bootstrap command
+- [x] `--enforce-lockfile` CLI flag for bootstrap (pass through to `pub get`)
+- [x] Bootstrap lifecycle hooks (pre/post hooks, matching clean/version pattern)
+- [x] Clean pre-hook support (`command.clean.hooks.pre`)
+- [x] `--no-example` / `--offline` flags for bootstrap (pass through to `pub get`)
+- [x] `fetchTags` config option for version command (`git fetch --tags` before analysis)
+- [x] Changelog commit type filtering (include/exclude conventional commit types)
+- [x] `bs` alias for bootstrap command
+
+## Batch 15: Version Command Polish
+
+- [x] `--release-url` / `-r` flag (generate prefilled GitHub release creation page links)
+- [x] Aggregate `changelogs` config (multiple changelogs with `path`, `packageFilters`, `description`)
+- [x] `changelogCommitBodies` config (`include` + `onlyBreaking` options for commit body in changelogs)
+- [x] `changelogFormat.includeDate` config (optional date in changelog version headers, default false)
+- [x] `updateGitTagRefs` config (scan pubspec.yaml git deps and update `ref:` tags to new versions)
 
 ## Phase 4: Parity & Beyond
 

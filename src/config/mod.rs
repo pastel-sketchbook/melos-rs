@@ -254,6 +254,26 @@ impl ScriptEntry {
 // Repository configuration
 // ---------------------------------------------------------------------------
 
+/// Minimal percent-encoding for URL query parameters.
+///
+/// Encodes characters that are not unreserved per RFC 3986 (letters, digits,
+/// `-`, `.`, `_`, `~`). This is sufficient for tag names and titles in release
+/// URLs without adding a dependency on a URL-encoding crate.
+pub(crate) fn url_encode(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    encoded
+}
+
 /// Repository URL or structured config for changelog commit links.
 ///
 /// Supports two forms:
@@ -272,6 +292,19 @@ impl RepositoryConfig {
         let base = self.url.trim_end_matches('/');
         // GitHub/GitLab/Bitbucket all use /commit/<hash>
         format!("{}/commit/{}", base, hash)
+    }
+
+    /// Get a prefilled release creation page URL for a given tag and title.
+    ///
+    /// GitHub format: `https://github.com/owner/repo/releases/new?tag=<tag>&title=<title>`
+    pub fn release_url(&self, tag: &str, title: &str) -> String {
+        let base = self.url.trim_end_matches('/');
+        let encoded_tag = url_encode(tag);
+        let encoded_title = url_encode(title);
+        format!(
+            "{}/releases/new?tag={}&title={}",
+            base, encoded_tag, encoded_title
+        )
     }
 }
 
@@ -399,6 +432,44 @@ pub struct VersionCommandConfig {
     /// Coordinated versioning: keep all packages at the same version
     #[serde(default)]
     pub coordinated: Option<bool>,
+
+    /// Whether to print release URL links after versioning (requires `repository` config).
+    ///
+    /// Generates prefilled GitHub/GitLab release creation page links for each versioned package.
+    #[serde(default)]
+    pub release_url: Option<bool>,
+
+    /// Aggregate changelog definitions: generate additional CHANGELOG files that
+    /// aggregate commits from filtered package subsets.
+    ///
+    /// Example:
+    /// ```yaml
+    /// command:
+    ///   version:
+    ///     changelogs:
+    ///       - path: CHANGELOG_APPS.md
+    ///         packageFilters:
+    ///           scope: ["app_*"]
+    ///         description: "Changes in application packages"
+    /// ```
+    #[serde(default)]
+    pub changelogs: Option<Vec<AggregateChangelogConfig>>,
+
+    /// Structured commit body inclusion rules.
+    ///
+    /// Replaces the simpler `changelogConfig.includeCommitBody` with fine-grained
+    /// control over when commit bodies are included in changelogs.
+    #[serde(default)]
+    pub changelog_commit_bodies: Option<ChangelogCommitBodiesConfig>,
+
+    /// Changelog formatting options (e.g., whether to include the date in headers).
+    #[serde(default)]
+    pub changelog_format: Option<ChangelogFormatConfig>,
+
+    /// When true, update git tag references in dependent packages' pubspec.yaml
+    /// that use git dependencies with `ref:` pointing to a tag of a bumped package.
+    #[serde(default)]
+    pub update_git_tag_refs: Option<bool>,
 }
 
 impl VersionCommandConfig {
@@ -438,6 +509,24 @@ impl VersionCommandConfig {
     pub fn should_fetch_tags(&self) -> bool {
         self.fetch_tags.unwrap_or(false)
     }
+
+    /// Whether to print release URL links after versioning
+    pub fn should_release_url(&self) -> bool {
+        self.release_url.unwrap_or(false)
+    }
+
+    /// Whether to update git tag refs in dependent packages
+    pub fn should_update_git_tag_refs(&self) -> bool {
+        self.update_git_tag_refs.unwrap_or(false)
+    }
+
+    /// Whether to include the date in changelog version headers (default: false per Melos docs)
+    pub fn should_include_date(&self) -> bool {
+        self.changelog_format
+            .as_ref()
+            .and_then(|f| f.include_date)
+            .unwrap_or(false)
+    }
 }
 
 /// Changelog-specific configuration
@@ -474,6 +563,70 @@ pub struct VersionHooks {
 
     /// Script to run after committing version changes
     pub post_commit: Option<String>,
+}
+
+/// Aggregate changelog configuration.
+///
+/// Defines an additional CHANGELOG file that aggregates commits from a subset
+/// of packages (filtered by `packageFilters`).
+///
+/// YAML example:
+/// ```yaml
+/// changelogs:
+///   - path: CHANGELOG_APPS.md
+///     packageFilters:
+///       scope: ["app_*"]
+///     description: "Changes in application packages"
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateChangelogConfig {
+    /// Path to the aggregate changelog file, relative to workspace root.
+    pub path: String,
+
+    /// Package filters to select which packages' commits are included.
+    #[serde(default)]
+    pub package_filters: Option<filter::PackageFilters>,
+
+    /// Optional description text placed at the top of the changelog file.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Structured commit body inclusion rules for changelogs.
+///
+/// YAML example:
+/// ```yaml
+/// changelogCommitBodies:
+///   include: true
+///   onlyBreaking: true  # default: true — only include bodies for breaking changes
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangelogCommitBodiesConfig {
+    /// Whether to include commit bodies at all.
+    #[serde(default)]
+    pub include: bool,
+
+    /// When true (default), only include commit bodies for breaking changes.
+    #[serde(default = "default_true")]
+    pub only_breaking: bool,
+}
+
+/// Changelog formatting options.
+///
+/// YAML example:
+/// ```yaml
+/// changelogFormat:
+///   includeDate: true
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangelogFormatConfig {
+    /// Whether to include the date in changelog version headers.
+    /// Default: false (per Melos docs).
+    #[serde(default)]
+    pub include_date: Option<bool>,
 }
 
 /// Configuration for the `bootstrap` command
@@ -530,6 +683,10 @@ pub struct BootstrapHooks {
 
 fn default_true_opt() -> Option<bool> {
     Some(true)
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Wrapper struct for Melos 7.x format: `pubspec.yaml` with a `melos:` key.
