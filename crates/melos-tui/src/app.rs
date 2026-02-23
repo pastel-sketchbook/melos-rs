@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use crossterm::event::{KeyCode, KeyModifiers};
 use melos_core::config::ScriptEntry;
+use melos_core::events::Event as CoreEvent;
 use melos_core::package::Package;
 use melos_core::workspace::Workspace;
 
@@ -10,7 +13,6 @@ use melos_core::workspace::Workspace;
 /// - `Running`: a command is executing, live progress displayed
 /// - `Done`: results displayed, user can scroll or return to Idle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Running and Done are used in tests; wired in Batch 51
 pub enum AppState {
     Idle,
     Running,
@@ -56,7 +58,6 @@ impl PackageRow {
 
 /// A row in the command/script list, pre-computed for display.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields read by views/commands.rs in Batch 50
 pub struct CommandRow {
     /// Display name (e.g. "analyze" or script name).
     pub name: String,
@@ -108,6 +109,26 @@ pub struct App {
     pub warnings: Vec<String>,
     /// Whether the help overlay is currently visible.
     pub show_help: bool,
+
+    // --- Execution state (Batch 51) ---
+    /// Command name requested by Enter key, consumed by the main loop.
+    pub pending_command: Option<String>,
+    /// Whether a cancel was requested (Esc during Running), consumed by the main loop.
+    pub pending_cancel: bool,
+    /// Name of the currently running command.
+    pub running_command: Option<String>,
+    /// Packages that have started but not yet finished.
+    pub running_packages: Vec<String>,
+    /// Finished package results: (name, success, duration).
+    pub finished_packages: Vec<(String, bool, Duration)>,
+    /// Progress state: (completed, total, message).
+    pub progress: Option<(usize, usize, String)>,
+    /// Output log lines: (package_name, line, is_stderr).
+    pub output_log: Vec<(String, String, bool)>,
+    /// Messages/warnings from the current command execution.
+    pub exec_messages: Vec<String>,
+    /// Error message if the command failed (shown in Done state).
+    pub command_error: Option<String>,
 }
 
 impl App {
@@ -136,6 +157,15 @@ impl App {
             page_size: 20,
             warnings: Vec::new(),
             show_help: false,
+            pending_command: None,
+            pending_cancel: false,
+            running_command: None,
+            running_packages: Vec::new(),
+            finished_packages: Vec::new(),
+            progress: None,
+            output_log: Vec::new(),
+            exec_messages: Vec::new(),
+            command_error: None,
         }
     }
 
@@ -194,7 +224,6 @@ impl App {
     }
 
     /// Returns the number of commands/scripts.
-    #[allow(dead_code)] // Used by views/commands.rs in Batch 50
     pub fn command_count(&self) -> usize {
         self.command_rows.len()
     }
@@ -215,6 +244,16 @@ impl App {
             return;
         }
 
+        // During Running, only Esc (cancel) and Ctrl+C (quit) are active.
+        if self.state == AppState::Running {
+            match (code, modifiers.contains(KeyModifiers::CONTROL)) {
+                (KeyCode::Esc, _) => self.pending_cancel = true,
+                (KeyCode::Char('c'), true) => self.quit = true,
+                _ => {}
+            }
+            return;
+        }
+
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
         let half_page = (self.page_size / 2).max(1) as isize;
 
@@ -222,6 +261,9 @@ impl App {
             (KeyCode::Char('q'), false) => self.quit = true,
             (KeyCode::Char('c'), true) => self.quit = true,
             (KeyCode::Esc, _) => self.handle_esc(),
+
+            // Execute selected command
+            (KeyCode::Enter, _) => self.request_execute(),
 
             // Panel switching
             (KeyCode::Tab | KeyCode::BackTab, _) => self.toggle_panel(),
@@ -259,7 +301,7 @@ impl App {
     fn handle_esc(&mut self) {
         match self.state {
             AppState::Running => {
-                self.state = AppState::Idle;
+                // Handled in the Running early-return above.
             }
             AppState::Done => {
                 self.state = AppState::Idle;
@@ -268,6 +310,115 @@ impl App {
                 self.quit = true;
             }
         }
+    }
+
+    /// Request execution of the currently selected command.
+    ///
+    /// Sets `pending_command` which the main loop consumes to spawn the task.
+    /// Only fires when the Commands panel is active and a valid command is selected.
+    fn request_execute(&mut self) {
+        if self.state != AppState::Idle || self.active_panel != ActivePanel::Commands {
+            return;
+        }
+        if let Some(cmd) = self.command_rows.get(self.selected_command) {
+            self.pending_command = Some(cmd.name.clone());
+        }
+    }
+
+    /// Transition to Running state for the given command.
+    ///
+    /// Called by the main loop after spawning the command task.
+    pub fn start_command(&mut self, name: &str) {
+        self.state = AppState::Running;
+        self.running_command = Some(name.to_string());
+        self.running_packages.clear();
+        self.finished_packages.clear();
+        self.progress = None;
+        self.output_log.clear();
+        self.exec_messages.clear();
+        self.command_error = None;
+    }
+
+    /// Process a core event received from the running command.
+    pub fn handle_core_event(&mut self, event: CoreEvent) {
+        match event {
+            CoreEvent::CommandStarted {
+                package_count,
+                command,
+            } => {
+                self.progress = Some((0, package_count, command));
+            }
+            CoreEvent::PackageStarted { name } => {
+                self.running_packages.push(name);
+            }
+            CoreEvent::PackageFinished {
+                name,
+                success,
+                duration,
+            } => {
+                self.running_packages.retain(|n| n != &name);
+                self.finished_packages.push((name, success, duration));
+                if let Some((completed, _, _)) = &mut self.progress {
+                    *completed += 1;
+                }
+            }
+            CoreEvent::PackageOutput {
+                name,
+                line,
+                is_stderr,
+            } => {
+                self.output_log.push((name, line, is_stderr));
+            }
+            CoreEvent::Progress {
+                completed,
+                total,
+                message,
+            } => {
+                self.progress = Some((completed, total, message));
+            }
+            CoreEvent::Warning(msg) => {
+                self.exec_messages.push(format!("warn: {msg}"));
+            }
+            CoreEvent::Info(msg) => {
+                self.exec_messages.push(msg);
+            }
+            CoreEvent::CommandFinished { .. } => {
+                // The actual state transition to Done happens in on_command_finished()
+                // when the channel closes (sender dropped after this event).
+            }
+        }
+    }
+
+    /// Handle command completion after the channel closes and the task handle resolves.
+    ///
+    /// `result` is the `JoinHandle` result wrapping the command `Result<PackageResults>`.
+    pub fn on_command_finished(
+        &mut self,
+        result: Result<anyhow::Result<()>, tokio::task::JoinError>,
+    ) {
+        self.state = AppState::Done;
+        self.running_command = None;
+        self.running_packages.clear();
+
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                self.command_error = Some(format!("{e}"));
+            }
+            Err(e) if e.is_cancelled() => {
+                // Task was aborted (user pressed Esc); not an error.
+            }
+            Err(e) => {
+                self.command_error = Some(format!("task panicked: {e}"));
+            }
+        }
+    }
+
+    /// Handle cancel: transition back to Idle, clear execution state.
+    pub fn on_command_cancelled(&mut self) {
+        self.state = AppState::Idle;
+        self.running_command = None;
+        self.running_packages.clear();
     }
 
     /// Toggle between Packages and Commands panels.
@@ -314,11 +465,7 @@ impl App {
             let abs = (-delta) as usize;
             if abs > current {
                 // Wrap: single-step up wraps to end; page-up clamps to 0.
-                if abs == 1 {
-                    len - 1
-                } else {
-                    0
-                }
+                if abs == 1 { len - 1 } else { 0 }
             } else {
                 current - abs
             }
@@ -326,11 +473,7 @@ impl App {
             let abs = delta as usize;
             if current + abs >= len {
                 // Wrap: single-step down wraps to start; page-down clamps to end.
-                if abs == 1 {
-                    0
-                } else {
-                    len - 1
-                }
+                if abs == 1 { 0 } else { len - 1 }
             } else {
                 current + abs
             }
@@ -437,12 +580,13 @@ mod tests {
     }
 
     #[test]
-    fn test_esc_in_running_returns_to_idle() {
+    fn test_esc_in_running_requests_cancel() {
         let mut app = App::new();
         app.state = AppState::Running;
         press(&mut app, KeyCode::Esc);
-        assert_eq!(app.state, AppState::Idle);
-        assert!(!app.should_quit());
+        // Running state sets pending_cancel; main loop handles actual cancellation.
+        assert!(app.pending_cancel);
+        assert_eq!(app.state, AppState::Running);
     }
 
     #[test]
@@ -834,5 +978,279 @@ mod tests {
         // App still idle, not quit
         assert_eq!(app.state, AppState::Idle);
         assert!(!app.should_quit());
+    }
+
+    // --- Enter / execute tests ---
+
+    #[test]
+    fn test_enter_on_commands_panel_sets_pending_command() {
+        let mut app = App::new();
+        app.active_panel = ActivePanel::Commands;
+        app.selected_command = 0; // "analyze"
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.pending_command.as_deref(), Some("analyze"));
+    }
+
+    #[test]
+    fn test_enter_on_packages_panel_does_nothing() {
+        let mut app = App::new();
+        app.active_panel = ActivePanel::Packages;
+        press(&mut app, KeyCode::Enter);
+        assert!(app.pending_command.is_none());
+    }
+
+    #[test]
+    fn test_enter_in_running_does_nothing() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.active_panel = ActivePanel::Commands;
+        press(&mut app, KeyCode::Enter);
+        assert!(app.pending_command.is_none());
+    }
+
+    #[test]
+    fn test_enter_with_empty_commands_does_nothing() {
+        let mut app = App::new();
+        app.command_rows.clear();
+        app.active_panel = ActivePanel::Commands;
+        press(&mut app, KeyCode::Enter);
+        assert!(app.pending_command.is_none());
+    }
+
+    #[test]
+    fn test_enter_selects_correct_command_by_index() {
+        let mut app = App::new();
+        app.active_panel = ActivePanel::Commands;
+        // Select "format" (index 5 in BUILTIN_COMMANDS: analyze,bootstrap,build,clean,exec,format)
+        app.selected_command = 5;
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.pending_command.as_deref(), Some("format"));
+    }
+
+    // --- start_command tests ---
+
+    #[test]
+    fn test_start_command_transitions_to_running() {
+        let mut app = App::new();
+        app.start_command("analyze");
+        assert_eq!(app.state, AppState::Running);
+        assert_eq!(app.running_command.as_deref(), Some("analyze"));
+    }
+
+    #[test]
+    fn test_start_command_clears_previous_state() {
+        let mut app = App::new();
+        app.finished_packages
+            .push(("old".to_string(), true, Duration::from_secs(1)));
+        app.output_log
+            .push(("pkg".to_string(), "line".to_string(), false));
+        app.exec_messages.push("old msg".to_string());
+        app.command_error = Some("old error".to_string());
+        app.start_command("test");
+        assert!(app.finished_packages.is_empty());
+        assert!(app.output_log.is_empty());
+        assert!(app.exec_messages.is_empty());
+        assert!(app.command_error.is_none());
+    }
+
+    // --- handle_core_event tests ---
+
+    #[test]
+    fn test_handle_command_started_sets_progress() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.handle_core_event(CoreEvent::CommandStarted {
+            command: "analyze".to_string(),
+            package_count: 5,
+        });
+        assert_eq!(app.progress, Some((0, 5, "analyze".to_string())));
+    }
+
+    #[test]
+    fn test_handle_package_started_adds_to_running() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.handle_core_event(CoreEvent::PackageStarted {
+            name: "pkg_a".to_string(),
+        });
+        assert_eq!(app.running_packages, vec!["pkg_a"]);
+    }
+
+    #[test]
+    fn test_handle_package_finished_moves_to_results() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.running_packages.push("pkg_a".to_string());
+        app.progress = Some((0, 3, String::new()));
+
+        app.handle_core_event(CoreEvent::PackageFinished {
+            name: "pkg_a".to_string(),
+            success: true,
+            duration: Duration::from_millis(100),
+        });
+
+        assert!(app.running_packages.is_empty());
+        assert_eq!(app.finished_packages.len(), 1);
+        assert_eq!(app.finished_packages[0].0, "pkg_a");
+        assert!(app.finished_packages[0].1);
+        assert_eq!(app.progress, Some((1, 3, String::new())));
+    }
+
+    #[test]
+    fn test_handle_package_output_appends_to_log() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.handle_core_event(CoreEvent::PackageOutput {
+            name: "pkg_a".to_string(),
+            line: "hello world".to_string(),
+            is_stderr: false,
+        });
+        assert_eq!(app.output_log.len(), 1);
+        assert_eq!(app.output_log[0].1, "hello world");
+        assert!(!app.output_log[0].2);
+    }
+
+    #[test]
+    fn test_handle_progress_updates_progress() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.handle_core_event(CoreEvent::Progress {
+            completed: 3,
+            total: 10,
+            message: "analyzing".to_string(),
+        });
+        assert_eq!(app.progress, Some((3, 10, "analyzing".to_string())));
+    }
+
+    #[test]
+    fn test_handle_warning_appends_message() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.handle_core_event(CoreEvent::Warning("something wrong".to_string()));
+        assert_eq!(app.exec_messages.len(), 1);
+        assert!(app.exec_messages[0].contains("something wrong"));
+    }
+
+    #[test]
+    fn test_handle_info_appends_message() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.handle_core_event(CoreEvent::Info("info msg".to_string()));
+        assert_eq!(app.exec_messages, vec!["info msg"]);
+    }
+
+    // --- on_command_finished tests ---
+
+    #[test]
+    fn test_on_command_finished_success_transitions_to_done() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.running_command = Some("analyze".to_string());
+        app.on_command_finished(Ok(Ok(())));
+        assert_eq!(app.state, AppState::Done);
+        assert!(app.running_command.is_none());
+        assert!(app.command_error.is_none());
+    }
+
+    #[test]
+    fn test_on_command_finished_error_records_message() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.on_command_finished(Ok(Err(anyhow::anyhow!("command failed"))));
+        assert_eq!(app.state, AppState::Done);
+        assert!(
+            app.command_error
+                .as_ref()
+                .is_some_and(|e| e.contains("command failed"))
+        );
+    }
+
+    // --- on_command_cancelled tests ---
+
+    #[test]
+    fn test_on_command_cancelled_returns_to_idle() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.running_command = Some("test".to_string());
+        app.running_packages.push("pkg_a".to_string());
+        app.on_command_cancelled();
+        assert_eq!(app.state, AppState::Idle);
+        assert!(app.running_command.is_none());
+        assert!(app.running_packages.is_empty());
+    }
+
+    // --- Running state key blocking tests ---
+
+    #[test]
+    fn test_running_blocks_navigation_keys() {
+        let mut app = app_with_packages(10);
+        app.state = AppState::Running;
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected_package, 0);
+        press(&mut app, KeyCode::Char('q'));
+        assert!(!app.should_quit());
+    }
+
+    #[test]
+    fn test_running_allows_ctrl_c_quit() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        ctrl(&mut app, KeyCode::Char('c'));
+        assert!(app.should_quit());
+    }
+
+    // --- Full lifecycle test ---
+
+    #[test]
+    fn test_idle_to_running_to_done_lifecycle() {
+        let mut app = App::new();
+        app.active_panel = ActivePanel::Commands;
+        assert_eq!(app.state, AppState::Idle);
+
+        // Press Enter to request command.
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.pending_command.as_deref(), Some("analyze"));
+
+        // Main loop consumes pending_command and calls start_command.
+        let cmd = app.pending_command.take().unwrap();
+        app.start_command(&cmd);
+        assert_eq!(app.state, AppState::Running);
+
+        // Core events arrive.
+        app.handle_core_event(CoreEvent::CommandStarted {
+            command: "analyze".to_string(),
+            package_count: 2,
+        });
+        app.handle_core_event(CoreEvent::PackageStarted {
+            name: "pkg_a".to_string(),
+        });
+        app.handle_core_event(CoreEvent::PackageFinished {
+            name: "pkg_a".to_string(),
+            success: true,
+            duration: Duration::from_millis(50),
+        });
+        app.handle_core_event(CoreEvent::PackageStarted {
+            name: "pkg_b".to_string(),
+        });
+        app.handle_core_event(CoreEvent::PackageFinished {
+            name: "pkg_b".to_string(),
+            success: false,
+            duration: Duration::from_millis(100),
+        });
+        app.handle_core_event(CoreEvent::CommandFinished {
+            command: "analyze".to_string(),
+            duration: Duration::from_millis(150),
+        });
+
+        // Channel closes, main loop calls on_command_finished.
+        app.on_command_finished(Ok(Ok(())));
+        assert_eq!(app.state, AppState::Done);
+        assert_eq!(app.finished_packages.len(), 2);
+        assert!(app.finished_packages[0].1); // pkg_a success
+        assert!(!app.finished_packages[1].1); // pkg_b failure
+
+        // Esc returns to Idle.
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.state, AppState::Idle);
     }
 }

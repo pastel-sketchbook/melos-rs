@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 use crate::app::{ActivePanel, App, AppState};
@@ -70,9 +70,9 @@ fn draw_header(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 fn draw_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     match app.state {
         AppState::Idle => {
-            // Two-column split: 40% packages (left), 60% commands (right).
+            // Two-column split: 47/53.
             let [left_area, right_area] =
-                Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+                Layout::horizontal([Constraint::Percentage(47), Constraint::Percentage(53)])
                     .areas(area);
 
             draw_packages(
@@ -89,13 +89,36 @@ fn draw_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             );
         }
         AppState::Running => {
-            let msg =
-                Paragraph::new("Command is running...").style(Style::default().fg(Color::Yellow));
+            let cmd_name = app.running_command.as_deref().unwrap_or("command");
+            let progress_text = match &app.progress {
+                Some((done, total, _)) => format!("Running {cmd_name}... ({done}/{total})"),
+                None => format!("Running {cmd_name}..."),
+            };
+            let running_names = if app.running_packages.is_empty() {
+                String::new()
+            } else {
+                format!("\n  {}", app.running_packages.join(", "))
+            };
+            let msg = Paragraph::new(format!("{progress_text}{running_names}"))
+                .style(Style::default().fg(Color::Yellow));
             frame.render_widget(msg, area);
         }
         AppState::Done => {
-            let msg = Paragraph::new("Command finished. Press Esc to return.")
-                .style(Style::default().fg(Color::Green));
+            let passed = app.finished_packages.iter().filter(|(_, s, _)| *s).count();
+            let failed = app.finished_packages.iter().filter(|(_, s, _)| !*s).count();
+            let summary = format!("{passed} passed, {failed} failed");
+            let error_line = match &app.command_error {
+                Some(e) => format!("\nError: {e}"),
+                None => String::new(),
+            };
+            let msg = Paragraph::new(format!(
+                "Command finished: {summary}{error_line}\nPress Esc to return."
+            ))
+            .style(Style::default().fg(if failed > 0 {
+                Color::Red
+            } else {
+                Color::Green
+            }));
             frame.render_widget(msg, area);
         }
     }
@@ -118,7 +141,7 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::app::PackageRow;

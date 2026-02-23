@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Cell, Row, Table, TableState},
-    Frame,
 };
 
 use crate::app::App;
@@ -53,10 +53,10 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
     let table = Table::new(
         rows,
         [
-            Constraint::Percentage(30),
-            Constraint::Percentage(15),
-            Constraint::Percentage(10),
-            Constraint::Percentage(45),
+            Constraint::Fill(2),
+            Constraint::Length(9),
+            Constraint::Length(10),
+            Constraint::Fill(2),
         ],
     )
     .header(header)
@@ -68,7 +68,8 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
     )
     .row_highlight_style(
         Style::default()
-            .bg(Color::DarkGray)
+            .bg(Color::Indexed(237))
+            .fg(Color::White)
             .add_modifier(Modifier::BOLD),
     )
     .highlight_symbol(">> ");
@@ -83,7 +84,7 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::app::PackageRow;

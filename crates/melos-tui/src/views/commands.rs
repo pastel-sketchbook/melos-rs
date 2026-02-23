@@ -1,8 +1,8 @@
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table, TableState},
-    Frame,
 };
 
 use crate::app::App;
@@ -41,23 +41,21 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         Style::default().fg(Color::DarkGray)
     };
 
-    let table = Table::new(
-        rows,
-        [Constraint::Percentage(40), Constraint::Percentage(60)],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style),
-    )
-    .row_highlight_style(
-        Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-    )
-    .highlight_symbol(">> ");
+    let table = Table::new(rows, [Constraint::Length(24), Constraint::Fill(1)])
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(border_style),
+        )
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::Indexed(237))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
 
     let mut table_state = TableState::default();
     if !app.command_rows.is_empty() {
@@ -69,7 +67,7 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::app::CommandRow;

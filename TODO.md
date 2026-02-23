@@ -873,27 +873,27 @@ vi-style navigation, version display, and `?` help overlay.
 
 Execute the selected command and consume core events in the TUI event loop.
 
-- [ ] Define `AppEvent` enum: `Terminal(crossterm::event::Event)`, `Core(melos_core::events::Event)`, `Tick`
-- [ ] Refactor main event loop to use `tokio::select!` over:
+- [x] Define `AppEvent` enum: `Terminal(crossterm::event::Event)`, `Core(melos_core::events::Event)`, `Tick`
+- [x] Refactor main event loop to use `tokio::select!` over:
   - Crossterm event stream (via `crossterm::event::EventStream` or polled reader)
   - Core event receiver (`mpsc::UnboundedReceiver<Event>`)
   - Tick interval (250ms idle, 66ms running)
-- [ ] Add `core_rx: Option<mpsc::UnboundedReceiver<Event>>` to `App`
-- [ ] Add `task_handle: Option<JoinHandle<Result<_>>>` to `App` for the running command
-- [ ] Implement `execute_command()` on `App`:
+- [x] Add `core_rx: Option<mpsc::UnboundedReceiver<Event>>` to `App`
+- [x] Add `task_handle: Option<JoinHandle<Result<_>>>` to `App` for the running command
+- [x] Implement `execute_command()` on `App`:
   - Transition state to `Running`
   - Create `(tx, rx)` channel pair
   - Spawn core command as tokio task (e.g., `melos_core::commands::format::run(...)`)
   - Store `rx` and handle in App
-- [ ] Wire `Enter` key in `Idle` state (command panel active) to `execute_command()`
-- [ ] Implement `handle_core_event()` on `App`:
+- [x] Wire `Enter` key in `Idle` state (command panel active) to `execute_command()`
+- [x] Implement `handle_core_event()` on `App`:
   - `PackageStarted`: add to running set
   - `PackageFinished`: move from running to results
   - `Progress`: update progress counters
   - `Warning`/`Info`: append to message log
   - Channel closed (None): transition to `Done`, join task handle
-- [ ] Wire `Esc` in `Running` state to cancel (abort task handle, transition to Idle)
-- [ ] Tests: state transitions (Idle -> Running -> Done), event handling updates state
+- [x] Wire `Esc` in `Running` state to cancel (abort task handle, transition to Idle)
+- [x] Tests: state transitions (Idle -> Running -> Done), event handling updates state
 
 #### Batch 52 -- Live output streaming + progress
 
