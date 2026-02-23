@@ -95,9 +95,11 @@ async fn main() -> Result<()> {
     }
 
     // Check for script overrides: if a script has the same name as the built-in
-    // command being invoked, run the script instead.
+    // command being invoked, run the script instead — unless the user passed
+    // command-specific flags that only make sense with the built-in command.
     let result = if let Some(script_name) = get_overridable_command_name(&cli.command)
         && workspace.config.scripts.contains_key(script_name)
+        && !command_has_builtin_flags(&cli.command)
     {
         if verbosity == Verbosity::Verbose {
             println!(
@@ -176,5 +178,45 @@ fn get_overridable_command_name(command: &Commands) -> Option<&'static str> {
         Some(name)
     } else {
         None
+    }
+}
+
+/// Check if the command has flags specific to the built-in implementation.
+///
+/// When the user passes flags like `--fix`, `--dry-run`, `--fatal-warnings`, etc.,
+/// they want the built-in command, not a script override. Only flags beyond the
+/// shared filter/concurrency args are checked.
+fn command_has_builtin_flags(command: &Commands) -> bool {
+    match command {
+        Commands::Analyze(args) => {
+            args.fix
+                || args.dry_run
+                || !args.code.is_empty()
+                || args.fatal_warnings
+                || args.fatal_infos
+                || args.no_fatal
+        }
+        Commands::Bootstrap(args) => {
+            args.enforce_lockfile
+                || args.no_enforce_lockfile
+                || args.no_example
+                || args.offline
+                || args.dry_run
+        }
+        Commands::Clean(args) => args.deep || args.dry_run,
+        Commands::Format(args) => {
+            args.set_exit_if_changed || args.line_length.is_some() || args.output != "write"
+        }
+        Commands::Test(args) => {
+            args.fail_fast
+                || args.coverage
+                || args.update_goldens
+                || args.no_run
+                || args.test_randomize_ordering_seed.is_some()
+                || !args.extra_args.is_empty()
+        }
+        // Note: dry_run defaults to true for publish, so it doesn't count
+        Commands::Publish(args) => args.git_tag_version || args.yes || args.release_url,
+        _ => false,
     }
 }

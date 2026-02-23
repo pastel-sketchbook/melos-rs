@@ -819,7 +819,7 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 
 ### Implementation Batches
 
-#### Batch A — Config parsing & CLI args ✅ (Batch 33)
+#### Batch A — Config parsing & CLI args (done, Batch 33)
 - [x] Add `BuildCommandConfig` struct with `flavors`, `defaultFlavor`, `android`, `ios`, `packageFilters`, `hooks`
 - [x] Add `FlavorConfig` struct with `target`, `mode` fields
 - [x] Add `PlatformConfig` struct with `types`, `defaultType`, `extraArgs`, `simulator` fields
@@ -832,7 +832,7 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Hook support via `workspace.hook("build", "pre")` / `workspace.hook("build", "post")`
 - [x] Tests: config parsing for all build config variants + command assembly + resolution logic
 
-#### Batch B — Core build command execution ✅ (included in Batch 33)
+#### Batch B — Core build command execution (done, included in Batch 33)
 - [x] Implement `build_flutter_command()` — assembles `flutter build <type> -t <target> --<mode> --flavor <flavor> [extraArgs]`
 - [x] Implement `commands::build::run()` — filter packages (flutter + dirExists), build command, execute via ProcessRunner
 - [x] Platform detection: `--android` filters to `dirExists: android`, `--ios` filters to `dirExists: ios`
@@ -841,7 +841,7 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Dry-run mode
 - [x] Tests: command string assembly for all platform/flavor/mode combos
 
-#### Batch C — Simulator builds & post-processing ✅ (Batch 34)
+#### Batch C — Simulator builds & post-processing (done, Batch 34)
 - [x] `resolve_artifact_path()` — Flutter build output path conventions (AAB, APK)
 - [x] `expand_simulator_template()` — placeholder expansion: `{aab_path}`, `{apk_path}`, `{output_dir}`, `{flavor}`, `{mode}`, `{configuration}`
 - [x] `resolve_simulator_command()` — validates config, expands template, returns command string
@@ -852,7 +852,7 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 24 new tests covering artifact paths, template expansion, simulator command resolution
 - Total: 444 unit tests + 26 integration tests = 470 tests
 
-#### Batch D — Version bump integration ✅ (Batch 35)
+#### Batch D — Version bump integration (done, Batch 35)
 - [x] Made `apply_version_bump()` and `extract_build_number()` public in `version.rs`
 - [x] Added `VALID_VERSION_BUMPS` constant — restricts build command to `patch`/`minor`/`major` (excludes `build` since `--build-number-bump` handles that)
 - [x] Added `validate_version_bump()` function with actionable error messages
@@ -862,7 +862,7 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 6 validation tests (patch/minor/major accepted, build/empty/arbitrary rejected) + 7 filesystem-based version bump tests (patch/minor/major/build, build-from-zero, patch-preserves-build-number, noop-when-absent)
 - Total: 457 unit tests + 26 integration tests = 483 tests
 
-#### Batch 37 — Composite builds & progress reporting ✅ (v0.3.1)
+#### Batch 37 — Composite builds & progress reporting (done, v0.3.1)
 - [x] `--all` platform flag — already functional in `resolve_platforms()` (when `--all` or neither `--android`/`--ios` specified, builds both platforms sequentially)
 - [x] Added `BuildStepResult` struct to track per-step outcomes (platform, flavor, mode, passed/failed counts, duration)
 - [x] Added `format_duration()` helper — human-readable durations (e.g., "1m 23.4s", "45.6s", "0.0s")
@@ -875,7 +875,7 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 4 format_duration + 3 format_step_result + 4 format_build_summary + 2 BuildStepResult struct = 13 new tests
 - Total: 470 unit tests + 26 integration tests = 496 tests
 
-#### Batch 38 — Analyze --fix & README updates ✅ (v0.3.2)
+#### Batch 38 — Analyze --fix & README updates (done, v0.3.2)
 - [x] Added `--fix` flag to `analyze` command — runs `dart fix --apply` in each package before `dart analyze`
 - [x] Added `FIX_COMMAND` constant for the fix command string
 - [x] Fix failures are non-fatal (warns and continues with analysis)
@@ -884,7 +884,23 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 1 FIX_COMMAND constant + 1 AnalyzeArgs --fix parsing + 1 --fix combined with --fatal-warnings = 3 new tests
 - Total: 473 unit tests + 26 integration tests = 499 tests
 
-#### Batch 36 — Refactoring pass ✅
+#### Batch 39 — Analyze --dry-run, --code flags (done, v0.3.3)
+- [x] Added `--dry-run` flag to `analyze` command — runs `dart fix --dry-run` only, skips analysis (conflicts with `--fix`)
+- [x] Added `--code` flag — comma-separated diagnostic codes appended as `--code=<code>` to dart fix command
+- [x] `--code` validated to require `--fix` or `--dry-run`
+- [x] Replaced `FIX_APPLY_COMMAND`/`FIX_DRY_RUN_COMMAND` constants with `build_fix_command(apply, codes)` function
+- [x] Rewrote `run()` to handle three modes: dry-run (preview only), fix+analyze, analyze-only
+- [x] Updated README: added `--dry-run` and `--code` rows to Analyze Options table
+- [x] Tests: 4 build_fix_command + 2 --code flag parsing + replaced 2 stale constant tests = net +8 new tests
+- [x] Dry-run output parser: `parse_dry_run_output()` with `FIX_LINE_RE` regex handling both bullet and dash separators across Dart SDK versions
+- [x] Dry-run display: consolidated sorted results with footer showing both `dart fix` and `melos-rs analyze --fix` commands
+- [x] `command_has_builtin_flags()` in main.rs: bypasses script override when command-specific flags are present (analyze, bootstrap, clean, format, test, publish)
+- [x] Mode-specific headers: "Analyzing" / "Fixing and analyzing" / "Previewing fixes for"
+- [x] `strip_ansi()` test helper in build.rs: fixes ANSI-dependent test assertions for colored output
+- [x] Tests: 5 parse_dry_run_output + 2 parse_fix_line + 2 build_fix_command with codes + 3 dry-run integration = net +12 new tests
+- Total: 493 unit tests + 26 integration tests = 519 tests
+
+#### Batch 36 — Refactoring pass (done)
 - [x] Audited all 10 if-else chains with 3+ branches across src/ (version.rs, build.rs, config/mod.rs, run.rs, exec.rs)
 - [x] Converted `config/mod.rs:1106` package path resolution from if-let chain to tuple `match (wrapper.melos.packages, wrapper.workspace)` (-3 LOC)
 - [x] Converted `run.rs:276` script mode display tag from if-else chain to tuple `match (steps, exec)` (-2 LOC)

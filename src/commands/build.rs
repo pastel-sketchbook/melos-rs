@@ -841,6 +841,13 @@ mod tests {
     use super::*;
     use crate::config::BuildMode;
 
+    /// Strip ANSI escape codes so assertions work regardless of terminal env.
+    fn strip_ansi(s: &str) -> String {
+        // safety: this regex is valid
+        let re = regex::Regex::new(r"\x1b\[[0-9;]*m").expect("valid regex");
+        re.replace_all(s, "").to_string()
+    }
+
     // ── build_flutter_command tests ─────────────────────────────────────
 
     #[test]
@@ -1720,7 +1727,7 @@ mod tests {
             duration: Duration::from_secs_f64(12.3),
             skipped: false,
         };
-        let output = format_step_result(&result);
+        let output = strip_ansi(&format_step_result(&result));
         assert!(output.contains("android"));
         assert!(output.contains("prod"));
         assert!(output.contains("[release]"));
@@ -1740,7 +1747,7 @@ mod tests {
             duration: Duration::from_secs_f64(8.1),
             skipped: false,
         };
-        let output = format_step_result(&result);
+        let output = strip_ansi(&format_step_result(&result));
         assert!(output.contains("ios"));
         assert!(output.contains("qa"));
         assert!(output.contains("[debug]"));
@@ -1760,7 +1767,7 @@ mod tests {
             duration: Duration::ZERO,
             skipped: true,
         };
-        let output = format_step_result(&result);
+        let output = strip_ansi(&format_step_result(&result));
         assert!(output.contains("ios"));
         assert!(output.contains("prod"));
         assert!(output.contains("skipped"));
@@ -1793,11 +1800,12 @@ mod tests {
             },
         ];
         let output = format_build_summary(&results, Duration::from_secs(25));
-        assert!(output.contains("BUILD SUMMARY"));
-        assert!(output.contains("5 passed"));
-        assert!(output.contains("25.0s"));
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("BUILD SUMMARY"));
+        assert!(plain.contains("5 passed"));
+        assert!(plain.contains("25.0s"));
         // No "failed" in output when all pass
-        assert!(!output.contains("failed"));
+        assert!(!plain.contains("failed"));
     }
 
     #[test]
@@ -1825,10 +1833,11 @@ mod tests {
             },
         ];
         let output = format_build_summary(&results, Duration::from_secs(18));
-        assert!(output.contains("BUILD SUMMARY"));
-        assert!(output.contains("4 passed"));
-        assert!(output.contains("1 failed"));
-        assert!(output.contains("18.0s"));
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("BUILD SUMMARY"));
+        assert!(plain.contains("4 passed"));
+        assert!(plain.contains("1 failed"));
+        assert!(plain.contains("18.0s"));
     }
 
     #[test]
@@ -1856,10 +1865,11 @@ mod tests {
             },
         ];
         let output = format_build_summary(&results, Duration::from_secs(10));
-        assert!(output.contains("BUILD SUMMARY"));
-        assert!(output.contains("3 passed"));
-        assert!(output.contains("1 skipped"));
-        assert!(output.contains("skipped"));
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("BUILD SUMMARY"));
+        assert!(plain.contains("3 passed"));
+        assert!(plain.contains("1 skipped"));
+        assert!(plain.contains("skipped"));
     }
 
     #[test]
@@ -1907,11 +1917,12 @@ mod tests {
             },
         ];
         let output = format_build_summary(&results, Duration::from_secs(35));
-        assert!(output.contains("BUILD SUMMARY"));
-        assert!(output.contains("7 passed"));
-        assert!(output.contains("1 failed"));
-        assert!(output.contains("1 skipped"));
-        assert!(output.contains("35.0s"));
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("BUILD SUMMARY"));
+        assert!(plain.contains("7 passed"));
+        assert!(plain.contains("1 failed"));
+        assert!(plain.contains("1 skipped"));
+        assert!(plain.contains("35.0s"));
     }
 
     // ── BuildStepResult struct tests ────────────────────────────────────
