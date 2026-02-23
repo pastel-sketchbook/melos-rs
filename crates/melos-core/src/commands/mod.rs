@@ -1,5 +1,6 @@
 pub mod analyze;
 pub mod bootstrap;
+pub mod build;
 pub mod clean;
 pub mod exec;
 pub mod format;
@@ -7,7 +8,9 @@ pub mod health;
 pub mod init;
 pub mod list;
 pub mod publish;
+pub mod run;
 pub mod test;
+pub mod version;
 
 /// Results from running a command across multiple packages.
 ///

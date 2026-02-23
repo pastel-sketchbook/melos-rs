@@ -762,18 +762,18 @@ Each core command accepts `UnboundedSender<Event>` and returns a typed result su
   - `test` -- core: `TestOpts`, `build_extra_flags()`, `build_test_command()`, `run()` returns `PackageResults`
   - `init` -- core: `write_7x_config()`, `write_legacy_config()`, `create_dir_if_missing()`
   - `health` -- core: `HealthOpts`, all data types, all `collect_*` functions, `run()` returns `HealthReport`
-- [ ] **Medium commands (batch B):**
+- [x] **Medium commands (batch B):** done, Batch 46
   - `exec` -- core handles package iteration + watch loop, emits events
   - `bootstrap` -- core handles pub get + overrides + enforce, emits events
   - `publish` -- core handles dry-run/publish + git tag, emits events
   - `analyze` -- core handles fix/dry-run/analyze phases, emits `AnalyzeDryRun`/`ConflictDetected` events
-- [ ] **Complex commands (batch C):**
+- [x] **Complex commands (batch C):** done, Batch 47
   - `run` -- core handles script resolution, step execution, watch loop, emits events
   - `build` -- core handles platform/flavor iteration, simulator post-build, emits `BuildStepResult` events
   - `version` -- core handles conventional commits, changelog, git ops, emits `VersionBumped` events
-- [ ] Define typed opts structs in core (decoupled from clap): `AnalyzeOpts`, `BootstrapOpts`, `ExecOpts`, etc.
-- [ ] CLI maps `clap` args to core opts structs in each wrapper
-- [ ] Verify `task check:all` passes after each batch
+- [x] Define typed opts structs in core (decoupled from clap): `AnalyzeOpts`, `BootstrapOpts`, `ExecOpts`, etc.
+- [x] CLI maps `clap` args to core opts structs in each wrapper
+- [x] Verify `task check:all` passes after each batch
 
 ### Phase 4 -- TUI frontend with ratatui
 
@@ -1099,3 +1099,14 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Fixed unused import clippy warning in CLI publish.rs
 - [x] Architecture: core `run()` takes pre-filtered `&[Package]` + `&Workspace` + opts + `Option<&UnboundedSender<Event>>` -> `Result<PackageResults>`; CLI retains clap args, colored output, renderer, lifecycle hooks, watch loop, dry-run display, confirmation prompts
 - Total: 517 unit tests + 26 integration tests = 543 tests (225 CLI unit + 292 core unit + 26 integration); 82 net new core tests
+
+#### Batch 47 — Phase 3 Batch C: migrate complex command logic to core (done, v0.5.2)
+- [x] Created `crates/melos-core/src/commands/run.rs` (668 lines) — `expand_melos_run()`, `normalize_line_continuations()`, `substitute_env_vars()`, `is_exec_command()`, `extract_exec_command()`, `strip_outer_quotes()`, `extract_melos_run_script_name()`, `parse_exec_flags()`, `ExecFlags` struct + 34 tests
+- [x] Created `crates/melos-core/src/commands/build.rs` (1128 lines) — `Platform` enum with `display()`/`dir_name()`/`default_build_type()`, `BuildMode` enum, `BuildStepResult`, `build_flutter_command()`, `resolve_platforms()`, `resolve_flavors()`, `resolve_android_build_type()`, `resolve_artifact_path()`, `expand_simulator_template()`, `resolve_simulator_command()`, `validate_version_bump()`, `format_duration()`, `format_step_result()`, `format_build_summary()`, `capitalize_first()`, `apply_version_bump()` + ~65 tests
+- [x] Created `crates/melos-core/src/commands/version.rs` (~2733 lines) — 30 pub functions including `parse_conventional_commit()`, `compute_next_version()`, `compute_next_prerelease()`, `highest_bump()`, `generate_changelog_entry()`, `write_changelog()`, `apply_version_bump()`, `update_dependency_constraint()`, `update_git_tag_refs_in_pubspec()`, `create_git_tag()`, `create_release_branch()`, `find_latest_git_tag()`, `parse_version_override()`, `message_placeholder_replacement()`, `url_encode()`, `chrono_date_today()`, config parsers for all version/changelog/hook configs + ~89 tests
+- [x] Updated `crates/melos-core/src/commands/mod.rs` to register `run`, `build`, `version` modules
+- [x] Rewrote CLI `run.rs` (1386->729 lines, -47%) to import from core, removed duplicated logic and tests
+- [x] Rewrote CLI `build.rs` (1981->636 lines, -68%) to import from core, removed duplicated logic and tests; updated `apply_version_bump` calls to use `melos_core::commands::version::apply_version_bump` with colored print
+- [x] Rewrote CLI `version.rs` (3213->657 lines, -80%) to import from core, removed duplicated logic and tests
+- [x] Architecture: core `run()` functions for build/version take pre-filtered packages + workspace + opts + event sender; CLI retains clap args, colored output, renderer, lifecycle hooks, confirmation prompts, git push/commit orchestration
+- Total: 534 unit tests + 26 integration tests = 560 tests (39 CLI unit + 495 core unit + 26 integration); 203 net new core tests
