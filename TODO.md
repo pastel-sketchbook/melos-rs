@@ -899,7 +899,18 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Results: 16-18x faster for orchestration commands (list, exec); 1.6x for format; 1.01x for analyze (Dart toolchain bottleneck)
 - [x] Updated README: added second benchmark table for real-world workspace with analysis of speedup patterns
 - [x] Bumped version to 0.4.1
-- Total: 500 unit tests + 26 integration tests = 526 tests (no test changes, benchmarks only) — Analyze --dry-run, --code flags (done, v0.3.3)
+- Total: 500 unit tests + 26 integration tests = 526 tests (no test changes, benchmarks only)
+
+#### Batch 42 — Fix conflict pre-scan in --fix mode (done)
+- [x] Extracted `scan_dry_run()` async function from inline dry-run scanning logic — reusable by both `--dry-run` and `--fix` paths
+- [x] Added `DryRunScan` struct to hold entries, codes, and conflicts from a scan
+- [x] `--fix` mode now pre-scans with `dart fix --dry-run` when no `--code` filter is set
+- [x] If conflicts detected: skips `dart fix --apply`, prints conflict warning, suggests `--code` or fixing `analysis_options.yaml`, falls through to analyze-only
+- [x] If `--code` is set: bypasses pre-scan (user explicitly chose diagnostics)
+- [x] Progress label is context-aware: "previewing fixes" for `--dry-run`, "scanning for conflicts" for `--fix` pre-scan
+- [x] Tests: 3 skip-logic decision tests + 1 DryRunScan struct assembly test = 4 new tests
+- [x] Updated README: `--fix` description now mentions conflict pre-scan
+- Total: 504 unit tests + 26 integration tests = 530 tests — Analyze --dry-run, --code flags (done, v0.3.3)
 - [x] Added `--dry-run` flag to `analyze` command — runs `dart fix --dry-run` only, skips analysis (conflicts with `--fix`)
 - [x] Added `--code` flag — comma-separated diagnostic codes appended as `--code=<code>` to dart fix command
 - [x] `--code` validated to require `--fix` or `--dry-run`

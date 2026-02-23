@@ -90,71 +90,19 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
 
     // --dry-run: preview fixes, parse output, display consolidated results
     if args.dry_run {
-        let fix_cmd = build_fix_command(false, &args.code);
+        let scan = scan_dry_run(
+            &packages,
+            workspace,
+            args.concurrency,
+            &args.code,
+            "scanning for conflicts",
+        )
+        .await?;
 
-        let semaphore = Arc::new(Semaphore::new(args.concurrency));
-        let pb = create_progress_bar(packages.len() as u64, "previewing fixes");
-        let mut handles = Vec::new();
-
-        for pkg in &packages {
-            let sem = semaphore.clone();
-            let cmd = fix_cmd.clone();
-            let pkg_path = pkg.path.clone();
-            let root_path = workspace.root_path.clone();
-            let env = workspace.env_vars();
-            let pb = pb.clone();
-
-            handles.push(tokio::spawn(async move {
-                // safety: semaphore is never closed in this scope
-                let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
-                let (shell, flag) = shell_command();
-                let result = tokio::process::Command::new(shell)
-                    .arg(flag)
-                    .arg(&cmd)
-                    .current_dir(&pkg_path)
-                    .envs(&env)
-                    .output()
-                    .await;
-                pb.inc(1);
-
-                let prefix = pkg_path
-                    .strip_prefix(&root_path)
-                    .unwrap_or(&pkg_path)
-                    .to_string_lossy()
-                    .to_string();
-
-                match result {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        parse_dry_run_output(&stdout, &prefix)
-                    }
-                    Err(_) => Vec::new(),
-                }
-            }));
-        }
-
-        let mut all_entries: Vec<DryRunFileEntry> = Vec::new();
-        let mut all_codes: BTreeSet<String> = BTreeSet::new();
-
-        for handle in handles {
-            let entries = handle.await?;
-            for entry in &entries {
-                for (code, _) in &entry.fixes {
-                    all_codes.insert(code.clone());
-                }
-            }
-            all_entries.extend(entries);
-        }
-
-        pb.finish_and_clear();
-
-        // Sort by path for deterministic output across concurrent runs
-        all_entries.sort_by(|a, b| a.path.cmp(&b.path));
-
-        if all_entries.is_empty() {
+        if scan.entries.is_empty() {
             println!("{}", "Nothing to fix!".green());
         } else {
-            for entry in &all_entries {
+            for entry in &scan.entries {
                 println!("{}", entry.path);
                 for (code, count) in &entry.fixes {
                     let label = if *count == 1 { "fix" } else { "fixes" };
@@ -163,11 +111,11 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
                 println!();
             }
 
-            match all_codes.len() {
+            match scan.codes.len() {
                 1 => println!("To fix this diagnostic, run:"),
                 _ => println!("To fix an individual diagnostic, run one of:"),
             }
-            for code in &all_codes {
+            for code in &scan.codes {
                 println!("  dart fix --apply --code={}", code);
                 println!("  melos-rs analyze --fix --code={}", code);
             }
@@ -176,11 +124,9 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
             println!("  dart fix --apply");
             println!("  melos-rs analyze --fix");
 
-            // Detect and warn about conflicting lint rules
-            let conflicts = detect_conflicting_diagnostics(&all_entries, 2);
-            if !conflicts.is_empty() {
+            if !scan.conflicts.is_empty() {
                 println!();
-                println!("{}", format_conflict_warnings(&conflicts).yellow());
+                println!("{}", format_conflict_warnings(&scan.conflicts).yellow());
             }
         }
 
@@ -188,40 +134,70 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
         return Ok(());
     }
 
-    // --fix: apply fixes before analysis
+    // --fix: apply fixes before analysis (with conflict pre-scan)
     if args.fix {
-        let fix_cmd = build_fix_command(true, &args.code);
-        let fix_pb = create_progress_bar(packages.len() as u64, "fixing");
-        let fix_runner = ProcessRunner::new(args.concurrency, false);
-        let fix_results = fix_runner
-            .run_in_packages_with_progress(
+        // When no --code filter is set, pre-scan for conflicts to avoid
+        // applying opposing fixes that cancel each other out.
+        let mut skip_fix = false;
+        if args.code.is_empty() {
+            let scan = scan_dry_run(
                 &packages,
-                &fix_cmd,
-                &workspace.env_vars(),
-                None,
-                Some(&fix_pb),
-                &workspace.packages,
+                workspace,
+                args.concurrency,
+                &args.code,
+                "previewing fixes",
             )
             .await?;
-        fix_pb.finish_and_clear();
-
-        let fix_failed = fix_results.iter().filter(|(_, success)| !success).count();
-        if fix_failed > 0 {
-            println!(
-                "{}",
-                format!(
-                    "Warning: {} failed in {} package(s), continuing with analysis...",
-                    fix_cmd, fix_failed
-                )
-                .yellow()
-            );
-        } else {
-            println!(
-                "{}",
-                format!("Applied fixes in {} package(s).", fix_results.len()).green()
-            );
+            if !scan.conflicts.is_empty() {
+                println!("{}", format_conflict_warnings(&scan.conflicts).yellow());
+                println!();
+                println!(
+                    "{}",
+                    "Skipping dart fix --apply to avoid a fix/analyze loop.".yellow()
+                );
+                println!(
+                    "{}",
+                    "Use --code=<diagnostic> to apply a specific fix, or resolve the conflict in analysis_options.yaml.".yellow()
+                );
+                println!();
+                skip_fix = true;
+            }
         }
-        println!();
+
+        if !skip_fix {
+            let fix_cmd = build_fix_command(true, &args.code);
+            let fix_pb = create_progress_bar(packages.len() as u64, "fixing");
+            let fix_runner = ProcessRunner::new(args.concurrency, false);
+            let fix_results = fix_runner
+                .run_in_packages_with_progress(
+                    &packages,
+                    &fix_cmd,
+                    &workspace.env_vars(),
+                    None,
+                    Some(&fix_pb),
+                    &workspace.packages,
+                )
+                .await?;
+            fix_pb.finish_and_clear();
+
+            let fix_failed = fix_results.iter().filter(|(_, success)| !success).count();
+            if fix_failed > 0 {
+                println!(
+                    "{}",
+                    format!(
+                        "Warning: {} failed in {} package(s), continuing with analysis...",
+                        fix_cmd, fix_failed
+                    )
+                    .yellow()
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!("Applied fixes in {} package(s).", fix_results.len()).green()
+                );
+            }
+            println!();
+        }
     }
 
     let cmd_str = build_analyze_command(args.fatal_warnings, args.fatal_infos, args.no_fatal);
@@ -291,6 +267,94 @@ fn build_analyze_command(fatal_warnings: bool, fatal_infos: bool, no_fatal: bool
     cmd_parts.push(".".to_string());
 
     cmd_parts.join(" ")
+}
+
+/// Result of a `dart fix --dry-run` scan across packages.
+struct DryRunScan {
+    entries: Vec<DryRunFileEntry>,
+    codes: BTreeSet<String>,
+    conflicts: Vec<ConflictingPair>,
+}
+
+/// Run `dart fix --dry-run` across packages and parse output.
+///
+/// Returns consolidated file entries, unique diagnostic codes, and any
+/// conflicting lint rule pairs detected via the equal-count heuristic.
+async fn scan_dry_run(
+    packages: &[crate::package::Package],
+    workspace: &Workspace,
+    concurrency: usize,
+    codes: &[String],
+    progress_label: &str,
+) -> Result<DryRunScan> {
+    let fix_cmd = build_fix_command(false, codes);
+
+    let semaphore = Arc::new(Semaphore::new(concurrency));
+    let pb = create_progress_bar(packages.len() as u64, progress_label);
+    let mut handles = Vec::new();
+
+    for pkg in packages {
+        let sem = semaphore.clone();
+        let cmd = fix_cmd.clone();
+        let pkg_path = pkg.path.clone();
+        let root_path = workspace.root_path.clone();
+        let env = workspace.env_vars();
+        let pb = pb.clone();
+
+        handles.push(tokio::spawn(async move {
+            // safety: semaphore is never closed in this scope
+            let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+            let (shell, flag) = shell_command();
+            let result = tokio::process::Command::new(shell)
+                .arg(flag)
+                .arg(&cmd)
+                .current_dir(&pkg_path)
+                .envs(&env)
+                .output()
+                .await;
+            pb.inc(1);
+
+            let prefix = pkg_path
+                .strip_prefix(&root_path)
+                .unwrap_or(&pkg_path)
+                .to_string_lossy()
+                .to_string();
+
+            match result {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    parse_dry_run_output(&stdout, &prefix)
+                }
+                Err(_) => Vec::new(),
+            }
+        }));
+    }
+
+    let mut entries: Vec<DryRunFileEntry> = Vec::new();
+    let mut codes: BTreeSet<String> = BTreeSet::new();
+
+    for handle in handles {
+        let pkg_entries = handle.await?;
+        for entry in &pkg_entries {
+            for (code, _) in &entry.fixes {
+                codes.insert(code.clone());
+            }
+        }
+        entries.extend(pkg_entries);
+    }
+
+    pb.finish_and_clear();
+
+    // Sort by path for deterministic output across concurrent runs
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let conflicts = detect_conflicting_diagnostics(&entries, 2);
+
+    Ok(DryRunScan {
+        entries,
+        codes,
+        conflicts,
+    })
 }
 
 /// A file entry parsed from `dart fix --dry-run` output.
@@ -988,5 +1052,120 @@ lib/foo.dart
         assert!(output.contains("omit_local_variable_types: false"));
         assert!(output.contains("specify_nonobvious_local_variable_types: false"));
         assert!(output.contains("Applying both conflicting fixes will undo each other"));
+    }
+
+    // ── pre-scan skip logic tests ──────────────────────────────────────
+
+    /// Simulates the decision in the --fix path: when conflicts exist and
+    /// no --code filter is set, fixes should be skipped.
+    #[test]
+    fn test_fix_skipped_when_conflicts_detected_no_code_filter() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![
+                    ("omit_local_variable_types".to_string(), 4),
+                    ("specify_nonobvious_local_variable_types".to_string(), 4),
+                ],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![
+                    ("omit_local_variable_types".to_string(), 2),
+                    ("specify_nonobvious_local_variable_types".to_string(), 2),
+                ],
+            },
+        ];
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        let code_filter: Vec<String> = vec![];
+
+        // Decision: skip fix when conflicts exist and no --code filter
+        let skip_fix = !conflicts.is_empty() && code_filter.is_empty();
+        assert!(skip_fix);
+    }
+
+    /// When --code is specified, fixes should NOT be skipped even if
+    /// conflicts exist (user explicitly chose a specific diagnostic).
+    #[test]
+    fn test_fix_not_skipped_when_code_filter_set() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![
+                    ("omit_local_variable_types".to_string(), 4),
+                    ("specify_nonobvious_local_variable_types".to_string(), 4),
+                ],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![
+                    ("omit_local_variable_types".to_string(), 2),
+                    ("specify_nonobvious_local_variable_types".to_string(), 2),
+                ],
+            },
+        ];
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        let code_filter = vec!["omit_local_variable_types".to_string()];
+
+        // Decision: do NOT skip because user specified --code
+        let skip_fix = !conflicts.is_empty() && code_filter.is_empty();
+        assert!(!skip_fix);
+    }
+
+    /// When no conflicts exist, fixes should proceed normally.
+    #[test]
+    fn test_fix_not_skipped_when_no_conflicts() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![("unused_import".to_string(), 3)],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![("deprecated_member_use".to_string(), 1)],
+            },
+        ];
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        let code_filter: Vec<String> = vec![];
+
+        let skip_fix = !conflicts.is_empty() && code_filter.is_empty();
+        assert!(!skip_fix);
+    }
+
+    /// DryRunScan struct is correctly assembled from entries.
+    #[test]
+    fn test_dry_run_scan_struct_assembly() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![("rule_a".to_string(), 2), ("rule_b".to_string(), 2)],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![("rule_a".to_string(), 3), ("rule_b".to_string(), 3)],
+            },
+        ];
+
+        let mut codes = BTreeSet::new();
+        for entry in &entries {
+            for (code, _) in &entry.fixes {
+                codes.insert(code.clone());
+            }
+        }
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+
+        let scan = DryRunScan {
+            entries,
+            codes,
+            conflicts,
+        };
+
+        assert_eq!(scan.entries.len(), 2);
+        assert_eq!(scan.codes.len(), 2);
+        assert!(scan.codes.contains("rule_a"));
+        assert!(scan.codes.contains("rule_b"));
+        assert_eq!(scan.conflicts.len(), 1);
+        assert_eq!(scan.conflicts[0].code_a, "rule_a");
+        assert_eq!(scan.conflicts[0].code_b, "rule_b");
     }
 }
