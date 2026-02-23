@@ -30,7 +30,7 @@ Full parity with Melos 7.4.0 for CLI workflows:
 | `version` | Bump versions via conventional commits, generate changelogs, create git tags |
 | `publish` | Publish packages to pub.dev with dry-run support |
 | `test` | Run `dart test` / `flutter test` with coverage and golden updates |
-| `analyze` | Run `dart analyze` with fatal warnings/infos control |
+| `analyze` | Run `dart analyze` with `--fix`, fatal warnings/infos control |
 | `format` | Run `dart format` across packages |
 | `pub` | Run `pub get`, `upgrade`, `downgrade`, `add`, `remove` |
 | `init` | Scaffold a new Melos workspace (6.x or 7.x format) |
@@ -60,6 +60,37 @@ Full parity with Melos 7.4.0 for CLI workflows:
 - Cross-platform shell support (Unix `sh -c` / Windows `cmd /C`)
 - Buffered output to prevent interleaving in concurrent mode
 - Per-package environment variables (`MELOS_PACKAGE_NAME`, `MELOS_PACKAGE_VERSION`, etc.)
+
+**Analyze Options**
+
+| Flag | Description |
+|------|-------------|
+| `--fix` | Run `dart fix --apply` in each package before analyzing |
+| `--fatal-warnings` | Report warnings as fatal errors |
+| `--fatal-infos` | Report info-level issues as fatal errors |
+| `--no-fatal` | Override `--fatal-warnings` and `--fatal-infos` |
+| `-c, --concurrency` | Max concurrent processes (default: 5) |
+
+**Build Options** (beyond Melos parity)
+
+Declarative build command configured via `melos.yaml`:
+
+| Flag | Description |
+|------|-------------|
+| `--android` | Build for Android only |
+| `--ios` | Build for iOS only |
+| `--all` | Build for all platforms (default when neither `--android` nor `--ios` specified) |
+| `--flavor <name>` | Build flavor/environment (repeatable; defaults to config `defaultFlavor`) |
+| `--type <type>` | Android build type: `apk` or `appbundle` (defaults to config `defaultType`) |
+| `--simulator` | Build simulator-compatible artifacts (bundletool/xcodebuild) |
+| `--export-options-plist <path>` | Override export options plist for iOS builds |
+| `--version-bump <level>` | Bump version before building: `patch`, `minor`, or `major` |
+| `--build-number-bump` | Increment build number before building |
+| `--dry-run` | Print commands without executing |
+| `--fail-fast` | Stop on first failure |
+| `-c, --concurrency` | Max concurrent build processes (default: 1) |
+
+Build progress is reported per-step with timing and a summary table at completion.
 
 ## Installation
 
@@ -142,7 +173,7 @@ src/
 
 ### Test suite
 
-371 tests (351 unit + 20 integration). Run with:
+499 tests (473 unit + 26 integration). Run with:
 
 ```sh
 cargo test

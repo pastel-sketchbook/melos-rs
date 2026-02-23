@@ -875,6 +875,15 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 4 format_duration + 3 format_step_result + 4 format_build_summary + 2 BuildStepResult struct = 13 new tests
 - Total: 470 unit tests + 26 integration tests = 496 tests
 
+#### Batch 38 — Analyze --fix & README updates ✅ (v0.3.2)
+- [x] Added `--fix` flag to `analyze` command — runs `dart fix --apply` in each package before `dart analyze`
+- [x] Added `FIX_COMMAND` constant for the fix command string
+- [x] Fix failures are non-fatal (warns and continues with analysis)
+- [x] Updated README: analyze command description updated, added Analyze Options table, added Build Options table
+- [x] Updated README test count to 473 unit + 26 integration = 499
+- [x] Tests: 1 FIX_COMMAND constant + 1 AnalyzeArgs --fix parsing + 1 --fix combined with --fatal-warnings = 3 new tests
+- Total: 473 unit tests + 26 integration tests = 499 tests
+
 #### Batch 36 — Refactoring pass ✅
 - [x] Audited all 10 if-else chains with 3+ branches across src/ (version.rs, build.rs, config/mod.rs, run.rs, exec.rs)
 - [x] Converted `config/mod.rs:1106` package path resolution from if-let chain to tuple `match (wrapper.melos.packages, wrapper.workspace)` (-3 LOC)
