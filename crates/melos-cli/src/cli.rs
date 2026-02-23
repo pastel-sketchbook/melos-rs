@@ -194,6 +194,9 @@ pub enum Commands {
 
     /// Manage package versions
     Version(VersionArgs),
+
+    /// Launch the interactive terminal UI (requires melos-tui binary)
+    Tui,
 }
 
 /// Arguments for the `bootstrap` command

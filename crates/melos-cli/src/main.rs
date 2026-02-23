@@ -59,6 +59,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if let Commands::Tui = cli.command {
+        return launch_tui();
+    }
+
     // Find and load workspace
     let workspace = match workspace::Workspace::find_and_load(cli.sdk_path.as_deref()) {
         Ok(ws) => ws,
@@ -134,6 +138,7 @@ async fn main() -> Result<()> {
             Commands::Format(args) => commands::format::run(&workspace, args).await,
             Commands::Health(args) => commands::health::run(&workspace, args).await,
             Commands::Init(_) => unreachable!("init handled above"),
+            Commands::Tui => unreachable!("tui handled above"),
             Commands::List(args) => commands::list::run(&workspace, args).await,
             Commands::Pub(args) => commands::pub_cmds::run(&workspace, args).await,
             Commands::Publish(args) => commands::publish::run(&workspace, args).await,
@@ -173,8 +178,10 @@ fn get_overridable_command_name(command: &Commands) -> Option<&'static str> {
         Commands::Publish(_) => "publish",
         Commands::Version(_) => "version",
         Commands::Test(_) => "test",
-        // `run`, `init`, `completion` are never overridden
-        Commands::Run(_) | Commands::Init(_) | Commands::Completion(_) => return None,
+        // `run`, `init`, `completion`, `tui` are never overridden
+        Commands::Run(_) | Commands::Init(_) | Commands::Completion(_) | Commands::Tui => {
+            return None;
+        }
     };
 
     // Only override if the name is in our overridable list
@@ -222,5 +229,43 @@ fn command_has_builtin_flags(command: &Commands) -> bool {
         // Note: dry_run defaults to true for publish, so it doesn't count
         Commands::Publish(args) => args.git_tag_version || args.yes || args.release_url,
         _ => false,
+    }
+}
+
+/// Launch the `melos-tui` binary by exec-ing into it.
+///
+/// Looks for the binary on PATH. If not found, prints a helpful install message.
+fn launch_tui() -> Result<()> {
+    use std::process::Command;
+
+    let binary = "melos-tui";
+    let status = Command::new(binary).status();
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => {
+            std::process::exit(s.code().unwrap_or(1));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "{} '{}' not found on PATH.\n\n\
+                 Install it with:\n  \
+                 cargo install --path crates/melos-tui\n\n\
+                 Or build the full workspace:\n  \
+                 cargo build --workspace",
+                "ERROR".red().bold(),
+                binary,
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!(
+                "{} Failed to launch '{}': {}",
+                "ERROR".red().bold(),
+                binary,
+                e
+            );
+            std::process::exit(1);
+        }
     }
 }

@@ -76,7 +76,7 @@ fn run(
         {
             // Only handle key press events (ignore release/repeat on supported terminals).
             if key.kind == KeyEventKind::Press {
-                app.handle_key(key.code);
+                app.handle_key(key.code, key.modifiers);
             }
         }
 

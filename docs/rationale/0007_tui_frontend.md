@@ -79,9 +79,9 @@ crates/
       views/
         packages.rs     # package list table view
         commands.rs     # command/script picker view
+        help.rs         # help overlay (nav keys + command descriptions)
         execution.rs    # live execution panel
         results.rs      # scrollable results view
-        health.rs       # health dashboard view
 ```
 
 ### App state machine
@@ -99,7 +99,7 @@ crates/
 
 | State | Description | Key bindings |
 |-------|-------------|-------------|
-| `Idle` | Workspace loaded. Package list + command picker visible. | arrows, tab, enter, q, /, ? |
+| `Idle` | Workspace loaded. Package list + command picker visible. | j/k, g/G, f/b, tab, h/l, enter, q, /, ? |
 | `Running` | Command executing. Live progress panel. | Esc (cancel), scroll |
 | `Done` | Results displayed. Scrollable output. | Esc (back to Idle), arrows (scroll) |
 
@@ -128,32 +128,39 @@ terminal frame. This is ratatui's standard immediate-mode pattern.
 
 ```
 +----------------------------------------------------------+
-| melos-rs TUI  |  workspace: my_app  |  15 packages       |  <- Header
+| melos-tui | my_app (melos.yaml, 15 packages)     v0.6.0 |  <- Header
 +----------------------------------------------------------+
-|                           |                              |
-|  Packages                 |  Output / Results            |
-|  -----------------------  |  --------------------------- |
-|  > app_core     1.2.0  F  |  [app_core] running...       |
-|    app_ui       1.0.0  F  |  [app_core] SUCCESS          |
-|    auth_api     0.3.1  D  |  [app_ui] running...         |
-|    payment      2.1.0  F  |  [app_ui] FAILED             |
-|    ...                    |  [auth_api] running...       |
-|                           |                              |
+|  Packages (15)         |  Commands (14)                  |
+|  --------------------  |  ------------------------------ |
+|  > app_core  1.2.0  F  |  > analyze                      |
+|    app_ui    1.0.0  F  |    bootstrap                    |
+|    auth_api  0.3.1  D  |    build                        |
+|    payment   2.1.0  F  |    clean                        |
+|    ...                 |    exec                         |
+|                        |    format                       |
+|                        |    ...                          |
+|                        |    --- scripts ---              |
+|                        |    build:prod  Build production |
+|                        |    test:all    Run all tests    |
 +----------------------------------------------------------+
-|  Commands: bootstrap | clean | exec | test | analyze     |  <- Command bar
-+----------------------------------------------------------+
-|  q:quit  tab:switch  enter:run  /:filter  ?:help         |  <- Footer
+| q:quit j/k:navigate g/G:jump f/b:page tab:switch ?:help |  <- Footer
 +----------------------------------------------------------+
 ```
 
-Two-column layout:
-- **Left panel (40%)**: Package list table or command/script picker
-  (tab to toggle)
-- **Right panel (60%)**: Output stream during execution, results when done,
-  or health dashboard
+Two-panel layout in `Idle` state:
+- **Left panel (40%)**: Package list table (Name, Version, SDK, Path)
+- **Right panel (60%)**: Command/script picker (built-in commands + named
+  scripts from config)
+- `Tab`/`BackTab` toggles active panel focus
+- `h`/`l` directly focuses left/right panel
+- Active panel has a highlighted border
 
-The header shows workspace name, config source, and package count. The
-footer shows context-sensitive key bindings.
+During `Running` state, the right panel shows live output. During `Done`,
+it shows results with pass/fail per package.
+
+The header shows workspace name, config source, package count (left) and
+version (right-aligned). The footer shows context-sensitive key bindings
+that update based on `AppState`.
 
 ### Core integration pattern
 
@@ -194,12 +201,12 @@ ratatui provides all the widgets we need out of the box:
 | View | Widget | Notes |
 |------|--------|-------|
 | Package list | `Table` | Sortable columns, highlight selected row |
-| Command picker | `List` | With selection state |
+| Command picker | `Table` | Built-in commands + named scripts, selection state |
 | Output stream | `Paragraph` with `Line` spans | Auto-scroll, colored per-package |
 | Progress | `Gauge` | Maps to core `Progress` event |
 | Health dashboard | `Table` + `Paragraph` | Tabbed: drift / fields / SDK |
 | Filter input | `Paragraph` as input | `/` activates, Esc cancels |
-| Help overlay | `Paragraph` in `Block` | `?` toggles, centered popup |
+| Help overlay | `Clear` + `Block` + `Paragraph` | `?` toggles, centered popup, shows nav keys + all commands |
 
 ### Scrollback buffer
 
@@ -211,18 +218,29 @@ auto-follows the tail.
 
 ## Keyboard navigation
 
+Vi-style keybindings are the primary navigation mode, with arrow key
+equivalents for all motions.
+
 | Key | Context | Action |
 |-----|---------|--------|
 | `q` / `Ctrl+C` | Any | Quit |
-| `Tab` | Idle | Toggle left panel: packages / commands |
-| Up/Down | Any | Navigate list / scroll output |
+| `j` / Down | Idle | Move selection down |
+| `k` / Up | Idle | Move selection up |
+| `g` / Home | Idle | Jump to first item |
+| `G` / End | Idle | Jump to last item |
+| `f` / `Ctrl+F` / PgDn | Idle | Page down |
+| `b` / `Ctrl+B` / PgUp | Idle | Page up |
+| `Ctrl+D` | Idle | Half-page down |
+| `Ctrl+U` | Idle | Half-page up |
+| `Tab` / `BackTab` | Idle | Toggle active panel |
+| `h` / Left | Idle | Focus left panel (Packages) |
+| `l` / Right | Idle | Focus right panel (Commands) |
 | `Enter` | Idle (command selected) | Execute command |
 | `Esc` | Running | Cancel execution (graceful) |
 | `Esc` | Done | Return to Idle |
+| `Esc` | Idle | Quit |
 | `/` | Idle | Open filter input |
-| `?` | Any | Toggle help overlay |
-| `h` | Idle | Run health check |
-| `1`-`5` | Idle | Quick-switch views (packages, commands, health, output, scripts) |
+| `?` | Any | Toggle help overlay (nav keys + command list) |
 | `Page Up/Down` | Output visible | Scroll output by page |
 | `Home/End` | Output visible | Jump to start/end of output |
 
@@ -241,16 +259,17 @@ TUI code is inherently harder to unit test than CLI code. The strategy:
 
 ## Implementation plan
 
-Six batches, each producing a runnable binary:
+Seven batches, each producing a runnable binary. Batches A-B are complete.
 
-| Batch | Scope | Deliverables |
-|-------|-------|-------------|
-| A | Crate scaffolding | Cargo.toml, terminal setup/teardown, empty App, quit on `q` |
-| B | Workspace + packages | Load workspace on startup, package list table, keyboard nav |
-| C | Command picker + execution | Command/script list, tab switching, wire execution to core |
-| D | Live progress + output | Per-package output streaming, progress gauge, scrollback |
-| E | Results + health | Results panel, health dashboard, error display |
-| F | Polish | Filter bar, help overlay, themes, edge cases |
+| Batch | TODO.md | Scope | Status |
+|-------|---------|-------|--------|
+| A | 48 | Crate scaffolding: Cargo.toml, terminal setup/teardown, empty App, quit on `q` | Done |
+| B | 49 | Workspace + packages: load workspace, package list table, keyboard nav | Done |
+| C | 50 | Command picker + help: two-panel layout, Tab/h/l switching, vi keys, `?` help overlay, version display | In progress |
+| D | 51 | Command execution: `AppEvent` enum, `tokio::select!` loop, wire Enter to core commands | Planned |
+| E | 52 | Live progress + output: per-package streaming, scrollback, `Gauge`, elapsed time | Planned |
+| F | 53 | Results + health: pass/fail summary, health dashboard | Planned |
+| G | 54 | Polish: filter bar (`/`), terminal resize, edge cases, `NO_COLOR` | Planned |
 
 See TODO.md Phase 4 for the full task breakdown.
 

@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Cell, Row, Table, TableState},
+    Frame,
 };
 
 use crate::app::App;
@@ -11,7 +11,8 @@ use crate::app::App;
 /// Draw the package table into the given area.
 ///
 /// Uses `TableState` to track selection highlighting and scroll offset.
-pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+/// When `focused` is true, the border is highlighted in cyan.
+pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, focused: bool) {
     let header_cells = ["Name", "Version", "SDK", "Path"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
@@ -43,6 +44,12 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) 
 
     let title = format!(" Packages ({}) ", app.package_count());
 
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
     let table = Table::new(
         rows,
         [
@@ -53,7 +60,12 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) 
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title(title))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style),
+    )
     .row_highlight_style(
         Style::default()
             .bg(Color::DarkGray)
@@ -71,7 +83,7 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) 
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     use super::*;
     use crate::app::PackageRow;
@@ -82,7 +94,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
-                draw_packages(frame, frame.area(), app);
+                draw_packages(frame, frame.area(), app, true);
             })
             .unwrap();
         terminal.backend().buffer().clone()

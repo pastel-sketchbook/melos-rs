@@ -52,6 +52,7 @@ Full parity with Melos 7.4.0 for CLI workflows:
 | `init` | Scaffold a new Melos workspace (6.x or 7.x format) |
 | `health` | Workspace health checks: version drift, missing fields, SDK consistency |
 | `completion` | Generate shell completions for bash, zsh, fish |
+| `tui` | Launch interactive TUI dashboard (requires `melos-tui` binary) |
 
 **Package Filters** (shared across all commands)
 
@@ -114,17 +115,24 @@ Build progress is reported per-step with timing and a summary table at completio
 
 ### From source
 
-Requires [Rust toolchain](https://rustup.rs/) (nightly — uses `let_chains` feature).
+Requires [Rust toolchain](https://rustup.rs/) (stable, 1.85+; uses `let_chains` which stabilized in 1.87).
 
 ```sh
-cargo install --path .
+# CLI only (default)
+cargo install --path crates/melos-cli
+
+# TUI (optional, separate binary)
+cargo install --path crates/melos-tui
 ```
 
 ### Build
 
 ```sh
-# Debug build
+# Debug build (CLI + core only, excludes TUI)
 cargo build
+
+# Debug build (all crates including TUI)
+cargo build --workspace
 
 # Release build
 cargo build --release
@@ -173,28 +181,39 @@ task install
 ### Project structure
 
 ```
-src/
-  main.rs             Entry point
-  cli.rs              Clap CLI definitions
-  workspace.rs        Workspace loading (config + packages)
-  config/
-    mod.rs            melos.yaml parsing
-    script.rs         Script config types
-    filter.rs         Filter config types
-  package/
-    mod.rs            Package model, pubspec parsing, discovery
-    filter.rs         Package filter logic
-  commands/           Command implementations
-  runner/mod.rs       Concurrent process execution
-  watcher/mod.rs      File watching
+crates/
+  melos-core/             Library: config, packages, commands, runner, watcher
+    src/
+      config/             melos.yaml / pubspec.yaml parsing
+      package/            Package model, pubspec parsing, discovery, filtering
+      commands/           Command logic (analyze, bootstrap, build, etc.)
+      runner.rs           Concurrent process execution with event streaming
+      watcher/            File watching for --watch mode
+      workspace.rs        Workspace loading (config + packages)
+      events.rs           Event enum for frontend consumption
+  melos-cli/              Binary: CLI frontend
+    src/
+      cli.rs              Clap CLI definitions
+      commands/            CLI wrappers (rendering, lifecycle hooks)
+      render.rs           Progress bars + colored output via events
+      filter_ext.rs       GlobalFilterArgs -> PackageFilters conversion
+  melos-tui/              Binary: TUI frontend (optional, ratatui + crossterm)
+    src/
+      app.rs              App state machine + keyboard handlers
+      ui.rs               Layout rendering (header, body, footer)
+      views/              Panel widgets (packages, commands, help)
 ```
 
 ### Test suite
 
-533 tests (507 unit + 26 integration). Run with:
+607 tests (39 CLI unit + 495 core unit + 47 TUI unit + 26 integration). Run with:
 
 ```sh
+# Default members (core + CLI)
 cargo test
+
+# All crates including TUI
+cargo test --workspace
 ```
 
 ## License

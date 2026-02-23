@@ -830,24 +830,44 @@ Load the workspace on startup and display packages in a navigable table.
 - [x] Layout: header bar (workspace name, config source, package count) + package table + footer
 - [x] Tests: `App` state transitions for keyboard navigation (up/down wrapping, bounds)
 
-#### Batch 50 -- Command picker + tab switching
+#### Batch 50 -- Command picker + help overlay + vi keys
 
-Add a command/script list panel and tab-based panel switching.
+Add a command/script list panel, two-panel layout with tab switching,
+vi-style navigation, version display, and `?` help overlay.
 
-- [ ] Create `crates/melos-tui/src/views/commands.rs`:
-  - `List` widget showing built-in commands: analyze, bootstrap, build, clean, exec, format,
+- [x] Create `crates/melos-tui/src/views/commands.rs`:
+  - `Table` widget showing built-in commands: analyze, bootstrap, build, clean, exec, format,
     health, list, publish, run, test, version
   - Below built-in commands: named scripts from `workspace.config.scripts` (non-private)
-  - `ListState` for selection highlighting
-  - Show script description (if any) on the right side
-- [ ] Add `ActivePanel` enum (`Packages`, `Commands`) to `App`
-- [ ] Wire `Tab` key to toggle `ActivePanel` in `Idle` state
-- [ ] Update layout to two-column split:
-  - Left panel (40%): packages table OR command list (based on `ActivePanel`)
-  - Right panel (60%): placeholder "Select a command and press Enter" text
-- [ ] Visual indicator for active panel (highlighted border or bold title)
-- [ ] Wire Up/Down navigation to work on whichever panel is active
-- [ ] Tests: tab switching toggles panel, selection state is independent per panel
+  - `TableState` for selection highlighting
+  - Show script description (if any) in a secondary column
+- [x] Add `ActivePanel` enum (`Packages`, `Commands`) to `App`
+- [x] Wire `Tab`/`BackTab` key to toggle `ActivePanel` in `Idle` state
+- [x] Wire `h`/`l` to directly focus left (Packages) / right (Commands) panel
+- [x] Update layout to two-column split:
+  - Left panel (40%): packages table
+  - Right panel (60%): command/script list
+  - Both visible simultaneously
+- [x] Visual indicator for active panel (highlighted border or bold title)
+- [x] Wire Up/Down navigation to work on whichever panel is active
+- [x] Vi-style keyboard navigation:
+  - `j`/`k`: move down/up one row
+  - `g`/`G`: jump to first/last item
+  - `f`/`b`: full page down/up
+  - `Ctrl+F`/`Ctrl+B`: full page down/up (canonical vi)
+  - `Ctrl+D`/`Ctrl+U`: half-page down/up
+  - `Ctrl+C`: quit
+- [x] Version display in header (right-aligned, `env!("CARGO_PKG_VERSION")`)
+- [x] Footer shows vi key hints: `q:quit j/k:navigate g/G:jump f/b:page tab:switch ?:help`
+- [x] Create `crates/melos-tui/src/views/help.rs`:
+  - `?` key toggles a centered popup overlay
+  - Left column: navigation keybindings (vi keys, arrows, page, panel switching)
+  - Right column: all melos commands with brief descriptions (analyze, bootstrap, build, etc.)
+  - `?` or `Esc` dismisses the overlay
+  - When help is visible, all other keys are ignored
+- [x] Add `show_help: bool` to `App`, wire `?` key to toggle
+- [x] Update `handle_key` signature to `(code: KeyCode, modifiers: KeyModifiers)` for Ctrl combos
+- [x] Tests: tab switching, independent panel selection, command navigation, vi keys, help toggle
 
 #### Batch 51 -- Command execution wiring
 
@@ -915,12 +935,12 @@ Display command results and workspace health information.
   - Missing fields: table of (package, missing field) tuples
   - SDK consistency: table of (SDK, constraint, package count) tuples
   - Uses `melos_core::commands::health::run()` with all checks enabled
-- [ ] Wire `h` key in `Idle` state to run health check and show dashboard
+- [ ] Wire health command: select "health" in command panel + Enter runs dashboard
 - [ ] Wire `Esc` in `Done` state to return to `Idle`
 - [ ] Error display: if a command returns `Err`, show error message in right panel with red border
 - [ ] Tests: results summary from PackageResults, health report rendering data
 
-#### Batch 54 -- Polish: filter bar, help overlay, edge cases
+#### Batch 54 -- Polish: filter bar, resize, edge cases
 
 Final polish batch for a production-ready TUI experience.
 
@@ -929,10 +949,6 @@ Final polish batch for a production-ready TUI experience.
   - Type to filter packages by name (fuzzy or glob)
   - `Enter` applies filter, `Esc` cancels
   - Filter persists until cleared (show active filter indicator)
-- [ ] Implement help overlay:
-  - `?` key toggles a centered popup with all keybindings
-  - Semi-transparent background (dim underlying content)
-  - `?` or `Esc` dismisses
 - [ ] Handle terminal resize events:
   - Recompute layout on `crossterm::event::Event::Resize`
   - Clamp scroll positions to new panel dimensions
