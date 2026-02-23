@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, LazyLock};
 
 use anyhow::Result;
@@ -175,6 +175,13 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
             println!("To fix all diagnostics, run:");
             println!("  dart fix --apply");
             println!("  melos-rs analyze --fix");
+
+            // Detect and warn about conflicting lint rules
+            let conflicts = detect_conflicting_diagnostics(&all_entries, 2);
+            if !conflicts.is_empty() {
+                println!();
+                println!("{}", format_conflict_warnings(&conflicts).yellow());
+            }
         }
 
         println!("\n{}", "Dry run complete. No changes were applied.".green());
@@ -397,6 +404,80 @@ fn parse_dry_run_output(stdout: &str, pkg_prefix: &str) -> Vec<DryRunFileEntry> 
     }
 
     entries
+}
+
+/// A pair of diagnostic codes detected as conflicting.
+#[derive(Debug, PartialEq)]
+struct ConflictingPair {
+    code_a: String,
+    code_b: String,
+    file_count: usize,
+}
+
+/// Detect diagnostic code pairs that likely conflict.
+///
+/// Two codes are considered conflicting when they appear together in the same
+/// file with identical fix counts across at least `min_files` files. This is a
+/// strong heuristic: conflicting lint rules (e.g. `omit_local_variable_types`
+/// vs `specify_nonobvious_local_variable_types`) produce mirror-image fixes on
+/// every affected file.
+fn detect_conflicting_diagnostics(
+    entries: &[DryRunFileEntry],
+    min_files: usize,
+) -> Vec<ConflictingPair> {
+    // For each file, build a map of code -> count, then record every equal-count pair
+    let mut pair_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+
+    for entry in entries {
+        let fixes = &entry.fixes;
+        for i in 0..fixes.len() {
+            for j in (i + 1)..fixes.len() {
+                if fixes[i].1 == fixes[j].1 {
+                    // Normalize pair order for consistent counting
+                    let (a, b) = if fixes[i].0 < fixes[j].0 {
+                        (fixes[i].0.clone(), fixes[j].0.clone())
+                    } else {
+                        (fixes[j].0.clone(), fixes[i].0.clone())
+                    };
+                    *pair_counts.entry((a, b)).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    pair_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= min_files)
+        .map(|((code_a, code_b), file_count)| ConflictingPair {
+            code_a,
+            code_b,
+            file_count,
+        })
+        .collect()
+}
+
+/// Format a warning block for conflicting diagnostic pairs.
+fn format_conflict_warnings(conflicts: &[ConflictingPair]) -> String {
+    let mut lines = Vec::new();
+    lines.push("WARNING: Conflicting lint rules detected".to_string());
+    lines.push(String::new());
+    for conflict in conflicts {
+        lines.push(format!(
+            "  {} and {} conflict ({} files with equal fix counts)",
+            conflict.code_a, conflict.code_b, conflict.file_count,
+        ));
+        lines.push(
+            "  Disable one in analysis_options.yaml to avoid a fix/analyze loop:".to_string(),
+        );
+        lines.push(format!("    {}: false", conflict.code_a));
+        lines.push(format!("    {}: false", conflict.code_b));
+        lines.push(String::new());
+    }
+    lines.push(
+        "Applying both conflicting fixes will undo each other, leaving the same warnings."
+            .to_string(),
+    );
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -767,5 +848,145 @@ lib/foo.dart
         let entries = parse_dry_run_output(stdout, "pkg");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, "pkg/lib/foo.dart");
+    }
+
+    // ── detect_conflicting_diagnostics tests ──────────────────────────
+
+    #[test]
+    fn test_detect_conflicts_equal_counts_across_files() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![
+                    ("omit_local_variable_types".to_string(), 4),
+                    ("specify_nonobvious_local_variable_types".to_string(), 4),
+                ],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![
+                    ("omit_local_variable_types".to_string(), 2),
+                    ("specify_nonobvious_local_variable_types".to_string(), 2),
+                ],
+            },
+        ];
+
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].code_a, "omit_local_variable_types");
+        assert_eq!(
+            conflicts[0].code_b,
+            "specify_nonobvious_local_variable_types"
+        );
+        assert_eq!(conflicts[0].file_count, 2);
+    }
+
+    #[test]
+    fn test_detect_conflicts_below_threshold_ignored() {
+        // Only 1 file has the pair, but min_files is 2
+        let entries = vec![DryRunFileEntry {
+            path: "pkg/lib/a.dart".to_string(),
+            fixes: vec![
+                ("omit_local_variable_types".to_string(), 3),
+                ("specify_nonobvious_local_variable_types".to_string(), 3),
+            ],
+        }];
+
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_detect_conflicts_unequal_counts_not_flagged() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![
+                    ("unused_import".to_string(), 3),
+                    ("deprecated_member_use".to_string(), 1),
+                ],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![
+                    ("unused_import".to_string(), 2),
+                    ("deprecated_member_use".to_string(), 5),
+                ],
+            },
+        ];
+
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_detect_conflicts_no_entries() {
+        let conflicts = detect_conflicting_diagnostics(&[], 2);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_detect_conflicts_single_diagnostic_per_file() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![("unused_import".to_string(), 2)],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![("unused_import".to_string(), 1)],
+            },
+        ];
+
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn test_detect_conflicts_multiple_pairs() {
+        let entries = vec![
+            DryRunFileEntry {
+                path: "pkg/lib/a.dart".to_string(),
+                fixes: vec![
+                    ("rule_a".to_string(), 2),
+                    ("rule_b".to_string(), 2),
+                    ("rule_c".to_string(), 5),
+                    ("rule_d".to_string(), 5),
+                ],
+            },
+            DryRunFileEntry {
+                path: "pkg/lib/b.dart".to_string(),
+                fixes: vec![
+                    ("rule_a".to_string(), 3),
+                    ("rule_b".to_string(), 3),
+                    ("rule_c".to_string(), 1),
+                    ("rule_d".to_string(), 1),
+                ],
+            },
+        ];
+
+        let conflicts = detect_conflicting_diagnostics(&entries, 2);
+        assert_eq!(conflicts.len(), 2);
+        assert_eq!(conflicts[0].code_a, "rule_a");
+        assert_eq!(conflicts[0].code_b, "rule_b");
+        assert_eq!(conflicts[1].code_a, "rule_c");
+        assert_eq!(conflicts[1].code_b, "rule_d");
+    }
+
+    #[test]
+    fn test_format_conflict_warnings_single_pair() {
+        let conflicts = vec![ConflictingPair {
+            code_a: "omit_local_variable_types".to_string(),
+            code_b: "specify_nonobvious_local_variable_types".to_string(),
+            file_count: 13,
+        }];
+
+        let output = format_conflict_warnings(&conflicts);
+        assert!(output.contains("WARNING: Conflicting lint rules detected"));
+        assert!(output.contains("omit_local_variable_types and specify_nonobvious_local_variable_types conflict (13 files"));
+        assert!(output.contains("Disable one in analysis_options.yaml"));
+        assert!(output.contains("omit_local_variable_types: false"));
+        assert!(output.contains("specify_nonobvious_local_variable_types: false"));
+        assert!(output.contains("Applying both conflicting fixes will undo each other"));
     }
 }

@@ -66,7 +66,7 @@ Full parity with Melos 7.4.0 for CLI workflows:
 | Flag | Description |
 |------|-------------|
 | `--fix` | Run `dart fix --apply` in each package before analyzing |
-| `--dry-run` | Preview fixes with `dart fix --dry-run` (no changes applied, skips analysis) |
+| `--dry-run` | Preview fixes with `dart fix --dry-run` (no changes applied, skips analysis). Detects conflicting lint rules automatically. |
 | `--code` | Comma-separated diagnostic codes to restrict fixes (requires `--fix` or `--dry-run`) |
 | `--fatal-warnings` | Report warnings as fatal errors |
 | `--fatal-infos` | Report info-level issues as fatal errors |
@@ -175,7 +175,7 @@ src/
 
 ### Test suite
 
-519 tests (493 unit + 26 integration). Run with:
+526 tests (500 unit + 26 integration). Run with:
 
 ```sh
 cargo test

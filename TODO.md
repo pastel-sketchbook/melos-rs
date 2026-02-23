@@ -884,6 +884,15 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 1 FIX_COMMAND constant + 1 AnalyzeArgs --fix parsing + 1 --fix combined with --fatal-warnings = 3 new tests
 - Total: 473 unit tests + 26 integration tests = 499 tests
 
+#### Batch 40 — Proactive conflict detection in dry-run (done, v0.4.0)
+- [x] Added `detect_conflicting_diagnostics()` — heuristic: two codes appearing in same files with equal fix counts across 2+ files signals conflicting lint rules
+- [x] Added `format_conflict_warnings()` — formats warning block with rule names, file count, and `analysis_options.yaml` disable suggestions
+- [x] Integrated into `--dry-run` display path — warning appears after fix suggestions when conflicts detected
+- [x] No hardcoded lint pairs — detection is purely output-driven
+- [x] Tests: 5 detect_conflicting_diagnostics + 1 format_conflict_warnings + 1 integration = 7 new tests
+- [x] Created `docs/rationale/0005_proactive_conflict_detection.md`
+- Total: 500 unit tests + 26 integration tests = 526 tests
+
 #### Batch 39 — Analyze --dry-run, --code flags (done, v0.3.3)
 - [x] Added `--dry-run` flag to `analyze` command — runs `dart fix --dry-run` only, skips analysis (conflicts with `--fix`)
 - [x] Added `--code` flag — comma-separated diagnostic codes appended as `--code=<code>` to dart fix command
