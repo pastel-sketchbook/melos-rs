@@ -26,7 +26,7 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 | `health` | N/A | Yes | melos-rs exclusive: version drift, missing fields, SDK consistency, JSON output |
 | `resolution: workspace` | Yes | Yes | Skip `pubspec_overrides.yaml` for workspace-resolved packages |
 | IDE integration | Yes (IntelliJ, VS Code) | No | Out of scope for CLI tool |
-| Migration guide | Yes | No | Planned |
+| Migration guide | Yes | Yes | `docs/migration-from-melos.md` (Batch 27) |
 
 ## Phase 1: Core Infrastructure (MVP)
 
@@ -193,9 +193,6 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 - [x] Workspace-level pubspec overrides (pubspec_overrides.yaml for 6.x local linking)
 - [x] `pub get`, `pub outdated`, `pub upgrade` subcommands (groups by SDK, `--major-versions` flag)
 
-### Build Commands (from melos.yaml scripts)
-- [ ] `build:android` / `build:ios` wrapper commands — low priority, out of scope for CLI parity
-
 ### Versioning & Release
 - [x] `version:set` command (works via `melos-rs version 2.0.0 --all`)
 - [x] Coordinated versioning (`--coordinated` flag / `command.version.coordinated` config)
@@ -254,7 +251,6 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 - [x] `BootstrapCommandConfig::enforce_versions_for_dependency_resolution` — parsed from config, has `#[allow(dead_code)]` at `src/config/mod.rs:669`. Needs to be consulted during bootstrap dependency resolution.
 
 ### Missing commands / features
-- [ ] `build:android` / `build:ios` wrapper commands (flavor/environment support, artifact resolution, simulator/bundletool)
 - [x] Release branch management (auto-create release branches during `version`) — done in Batch 24
 - [x] Progress bars with `indicatif` for more commands (only bootstrap has one currently)
 - [x] Watch mode for development (`--watch` flag on exec/run)
@@ -264,8 +260,6 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 - [x] Full Melos CLI flag compatibility audit
 - [x] Migration guide from Melos to melos-rs (`docs/migration-from-melos.md`)
 - [x] Performance benchmarks vs Melos (68x list, 69x list --json, 19x exec)
-- [ ] Plugin system for custom commands
-- [ ] GitHub Actions integration helpers
 - [x] Monorepo health checks (unused deps, version drift)
 
 ## Batch 17: Health, Progress & CLI Parity
@@ -581,3 +575,12 @@ End-to-end CLI tests for dry-run modes, health --json, and exec summary.
 - [x] `test_health_json_with_drift` — health --json --version-drift detects drift, exits non-zero, JSON has VersionDriftIssue entries
 - [x] `test_exec_success_summary` — exec outputs standardized "All 2 package(s) passed exec." message
 - [x] `task check:all` passes — 384 tests (358 unit + 26 integration), zero clippy warnings
+
+## Remaining / Future
+
+Stretch goals and out-of-scope items. None of these are required for Melos 7.4.0 CLI parity.
+
+- [ ] Plugin system for custom commands
+- [ ] GitHub Actions integration helpers
+- [ ] `build:android` / `build:ios` wrapper commands (flavor/environment support, artifact resolution, simulator/bundletool) — low priority, out of scope for CLI parity
+- [ ] IDE integration (IntelliJ, VS Code) — out of scope for CLI tool
