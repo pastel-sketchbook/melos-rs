@@ -83,6 +83,50 @@ const BUILTIN_COMMANDS: &[&str] = &[
     "version",
 ];
 
+/// Strip ANSI escape sequences from a string.
+///
+/// Handles CSI sequences (ESC [ ... final_byte) and OSC sequences
+/// (ESC ] ... ST) which are the most common in terminal command output.
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.peek() {
+                Some('[') => {
+                    // CSI sequence: consume until final byte (0x40-0x7E).
+                    chars.next();
+                    for ch in chars.by_ref() {
+                        if ('@'..='~').contains(&ch) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    // OSC sequence: consume until ST (ESC \ or BEL).
+                    chars.next();
+                    while let Some(ch) = chars.next() {
+                        if ch == '\x07' {
+                            break;
+                        }
+                        if ch == '\x1b' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    // Other escape: skip the next char.
+                    chars.next();
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 /// Top-level application state.
 pub struct App {
     /// Current state machine phase.
@@ -414,7 +458,7 @@ impl App {
                 line,
                 is_stderr,
             } => {
-                self.output_log.push((name, line, is_stderr));
+                self.output_log.push((name, strip_ansi(&line), is_stderr));
             }
             CoreEvent::Progress {
                 completed,
@@ -1415,5 +1459,58 @@ mod tests {
         press(&mut app, KeyCode::Char('f'));
         // max_scroll = 5 - 1 = 4
         assert_eq!(app.output_scroll, 4);
+    }
+
+    // --- ANSI stripping tests ---
+
+    #[test]
+    fn test_strip_ansi_plain_text_unchanged() {
+        assert_eq!(strip_ansi("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_strip_ansi_removes_color_codes() {
+        // Bold red "error" then reset
+        assert_eq!(strip_ansi("\x1b[1;31merror\x1b[0m"), "error");
+    }
+
+    #[test]
+    fn test_strip_ansi_removes_sgr_sequences() {
+        assert_eq!(strip_ansi("\x1b[32mOK\x1b[0m: all good"), "OK: all good");
+    }
+
+    #[test]
+    fn test_strip_ansi_handles_osc_with_bel() {
+        // OSC title-set terminated by BEL
+        assert_eq!(strip_ansi("\x1b]0;my title\x07rest"), "rest");
+    }
+
+    #[test]
+    fn test_strip_ansi_handles_osc_with_st() {
+        // OSC terminated by ESC backslash
+        assert_eq!(strip_ansi("\x1b]0;title\x1b\\rest"), "rest");
+    }
+
+    #[test]
+    fn test_strip_ansi_empty_string() {
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn test_strip_ansi_mixed_content() {
+        let input = "  \x1b[34mAnalyzing\x1b[0m package \x1b[1mfoo\x1b[0m...";
+        assert_eq!(strip_ansi(input), "  Analyzing package foo...");
+    }
+
+    #[test]
+    fn test_handle_package_output_strips_ansi() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.handle_core_event(CoreEvent::PackageOutput {
+            name: "pkg_a".to_string(),
+            line: "\x1b[32mSUCCESS\x1b[0m".to_string(),
+            is_stderr: false,
+        });
+        assert_eq!(app.output_log[0].1, "SUCCESS");
     }
 }
