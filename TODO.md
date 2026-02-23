@@ -593,6 +593,26 @@ files (e.g. `path_provider_windows`, `url_launcher_example`) as workspace packag
     and combined multiple artifact directories
 - [x] `task check:all` passes — 405 tests, zero clippy warnings
 
+## Batch 31 — Strip outer quotes from exec commands in run scripts (v0.2.3)
+
+Real-world bug: When a script has `run: melos exec -- "flutter pub upgrade && exit"`,
+the double quotes are literal YAML characters. `extract_exec_command()` uses `split_whitespace()`
+which doesn't understand quoting, so after joining parts after `--`, the result is
+`"flutter pub upgrade && exit"` with literal quote chars. When passed to `sh -c`, the shell
+treats the double-quoted content as a single word (command name), causing
+`sh: flutter pub upgrade && exit: command not found`.
+
+- [x] Added `strip_outer_quotes()` helper in `run.rs` that removes matching outer `"` or `'`
+      from extracted commands, with `len >= 2` guard to prevent panics on single-char strings
+- [x] Updated `extract_exec_command()` to call `strip_outer_quotes()` on both the `--` path
+      and the fallback path
+- [x] Tests: 8 new tests (413 total: 387 unit + 26 integration)
+  - 5 unit tests for `strip_outer_quotes()`: double quotes, single quotes, mismatched quotes,
+    no quotes, empty string
+  - 3 unit tests for `extract_exec_command()` with quoted commands: double-quoted after `--`,
+    single-quoted after `--`, quoted fallback without `--`
+- [x] `task check:all` passes — 413 tests, zero clippy warnings
+
 ## Remaining / Future
 
 Stretch goals and out-of-scope items. None of these are required for Melos 7.4.0 CLI parity.

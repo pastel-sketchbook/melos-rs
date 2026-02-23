@@ -773,12 +773,19 @@ fn is_exec_command(command: &str) -> bool {
         || trimmed.contains("melos-rs exec")
 }
 
-/// Extract the actual command from a `melos exec -- <command>` string
+/// Extract the actual command from a `melos exec -- <command>` string.
+///
+/// The command after `--` may be wrapped in quotes in the YAML source
+/// (e.g. `-- "flutter pub upgrade && exit"`). Because `split_whitespace`
+/// does not understand quoting, the leading and trailing quote characters
+/// end up as part of the first/last tokens. [`strip_outer_quotes`] removes
+/// them so the shell receives a plain command string.
 fn extract_exec_command(command: &str) -> String {
     // Look for standalone `--` separator (space-delimited token, not just any `--` prefix)
     let parts: Vec<&str> = command.split_whitespace().collect();
     if let Some(pos) = parts.iter().position(|&p| p == "--") {
-        return parts[pos + 1..].join(" ");
+        let joined = parts[pos + 1..].join(" ");
+        return strip_outer_quotes(&joined);
     }
 
     // Fallback: strip `melos exec` / `melos-rs exec` prefix and all known flags
@@ -806,7 +813,27 @@ fn extract_exec_command(command: &str) -> String {
         result.push(*part);
     }
 
-    result.join(" ").trim().to_string()
+    let joined = result.join(" ");
+    strip_outer_quotes(joined.trim())
+}
+
+/// Strip matching outer quote characters (double or single) from a string.
+///
+/// When YAML contains `-- "flutter pub upgrade && exit"`, the quotes are
+/// literal characters in the plain scalar. After `split_whitespace` + `join`,
+/// they appear as `"flutter pub upgrade && exit"`. The shell would treat the
+/// quoted content as a single word (command name), causing "command not found".
+/// Stripping the outer quotes produces a plain command string the shell
+/// interprets correctly.
+fn strip_outer_quotes(s: &str) -> String {
+    let trimmed = s.trim();
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        return trimmed[1..trimmed.len() - 1].to_string();
+    }
+    trimmed.to_string()
 }
 
 /// Extract the script name from a `melos-rs run <name>` or `melos run <name>` command.
@@ -1179,5 +1206,76 @@ mod tests {
     fn test_normalize_line_continuations_multiple() {
         let cmd = "first \\\n  second \\\n  third";
         assert_eq!(normalize_line_continuations(cmd), "first  second  third");
+    }
+
+    // --- strip_outer_quotes tests ---
+
+    #[test]
+    fn test_strip_outer_quotes_double() {
+        assert_eq!(
+            strip_outer_quotes("\"flutter pub upgrade && exit\""),
+            "flutter pub upgrade && exit"
+        );
+    }
+
+    #[test]
+    fn test_strip_outer_quotes_single() {
+        assert_eq!(
+            strip_outer_quotes("'flutter pub upgrade && exit'"),
+            "flutter pub upgrade && exit"
+        );
+    }
+
+    #[test]
+    fn test_strip_outer_quotes_no_quotes() {
+        assert_eq!(
+            strip_outer_quotes("flutter pub upgrade"),
+            "flutter pub upgrade"
+        );
+    }
+
+    #[test]
+    fn test_strip_outer_quotes_mismatched() {
+        // Mismatched quotes should not be stripped
+        assert_eq!(
+            strip_outer_quotes("\"flutter pub upgrade'"),
+            "\"flutter pub upgrade'"
+        );
+    }
+
+    #[test]
+    fn test_strip_outer_quotes_single_char() {
+        // Edge case: single quote char alone
+        assert_eq!(strip_outer_quotes("\""), "\"");
+    }
+
+    // --- extract_exec_command with quotes tests ---
+
+    #[test]
+    fn test_extract_exec_command_strips_double_quotes() {
+        // Real-world case: melos.yaml has -- "flutter pub upgrade && exit"
+        assert_eq!(
+            extract_exec_command(
+                "melos exec --file-exists=\"pubspec.yaml\" -c 1 --fail-fast -- \"flutter pub upgrade && exit\""
+            ),
+            "flutter pub upgrade && exit"
+        );
+    }
+
+    #[test]
+    fn test_extract_exec_command_strips_single_quotes() {
+        assert_eq!(
+            extract_exec_command("melos exec -c 1 -- 'flutter pub upgrade && exit'"),
+            "flutter pub upgrade && exit"
+        );
+    }
+
+    #[test]
+    fn test_extract_exec_command_no_quotes_preserved() {
+        // No quotes: command should be returned as-is
+        assert_eq!(
+            extract_exec_command("melos exec -- flutter test"),
+            "flutter test"
+        );
     }
 }

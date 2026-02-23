@@ -1,6 +1,6 @@
 [package]
 name = "melos-rs"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "A Rust CLI replacement for Melos - Flutter/Dart monorepo management tool"
 license = "MIT"
