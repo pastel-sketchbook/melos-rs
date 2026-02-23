@@ -566,6 +566,7 @@ struct ExecFlags {
     order_dependents: bool,
     timeout: Option<Duration>,
     dry_run: bool,
+    file_exists: Option<String>,
 }
 
 impl Default for ExecFlags {
@@ -576,6 +577,7 @@ impl Default for ExecFlags {
             order_dependents: false,
             timeout: None,
             dry_run: false,
+            file_exists: None,
         }
     }
 }
@@ -583,7 +585,7 @@ impl Default for ExecFlags {
 /// Parse all exec flags from a `melos exec [flags] -- <command>` string.
 ///
 /// Recognizes: `-c N` / `--concurrency N`, `--fail-fast`, `--order-dependents`,
-/// `--timeout N`, `--dry-run`.
+/// `--timeout N`, `--dry-run`, `--file-exists[=]<path>`.
 fn parse_exec_flags(command: &str) -> ExecFlags {
     let mut flags = ExecFlags::default();
     let parts: Vec<&str> = command.split_whitespace().collect();
@@ -612,6 +614,18 @@ fn parse_exec_flags(command: &str) -> ExecFlags {
                     i += 1;
                 }
             }
+            "--file-exists" => {
+                // Space-separated form: --file-exists pubspec.yaml
+                if i + 1 < parts.len() {
+                    flags.file_exists = Some(strip_outer_quotes(parts[i + 1]).to_string());
+                    i += 1;
+                }
+            }
+            s if s.starts_with("--file-exists=") => {
+                // Equals form: --file-exists="pubspec.yaml" or --file-exists=pubspec.yaml
+                let value = &s["--file-exists=".len()..];
+                flags.file_exists = Some(strip_outer_quotes(value).to_string());
+            }
             "--" => break, // Stop parsing flags at separator
             _ => {}
         }
@@ -634,11 +648,21 @@ async fn run_exec_script(
     cli_filters: &PackageFilters,
 ) -> Result<()> {
     // Merge script-level packageFilters with CLI filters
-    let filters = if let Some(script_filters) = script.package_filters() {
+    let mut filters = if let Some(script_filters) = script.package_filters() {
         script_filters.merge(cli_filters)
     } else {
         cli_filters.clone()
     };
+
+    let flags = parse_exec_flags(command);
+
+    // Apply inline --file-exists from the exec command string when not already
+    // set by packageFilters or CLI filters (inline flag is lowest priority)
+    if filters.file_exists.is_none()
+        && let Some(ref fe) = flags.file_exists
+    {
+        filters.file_exists = Some(fe.clone());
+    }
 
     let mut packages = apply_filters_with_categories(
         &workspace.packages,
@@ -651,8 +675,6 @@ async fn run_exec_script(
         println!("{}", "No packages matched the script's filters.".yellow());
         return Ok(());
     }
-
-    let flags = parse_exec_flags(command);
 
     if flags.order_dependents {
         packages = topological_sort(&packages);
@@ -793,7 +815,8 @@ fn extract_exec_command(command: &str) -> String {
         .replace("melos-rs exec", "")
         .replace("melos exec", "");
 
-    // Remove known flags like -c N, --fail-fast, --order-dependents, --timeout N, --dry-run
+    // Remove known flags like -c N, --fail-fast, --order-dependents, --timeout N, --dry-run,
+    // --file-exists[=]<value>
     let parts: Vec<&str> = stripped.split_whitespace().collect();
     let mut result = Vec::new();
     let mut skip_next = false;
@@ -803,11 +826,17 @@ fn extract_exec_command(command: &str) -> String {
             skip_next = false;
             continue;
         }
-        if matches!(*part, "-c" | "--concurrency" | "--timeout") {
+        if matches!(
+            *part,
+            "-c" | "--concurrency" | "--timeout" | "--file-exists"
+        ) {
             skip_next = true;
             continue;
         }
         if matches!(*part, "--fail-fast" | "--order-dependents" | "--dry-run") {
+            continue;
+        }
+        if part.starts_with("--file-exists=") {
             continue;
         }
         result.push(*part);
@@ -1108,6 +1137,7 @@ mod tests {
         assert!(!flags.order_dependents);
         assert!(flags.timeout.is_none());
         assert!(!flags.dry_run);
+        assert!(flags.file_exists.is_none());
     }
 
     #[test]
@@ -1135,6 +1165,62 @@ mod tests {
     fn test_parse_exec_flags_timeout_zero() {
         let flags = parse_exec_flags("melos exec --timeout 0 -- flutter test");
         assert!(flags.timeout.is_none(), "timeout 0 means no timeout");
+    }
+
+    // ── --file-exists flag parsing tests ────────────────────────────────
+
+    #[test]
+    fn test_parse_exec_flags_file_exists_equals_quoted() {
+        // Real-world: --file-exists="pubspec.yaml" (quotes are literal YAML chars)
+        let flags = parse_exec_flags(
+            r#"melos exec --file-exists="pubspec.yaml" -c 1 --fail-fast -- "flutter pub upgrade && exit""#,
+        );
+        assert_eq!(flags.file_exists, Some("pubspec.yaml".to_string()));
+        assert_eq!(flags.concurrency, 1);
+        assert!(flags.fail_fast);
+    }
+
+    #[test]
+    fn test_parse_exec_flags_file_exists_equals_unquoted() {
+        let flags = parse_exec_flags("melos exec --file-exists=pubspec.yaml -- flutter test");
+        assert_eq!(flags.file_exists, Some("pubspec.yaml".to_string()));
+    }
+
+    #[test]
+    fn test_parse_exec_flags_file_exists_space_separated() {
+        let flags = parse_exec_flags("melos exec --file-exists pubspec.yaml -- flutter test");
+        assert_eq!(flags.file_exists, Some("pubspec.yaml".to_string()));
+    }
+
+    #[test]
+    fn test_parse_exec_flags_file_exists_single_quoted() {
+        let flags =
+            parse_exec_flags("melos exec --file-exists='test/widget_test.dart' -- flutter test");
+        assert_eq!(flags.file_exists, Some("test/widget_test.dart".to_string()));
+    }
+
+    #[test]
+    fn test_parse_exec_flags_no_file_exists() {
+        let flags = parse_exec_flags("melos exec -c 3 --fail-fast -- flutter test");
+        assert!(flags.file_exists.is_none());
+    }
+
+    #[test]
+    fn test_extract_exec_command_strips_file_exists_equals() {
+        // Fallback path (no -- separator): --file-exists=<val> should be stripped
+        assert_eq!(
+            extract_exec_command("melos exec --file-exists=pubspec.yaml --fail-fast flutter test"),
+            "flutter test"
+        );
+    }
+
+    #[test]
+    fn test_extract_exec_command_strips_file_exists_space() {
+        // Fallback path: --file-exists <val> (space-separated) should be stripped
+        assert_eq!(
+            extract_exec_command("melos exec --file-exists pubspec.yaml --fail-fast flutter test"),
+            "flutter test"
+        );
     }
 
     #[test]

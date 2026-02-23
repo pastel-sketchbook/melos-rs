@@ -613,6 +613,25 @@ treats the double-quoted content as a single word (command name), causing
     single-quoted after `--`, quoted fallback without `--`
 - [x] `task check:all` passes — 413 tests, zero clippy warnings
 
+## Batch 32 — Parse --file-exists flag from inline exec commands (v0.2.4)
+
+Real-world bug: When a YAML script has `run: melos exec --file-exists="pubspec.yaml" -c 1 --fail-fast -- "cmd"`,
+the `--file-exists` flag was silently ignored by `parse_exec_flags()` (fell through to `_ => {}`).
+This meant the command ran in ALL packages instead of only those containing `pubspec.yaml`.
+
+- [x] Added `file_exists: Option<String>` field to `ExecFlags` struct
+- [x] Updated `parse_exec_flags()` to recognize `--file-exists=<value>` (equals form) and
+      `--file-exists <value>` (space-separated form), with quote stripping for quoted values
+- [x] Updated `run_exec_script()` to apply the parsed `file_exists` filter to the package set
+      before execution (lowest priority: packageFilters and CLI filters take precedence)
+- [x] Updated `extract_exec_command()` fallback path to strip `--file-exists` flags from the
+      command string
+- [x] Tests: 7 new tests (420 total: 394 unit + 26 integration)
+  - 5 unit tests for `parse_exec_flags()`: equals-quoted, equals-unquoted, space-separated,
+    single-quoted, absent (none)
+  - 2 unit tests for `extract_exec_command()` fallback: equals form stripped, space form stripped
+- [x] `task check:all` passes — 420 tests, zero clippy warnings
+
 ## Remaining / Future
 
 Stretch goals and out-of-scope items. None of these are required for Melos 7.4.0 CLI parity.
