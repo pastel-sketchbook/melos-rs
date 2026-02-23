@@ -4,8 +4,8 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
+use melos_core::commands::publish::{PublishOpts, build_git_tag};
 use melos_core::package::filter::apply_filters_with_categories;
-use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Arguments for the `publish` command
@@ -38,9 +38,7 @@ pub struct PublishArgs {
 
 /// Publish packages to pub.dev
 pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
-    // Start with global filters, then also exclude private packages by default
     let mut filters = package_filters_from_args(&args.filters);
-    // Publishing only makes sense for non-private packages
     filters.no_private = true;
 
     let packages = apply_filters_with_categories(
@@ -113,25 +111,19 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         .await?;
     }
 
-    let cmd = build_publish_command(args.dry_run);
+    let opts = PublishOpts {
+        dry_run: args.dry_run,
+        concurrency: args.concurrency,
+    };
 
     let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), "publishing");
-    let runner = ProcessRunner::new(args.concurrency, false);
-    let results = runner
-        .run_in_packages_with_events(
-            &packages,
-            &cmd,
-            &workspace.env_vars(),
-            None,
-            Some(&tx),
-            &workspace.packages,
-        )
-        .await?;
+    let results =
+        melos_core::commands::publish::run(&packages, workspace, &opts, Some(&tx)).await?;
     drop(tx);
     render_handle.await??;
 
-    let failed = results.iter().filter(|(_, success)| !success).count();
     let succeeded: Vec<_> = results
+        .results
         .iter()
         .filter(|(_, success)| *success)
         .map(|(name, _)| name.clone())
@@ -169,7 +161,6 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         }
     }
 
-    // Print release URLs if requested (only for real publishes, not dry runs)
     if args.release_url && !args.dry_run && !succeeded.is_empty() {
         if let Some(ref repo) = workspace.config.repository {
             println!("\n{} Release URLs:", "$".cyan());
@@ -190,7 +181,6 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         }
     }
 
-    // Run post-publish hook before bail on failure, matching Melos behavior
     if let Some(post_hook) = workspace.hook("publish", "post") {
         crate::runner::run_lifecycle_hook(
             post_hook,
@@ -201,12 +191,11 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         .await?;
     }
 
-    if failed > 0 {
-        let passed = results.len() - failed;
+    if results.failed() > 0 {
         anyhow::bail!(
             "{} package(s) failed to publish ({} passed)",
-            failed,
-            passed
+            results.failed(),
+            results.passed()
         );
     }
 
@@ -217,58 +206,16 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     };
     println!(
         "\n{}",
-        format!("All {} package(s) {}.", results.len(), action).green()
+        format!("All {} package(s) {}.", results.results.len(), action).green()
     );
     Ok(())
-}
-
-/// Build the `dart pub publish` command string.
-fn build_publish_command(dry_run: bool) -> String {
-    let mut cmd = String::from("dart pub publish");
-    if dry_run {
-        cmd.push_str(" --dry-run");
-    } else {
-        // --force skips the pub.dev confirmation prompt
-        cmd.push_str(" --force");
-    }
-    cmd
-}
-
-/// Build the git tag name for a published package.
-fn build_git_tag(package_name: &str, version: &str) -> String {
-    format!("{}-v{}", package_name, version)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_build_publish_command_dry_run() {
-        let cmd = build_publish_command(true);
-        assert_eq!(cmd, "dart pub publish --dry-run");
-    }
-
-    #[test]
-    fn test_build_publish_command_real() {
-        let cmd = build_publish_command(false);
-        assert_eq!(cmd, "dart pub publish --force");
-    }
-
-    #[test]
-    fn test_build_git_tag() {
-        assert_eq!(build_git_tag("my_package", "1.2.3"), "my_package-v1.2.3");
-    }
-
-    #[test]
-    fn test_build_git_tag_prerelease() {
-        assert_eq!(build_git_tag("core", "2.0.0-beta.1"), "core-v2.0.0-beta.1");
-    }
-
-    #[test]
-    fn test_build_git_tag_zero_version() {
-        assert_eq!(build_git_tag("utils", "0.0.0"), "utils-v0.0.0");
-    }
+    // build_publish_command and build_git_tag tests moved to melos_core::commands::publish
 
     #[test]
     fn test_release_url_format_matches_tag() {
@@ -298,5 +245,17 @@ mod tests {
         let url = repo.release_url(&tag, &title);
         assert!(url.contains("tag=core-v2.0.0-beta.1"));
         assert!(url.starts_with("https://github.com/org/repo/releases/new?"));
+    }
+
+    #[test]
+    fn test_build_publish_command_via_core() {
+        use melos_core::commands::publish::build_publish_command;
+        assert_eq!(build_publish_command(true), "dart pub publish --dry-run");
+        assert_eq!(build_publish_command(false), "dart pub publish --force");
+    }
+
+    #[test]
+    fn test_build_git_tag_via_core() {
+        assert_eq!(build_git_tag("my_package", "1.2.3"), "my_package-v1.2.3");
     }
 }

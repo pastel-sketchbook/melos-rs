@@ -1088,3 +1088,14 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Architecture: core gets opts structs (no clap), pure logic, orchestration; CLI retains clap args, colored output, renderer, lifecycle hooks
 - [x] Updated Phase 3 checklist and deferred items
 - Total: 513 unit tests + 26 integration tests = 539 tests (303 CLI unit + 210 core unit + 26 integration); 45 net new core tests
+
+#### Batch 46 — Phase 3 Batch B: migrate medium command logic to core (done, v0.5.2)
+- [x] Created `crates/melos-core/src/commands/exec.rs` — `ExecOpts` struct, `run()` returns `PackageResults` + 2 tests
+- [x] Created `crates/melos-core/src/commands/publish.rs` — `PublishOpts`, `build_publish_command()`, `build_git_tag()`, `run()` returns `PackageResults` + 5 tests
+- [x] Created `crates/melos-core/src/commands/analyze.rs` — `AnalyzeOpts`, `DryRunScan`, `DryRunFileEntry`, `ConflictingPair`, `FIX_LINE_RE`, `build_fix_command()`, `build_analyze_command()`, `parse_fix_line()`, `parse_dry_run_output()`, `detect_conflicting_diagnostics()`, `format_conflict_warnings()`, `assemble_dry_run_scan()`, `run()` returns `PackageResults` + 35 tests
+- [x] Created `crates/melos-core/src/commands/bootstrap.rs` — `bootstrap_config()`, `effective_concurrency()`, `config_enforce_lockfile()`, `config_run_pub_get_offline()`, `config_dependency_override_paths()`, `config_enforce_versions()`, `yaml_value_to_constraint()`, `sync_yaml_section()`, `build_pub_get_command()`, `enforce_versions()`, `sync_shared_dependencies()`, `PubspecOverridesResult`, `generate_pubspec_overrides()`, `build_pubspec_overrides_content()` + 39 tests
+- [x] Updated `crates/melos-core/src/commands/mod.rs` to register 4 new modules
+- [x] Rewrote 4 CLI command files (exec.rs, publish.rs, analyze.rs, bootstrap.rs) to import from core, removed duplicated logic and tests
+- [x] Fixed unused import clippy warning in CLI publish.rs
+- [x] Architecture: core `run()` takes pre-filtered `&[Package]` + `&Workspace` + opts + `Option<&UnboundedSender<Event>>` -> `Result<PackageResults>`; CLI retains clap args, colored output, renderer, lifecycle hooks, watch loop, dry-run display, confirmation prompts
+- Total: 517 unit tests + 26 integration tests = 543 tests (225 CLI unit + 292 core unit + 26 integration); 82 net new core tests

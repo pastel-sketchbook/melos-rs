@@ -24,7 +24,7 @@ anyhow = "1.0.102"
 thiserror = "2.0.18"
 
 # Parallel iteration
-rayon = "1.10.0"
+rayon = "1.11.0"
 
 # Regex for pubspec parsing
 regex = "1.12.3"

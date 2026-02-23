@@ -85,7 +85,7 @@ tasks:
     desc: "Install melos-rs binary to ~/.cargo/bin"
     deps: [check:all]
     cmds:
-      - cargo install --path crates/melos-cli
+      - cargo install --path crates/melos-cli --force
 
   # --- Versioning ---
   version:patch:

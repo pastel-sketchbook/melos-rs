@@ -6,9 +6,9 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
+use melos_core::commands::exec::ExecOpts;
 use melos_core::package::Package;
 use melos_core::package::filter::{apply_filters_with_categories, topological_sort};
-use melos_core::runner::ProcessRunner;
 use melos_core::watcher;
 use melos_core::workspace::Workspace;
 
@@ -133,40 +133,36 @@ async fn run_exec_once(
         None
     };
 
+    let opts = ExecOpts {
+        command: cmd_str.to_string(),
+        concurrency: args.concurrency,
+        fail_fast: args.fail_fast,
+        timeout,
+    };
+
     let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), "exec");
-    let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
-    let results = runner
-        .run_in_packages_with_events(
-            packages,
-            cmd_str,
-            &workspace.env_vars(),
-            timeout,
-            Some(&tx),
-            &workspace.packages,
-        )
-        .await?;
+    let results = melos_core::commands::exec::run(packages, workspace, &opts, Some(&tx)).await?;
     drop(tx);
     render_handle.await??;
 
-    // Count failures
-    let failed = results.iter().filter(|(_, success)| !success).count();
-    let passed = results.len() - failed;
-
-    if failed > 0 {
+    if results.failed() > 0 {
         if args.watch {
-            // In watch mode, don't bail — just report and keep watching
             eprintln!(
                 "\n{} {} package(s) failed. Watching for changes...",
                 "!".yellow().bold(),
-                failed
+                results.failed()
             );
         } else {
-            anyhow::bail!("{} package(s) failed exec ({} passed)", failed, passed);
+            anyhow::bail!(
+                "{} package(s) failed exec ({} passed)",
+                results.failed(),
+                results.passed()
+            );
         }
     } else if !args.watch {
         println!(
             "\n{}",
-            format!("All {} package(s) passed exec.", passed).green()
+            format!("All {} package(s) passed exec.", results.passed()).green()
         );
     }
 
@@ -189,10 +185,8 @@ async fn run_watch_loop(
         packages.len()
     );
 
-    // Clone packages for the watcher thread
     let watch_packages: Vec<Package> = packages.to_vec();
 
-    // Spawn the file watcher on a blocking thread (it uses std::sync channels)
     let watcher_handle = tokio::task::spawn_blocking(move || {
         watcher::start_watching(&watch_packages, 0, event_tx, shutdown_rx, None)
     });
@@ -205,19 +199,15 @@ async fn run_watch_loop(
         }
     });
 
-    // Watch loop: collect change events and re-run
     loop {
-        // Wait for the first change event
         let first_event = match event_rx.recv().await {
             Some(e) => e,
-            None => break, // Watcher stopped
+            None => break,
         };
 
-        // Collect all pending events (drain the channel for batch processing)
         let mut changed_packages = HashSet::new();
         changed_packages.insert(first_event.package_name);
 
-        // Drain any additional events that arrived during the debounce window
         while let Ok(event) = event_rx.try_recv() {
             changed_packages.insert(event.package_name);
         }
@@ -238,36 +228,31 @@ async fn run_watch_loop(
             watcher::format_changed_packages(&changed_packages).bold(),
         );
 
-        // Re-run in affected packages
         let timeout = if args.timeout > 0 {
             Some(std::time::Duration::from_secs(args.timeout))
         } else {
             None
         };
 
+        let opts = ExecOpts {
+            command: cmd_str.to_string(),
+            concurrency: args.concurrency,
+            fail_fast: args.fail_fast,
+            timeout,
+        };
+
         let (tx, render_handle) = crate::render::spawn_renderer(affected.len(), "exec");
-        let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
-        let results = runner
-            .run_in_packages_with_events(
-                &affected,
-                cmd_str,
-                &workspace.env_vars(),
-                timeout,
-                Some(&tx),
-                &workspace.packages,
-            )
-            .await;
+        let result = melos_core::commands::exec::run(&affected, workspace, &opts, Some(&tx)).await;
         drop(tx);
         let _ = render_handle.await;
 
-        match results {
+        match result {
             Ok(ref r) => {
-                let failed = r.iter().filter(|(_, success)| !success).count();
-                if failed > 0 {
+                if r.failed() > 0 {
                     eprintln!(
                         "\n{} {} package(s) failed. Watching for changes...",
                         "!".yellow().bold(),
-                        failed
+                        r.failed()
                     );
                 } else {
                     println!(
@@ -286,7 +271,6 @@ async fn run_watch_loop(
         }
     }
 
-    // Signal watcher to stop and wait for it
     let _ = shutdown_tx.send(()).await;
     let _ = watcher_handle.await;
 
