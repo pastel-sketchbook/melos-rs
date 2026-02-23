@@ -48,9 +48,9 @@ melos-rs/
 ├── src/
 │   ├── main.rs             # Entry point: parse CLI, load workspace, dispatch
 │   ├── cli.rs              # Clap CLI argument definitions
-│   ├── workspace.rs        # Workspace: find melos.yaml, load config + packages
+│   ├── workspace.rs        # Workspace: find melos.yaml, load config + packages, hook()
 │   ├── config/
-│   │   ├── mod.rs          # MelosConfig: top-level YAML parsing
+│   │   ├── mod.rs          # MelosConfig: top-level YAML parsing, command configs
 │   │   ├── script.rs       # ScriptConfig: script entry types
 │   │   └── filter.rs       # PackageFilters: filter config types
 │   ├── package/
@@ -58,16 +58,28 @@ melos-rs/
 │   │   └── filter.rs       # Filter logic: apply PackageFilters to packages
 │   ├── commands/
 │   │   ├── mod.rs          # Command module exports
-│   │   ├── exec.rs         # `exec`: run command in each package
-│   │   ├── run.rs          # `run`: execute named scripts
-│   │   ├── version.rs      # `version`: bump versions across packages
+│   │   ├── analyze.rs      # `analyze`: dart analyze across packages
 │   │   ├── bootstrap.rs    # `bootstrap`: pub get in all packages
 │   │   ├── clean.rs        # `clean`: flutter clean in packages
-│   │   └── list.rs         # `list`: display workspace packages
-│   └── runner/
-│       └── mod.rs          # ProcessRunner: concurrent command execution
+│   │   ├── exec.rs         # `exec`: run command in each package
+│   │   ├── format.rs       # `format`: dart format across packages
+│   │   ├── health.rs       # `health`: workspace health checks
+│   │   ├── init.rs         # `init`: scaffold new workspace
+│   │   ├── list.rs         # `list`: display workspace packages
+│   │   ├── pub_cmds.rs     # `pub`: get/upgrade/downgrade/add/remove
+│   │   ├── publish.rs      # `publish`: publish to pub.dev
+│   │   ├── run.rs          # `run`: execute named scripts
+│   │   ├── test.rs         # `test`: run dart/flutter tests
+│   │   └── version.rs      # `version`: bump versions across packages
+│   ├── runner/
+│   │   └── mod.rs          # ProcessRunner: concurrent command execution
+│   └── watcher/
+│       └── mod.rs          # File watcher for --watch mode
+├── docs/rationale/         # Architecture decision records
+├── tests/cli.rs            # Integration tests (20 tests)
 ├── melos.yaml              # Reference Melos config (from real Flutter project)
-├── TODO.md                 # Feature tracking & roadmap
+├── Taskfile.yml            # Task runner: check:all, bench:all, etc.
+├── TODO.md                 # Feature tracking & roadmap (26 batches)
 └── .editorconfig           # Editor settings
 ```
 
@@ -127,6 +139,20 @@ Use colon (`:`) as a separator in task names, matching Melos conventions:
 - Support both simple string and full object script entries
 - Use `#[serde(default)]` for optional fields
 - Write unit tests for each config variant
+
+# GOF PATTERNS IN RUST
+
+Apply GoF design patterns **only when they reduce lines of code**. Do not go for GoF extremely. Many GoF patterns map naturally to Rust idioms without explicit class hierarchies.
+
+**Patterns already in use idiomatically:** Iterator, Builder (clap derive), Strategy (closures/trait objects), Facade (Workspace), Command (clap subcommands), Observer (tokio channels), Composite (package trees), Template Method, Factory Method.
+
+**Applied explicitly (Batch 26):**
+- **Template Method** — `Workspace::hook(&self, command, phase)` centralizes 4-level Option chain for hook extraction. Replaced 8 call sites across 4 command files (-44 LOC).
+- **Builder (closure factory)** — `make_changelog_opts` closure in `version.rs` captures 8 shared locals. Replaced 3 identical struct constructions (-15 LOC).
+
+**Deferred (would increase LOC):** Observer trait (+29), Strategy trait for VersionResolver (+50), Chain of Responsibility for filters (+25).
+
+See `docs/rationale/0003_gof_patterns.md` for full analysis.
 
 # CODE REVIEW CHECKLIST
 

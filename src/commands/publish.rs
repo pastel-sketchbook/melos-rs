@@ -103,14 +103,7 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
 
     let dry_run_str = if args.dry_run { "true" } else { "false" };
 
-    if let Some(pre_hook) = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.publish.as_ref())
-        .and_then(|cfg| cfg.hooks.as_ref())
-        .and_then(|h| h.pre.as_deref())
-    {
+    if let Some(pre_hook) = workspace.hook("publish", "pre") {
         crate::runner::run_lifecycle_hook(
             pre_hook,
             "pre-publish",
@@ -197,14 +190,7 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     }
 
     // Run post-publish hook before bail on failure, matching Melos behavior
-    if let Some(post_hook) = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.publish.as_ref())
-        .and_then(|cfg| cfg.hooks.as_ref())
-        .and_then(|h| h.post.as_deref())
-    {
+    if let Some(post_hook) = workspace.hook("publish", "post") {
         crate::runner::run_lifecycle_hook(
             post_hook,
             "post-publish",

@@ -69,14 +69,7 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(pre_hook) = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.test.as_ref())
-        .and_then(|cfg| cfg.hooks.as_ref())
-        .and_then(|h| h.pre.as_deref())
-    {
+    if let Some(pre_hook) = workspace.hook("test", "pre") {
         crate::runner::run_lifecycle_hook(pre_hook, "pre-test", &workspace.root_path, &[]).await?;
     }
 
@@ -155,14 +148,7 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
         format!("All {} package(s) passed testing.", passed).green()
     );
 
-    if let Some(post_hook) = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.test.as_ref())
-        .and_then(|cfg| cfg.hooks.as_ref())
-        .and_then(|h| h.post.as_deref())
-    {
+    if let Some(post_hook) = workspace.hook("test", "post") {
         crate::runner::run_lifecycle_hook(post_hook, "post-test", &workspace.root_path, &[])
             .await?;
     }

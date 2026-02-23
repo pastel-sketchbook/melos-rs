@@ -151,36 +151,33 @@ command re-execution on file changes.
 
 **Verdict: Keep as-is.** Channel-based Observer is idiomatic async Rust.
 
-## Opportunities for Application
+## Opportunities Evaluated — Cost/Benefit Analysis
 
-### 1. Template Method — command execution skeleton (highest duplication)
+Five potential GoF applications were identified. Each was projected for
+lines-of-code impact before deciding whether to apply.
 
-**Problem.** Seven commands (`analyze`, `format`, `test`, `clean`, `bootstrap`,
-`publish`, `exec`) follow a near-identical 6-step skeleton:
+| # | Pattern | Added | Removed | Net | Verdict |
+|---|---------|------:|--------:|----:|---------|
+| 1 | Template Method (`Workspace::hook()`) | +10 | -54 | **-44** | **Applied** — pure deduplication |
+| 2 | Observer (`ProcessEventHandler` trait) | +64 | -35 | **+29** | Deferred — adds LOC for extensibility not yet needed |
+| 3 | Strategy (`VersionResolver` trait) | +58 | -8 | **+50** | Deferred — branches share state, trait adds ceremony |
+| 4 | Chain of Responsibility (filter chain) | +105 | -80 | **+25** | Deferred — 9 structs to replace an 80-line function |
+| 5 | Builder (`ChangelogOptions` factory) | +15 | -30 | **-15** | **Applied** — pure deduplication |
 
-```
-1. Convert CLI args to PackageFilters, apply filters
-2. Empty-check: print warning and return if no packages match
-3. Print header with package count + per-package listing
-4. Run pre-lifecycle hook (if configured)
-5. Build command, create ProcessRunner, execute across packages
-6. Count failures, print summary, run post-lifecycle hook
-```
+**Decision rule:** Only apply patterns that reduce or hold LOC parity.
+Patterns that add LOC are documented for future consideration when a concrete
+need arises (e.g., JSON output mode would justify #2, a new version resolution
+mode would justify #3, doubling the filter count would justify #4).
 
-Evidence of duplication (filter + empty check alone):
+### Applied: Template Method — `Workspace::hook()` (net -44 lines)
 
-| File | Filter lines | Empty-check lines |
-|------|-------------|-------------------|
-| `analyze.rs` | 36-42 | 44-47 |
-| `format.rs` | 36-42 | 50-53 |
-| `test.rs` | 48-54 | 56-59 |
-| `clean.rs` | 16-22 | 30-33 |
-| `exec.rs` | 55-61 | 63-66 |
-
-The lifecycle hook extraction is also duplicated verbatim across 5 files — a
-5-line `if let Some(hook) = workspace.config.command.as_ref().and_then(...)` chain:
+**Problem.** Lifecycle hook extraction is duplicated across 5 command files
+(bootstrap, clean, test, publish, version) — 10 call sites total, each a
+5-7 line `if let Some(hook) = workspace.config.command.as_ref().and_then(...)`
+chain where only the command-name accessor varies:
 
 ```rust
+// Before: 7 lines per hook site (× 10 sites = 70 lines)
 if let Some(pre_hook) = workspace
     .config
     .command
@@ -191,209 +188,74 @@ if let Some(pre_hook) = workspace
 {
     runner::run_lifecycle_hook(pre_hook, "pre-test", &workspace.root_path, &[]).await?;
 }
-```
 
-**Proposed approach.** In Rust, Template Method is best expressed as a
-higher-order function rather than an inheritance hierarchy:
-
-```rust
-// Shared utility in commands/mod.rs
-async fn run_filtered_command(
-    workspace: &Workspace,
-    filters: &PackageFilters,
-    label: &str,
-    pre_hook: Option<&str>,
-    post_hook: Option<&str>,
-    execute: impl AsyncFn(&[Package]) -> Result<usize>,  // returns failure count
-) -> Result<()> {
-    let packages = apply_filters_with_categories(...)?;
-    if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
-        return Ok(());
-    }
-    print_header(label, &packages);
-    if let Some(hook) = pre_hook {
-        runner::run_lifecycle_hook(hook, &format!("pre-{label}"), ...)?;
-    }
-    let failed = execute(&packages).await?;
-    if let Some(hook) = post_hook {
-        runner::run_lifecycle_hook(hook, &format!("post-{label}"), ...)?;
-    }
-    if failed > 0 { bail!(...) }
-    Ok(())
+// After: 1 line per hook site
+if let Some(hook) = workspace.hook("test", "pre") {
+    runner::run_lifecycle_hook(hook, "pre-test", &workspace.root_path, &[]).await?;
 }
 ```
 
-A companion `Workspace::hook()` method would simplify hook extraction:
+The full `run_filtered_command()` skeleton was not extracted because commands
+have too much unique logic interleaved (test filters for `test/` dir, clean
+handles deep clean, publish has confirmation prompt). Forcing them into a
+shared closure would obscure rather than clarify.
 
-```rust
-impl Workspace {
-    pub fn hook(&self, command: &str, phase: &str) -> Option<&str> { ... }
-}
-// Usage: workspace.hook("test", "pre")
-```
-
-**Impact:** Eliminates ~15-20 lines of boilerplate per command (7 commands),
-totaling ~100-140 lines of duplication removed. Each command's `run()` function
-would shrink to its unique logic (building the command string, SDK splitting,
-command-specific flags).
-
-**Risk:** Some commands have unique steps interleaved with the skeleton (e.g.,
-`test.rs` filters packages without a `test/` directory, `clean.rs` handles
-deep clean separately). The utility function must be flexible enough to
-accommodate these — likely via the closure parameter.
-
-**Priority: Medium.** The duplication is real but stable (commands rarely
-change structure). Worth doing when adding the next command or during a
-refactoring batch.
-
-### 2. Observer — ProcessRunner event handler (strongest extensibility gain)
-
-**Problem.** `ProcessRunner::run_in_packages_with_progress()`
-(`runner/mod.rs:127-272`) mixes execution logic with presentation. Output
-formatting (`runner/mod.rs:234-249`) is hardcoded:
-
-```rust
-// Hardcoded colored output — cannot be swapped for JSON, silent, or log-file output
-if success {
-    println!("{} {}", prefix, "SUCCESS".green());
-} else {
-    eprintln!("{} {}", prefix, "FAILED".red());
-}
-```
-
-The `output_lock` mutex (`runner/mod.rs:142`) exists solely to serialize
-presentation — an artifact of mixed concerns. If a caller wanted JSON output
-(for CI), structured logging, or silent-for-tests mode, they would need to
-modify `ProcessRunner` internals.
-
-**Proposed approach.** Extract a trait for process lifecycle events:
-
-```rust
-trait ProcessEventHandler: Send + Sync {
-    fn on_start(&self, package: &str);
-    fn on_output(&self, package: &str, line: &str, is_stderr: bool);
-    fn on_complete(&self, package: &str, success: bool, duration: Duration);
-}
-
-struct ColoredConsoleHandler { /* current behavior */ }
-struct JsonHandler { /* structured output for CI */ }
-struct SilentHandler;  /* for tests */
-```
-
-`ProcessRunner` would accept a `&dyn ProcessEventHandler` parameter, and the
-current colored output would become `ColoredConsoleHandler`.
-
-**Impact:** Decouples execution from presentation. Enables JSON output mode
-(useful for CI integration), silent mode (useful for testing), and custom
-reporters without modifying the runner. Also improves testability — tests can
-assert on events rather than capturing stdout.
-
-**Risk:** Adds a trait + 1-2 implementations. The `on_output` callback must
-handle buffering (currently done inline). Moderate refactor, roughly 50 lines
-of new code + 30 lines removed from the runner.
-
-**Priority: Medium.** Valuable when JSON output or CI integration is on the
-roadmap. Not urgent for current feature set.
-
-### 3. Strategy — version resolution strategies
-
-**Problem.** `version.rs` contains a multi-branch conditional (approximately
-lines 1196-1331) selecting how versions are resolved:
-
-- Manual version entry (interactive)
-- `--graduate` (promote prerelease to stable)
-- `--manual-version` (user-specified per-package)
-- Conventional commits (automated bump)
-- Default/fallback behavior
-
-Each branch produces `Vec<(&Package, String)>` (package-to-new-version
-mapping) but uses different logic to compute it.
-
-**Proposed approach.** Extract a trait:
-
-```rust
-trait VersionResolver {
-    fn resolve(&self, packages: &[Package], ...) -> Result<Vec<(&Package, String)>>;
-}
-struct GraduateResolver;
-struct ManualResolver { versions: HashMap<String, String> }
-struct ConventionalCommitResolver;
-```
-
-**Impact:** Each strategy becomes independently testable. Adding a new
-resolution mode (e.g., calendar versioning) would not require modifying the
-existing if-else chain.
-
-**Risk:** The current branches share state (git history, changelog context)
-that would need to be threaded through the trait. The refactor is non-trivial
-and the current code works correctly.
-
-**Priority: Low.** The version command is the most complex module but changes
-infrequently. The if-else chain is long but each branch is locally
-comprehensible. Defer unless a new resolution mode is needed.
-
-### 4. Chain of Responsibility — package filter chain
-
-**Problem.** `matches_filters()` (`package/filter.rs:109-191`) checks 9
-filter predicates sequentially. Each `if let` block tests one filter
-dimension and short-circuits on `false`:
-
-```rust
-fn matches_filters(pkg: &Package, filters: &PackageFilters) -> bool {
-    if let Some(ref scopes) = filters.scope { ... if !matches_any { return false; } }
-    if let Some(ref ignores) = filters.ignore { ... if matches_any { return false; } }
-    if let Some(flutter) = filters.flutter && pkg.is_flutter != flutter { return false; }
-    // ... 6 more checks
-    true
-}
-```
-
-**Proposed approach.** Model each filter as a handler:
-
-```rust
-trait PackageFilter {
-    fn matches(&self, pkg: &Package) -> bool;
-}
-struct ScopeFilter(Vec<String>);
-struct FlutterFilter(bool);
-// compose into Vec<Box<dyn PackageFilter>>
-```
-
-**Impact:** Each filter becomes independently unit-testable. New filters
-require no modification to existing code (Open/Closed principle).
-
-**Risk:** Adds ~9 structs, a trait, and a composition builder. The current
-function is ~80 lines and all 9 filters are visible at a glance. The filter
-set is determined by `PackageFilters` and evolves slowly. The abstraction cost
-outweighs the benefit at 9 checks.
-
-**Priority: Low.** Revisit if filter count exceeds ~15 or if filters need to
-be user-composable (e.g., via config file). At current scale, the imperative
-approach is clearer.
-
-### 5. Builder — `ChangelogOptions` construction
+### Applied: Builder — `ChangelogOptions` factory (net -15 lines)
 
 **Problem.** `ChangelogOptions` is constructed identically 3 times in
-`version.rs` (approximately lines 1442-1451, 1474-1483, 1516-1525) with the
-same field mapping from `VersionCommandConfig`.
-
-**Proposed approach.** Add a `ChangelogOptions::from_config()` factory method
-or implement `From<&VersionCommandConfig>`:
+`version.rs` (lines 1442-1451, 1474-1483, 1516-1525):
 
 ```rust
-impl From<&VersionCommandConfig> for ChangelogOptions {
-    fn from(cfg: &VersionCommandConfig) -> Self { ... }
-}
+// Before: 10-line block × 3 = 30 lines
+let changelog_opts = ChangelogOptions {
+    include_body,
+    only_breaking_bodies,
+    include_hash,
+    include_scopes,
+    repository: repo,
+    include_types: changelog_include_types.as_deref(),
+    exclude_types: changelog_exclude_types.as_deref(),
+    include_date,
+};
+
+// After: 1 closure call × 3 = 3 lines
+let changelog_opts = make_opts();
 ```
 
-**Impact:** Eliminates 3x ~10-line copy-paste blocks. One-line change at each
-call site.
+Extracted as a closure capturing the shared local variables, replacing 30 lines
+of copy-paste with 3 one-line calls plus a 12-line closure definition.
 
-**Risk:** Negligible. Pure deduplication.
+### Deferred: Observer — ProcessRunner event handler (+29 lines)
 
-**Priority: Low.** Small quality-of-life improvement. Fold into the next
-version-command batch.
+The runner mixes execution and presentation (`runner/mod.rs:234-249`). A
+`ProcessEventHandler` trait would decouple them, enabling JSON output for CI
+or silent mode for tests. However, no consumer currently needs this — the
+colored console output is the only mode. The +29 line overhead is not justified
+until a second output mode is needed.
+
+**Trigger to revisit:** Adding `--output=json` to any command, or needing
+silent execution in integration tests.
+
+### Deferred: Strategy — version resolution (+50 lines)
+
+The if/else chain (`version.rs:1196-1331`) selects among 5 version resolution
+modes. A trait hierarchy would make each mode independently testable, but the
+branches share significant state (git history, prerelease computation, eligible
+packages). Threading this through a trait adds ~50 lines of struct definitions
+and trait plumbing with no functional benefit.
+
+**Trigger to revisit:** Adding a 6th resolution mode (e.g., calendar
+versioning), at which point the if/else chain becomes unwieldy.
+
+### Deferred: Chain of Responsibility — filter chain (+25 lines)
+
+`matches_filters()` (`package/filter.rs:109-191`) is 80 lines checking 9
+predicates. Decomposing into 9 filter structs + trait + builder would add 105
+lines while removing 80 — a net increase that scatters logic currently visible
+in one function across 10 files/types.
+
+**Trigger to revisit:** Filter count exceeding ~15, or filters becoming
+user-composable via config.
 
 ## Patterns Considered and Rejected
 
@@ -412,25 +274,25 @@ version-command batch.
 
 ## Summary
 
-| Pattern | Status | Priority | Action |
-|---------|--------|----------|--------|
-| Command | In use (enum dispatch) | — | Keep |
-| Factory Method | In use (parse_config, from_path, serde Visitors) | — | Keep |
-| Strategy | In use (ScriptEntry enum dispatch) | — | Keep |
-| Adapter | In use (From trait) | — | Keep |
-| Facade | In use (Workspace) | — | Keep |
-| Null Object | In use (static empty collections) | — | Keep |
-| Iterator | In use (stdlib + rayon) | — | Keep |
-| Builder | In use (clap derives) | — | Keep |
-| Observer | In use (watcher channels) | — | Keep |
-| **Template Method** | **Opportunity** | **Medium** | Extract `run_filtered_command()` utility + `Workspace::hook()` |
-| **Observer (ProcessRunner)** | **Opportunity** | **Medium** | Extract `ProcessEventHandler` trait from runner |
-| **Strategy (version)** | **Opportunity** | **Low** | Extract `VersionResolver` trait |
-| **Chain of Responsibility** | **Opportunity** | **Low** | Defer — 9 filters, function is 80 lines |
-| **Builder (ChangelogOptions)** | **Opportunity** | **Low** | Add `From<&VersionCommandConfig>` |
+| Pattern | Status | Action |
+|---------|--------|--------|
+| Command | In use (enum dispatch) | Keep |
+| Factory Method | In use (parse_config, from_path, serde Visitors) | Keep |
+| Strategy | In use (ScriptEntry enum dispatch) | Keep |
+| Adapter | In use (From trait) | Keep |
+| Facade | In use (Workspace) | Keep |
+| Null Object | In use (static empty collections) | Keep |
+| Iterator | In use (stdlib + rayon) | Keep |
+| Builder | In use (clap derives) | Keep |
+| Observer | In use (watcher channels) | Keep |
+| **Template Method** | **Applied** | `Workspace::hook()` — net -44 lines |
+| **Builder (ChangelogOptions)** | **Applied** | Closure factory — net -15 lines |
+| Observer (ProcessRunner) | Deferred | Revisit when JSON output needed |
+| Strategy (version) | Deferred | Revisit when 6th resolution mode added |
+| Chain of Responsibility | Deferred | Revisit when filter count exceeds ~15 |
 
-The codebase already uses 9 GoF patterns idiomatically through Rust's type
-system. Two medium-priority opportunities exist (Template Method for command
-boilerplate, Observer for runner output). Three low-priority opportunities are
-noted for future consideration. Ten patterns were explicitly evaluated and
-rejected as unnecessary at the current scale.
+The codebase uses 9 GoF patterns idiomatically through Rust's type system.
+Two patterns were applied where they reduce LOC (net -59 lines combined).
+Three were evaluated with line-count projections and deferred — each has a
+concrete trigger condition documented above for future reconsideration.
+Ten patterns were explicitly rejected as inapplicable at the current scale.

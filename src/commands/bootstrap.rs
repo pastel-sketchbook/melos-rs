@@ -57,10 +57,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     }
     println!();
 
-    if let Some(pre_hook) = bootstrap_config(workspace)
-        .and_then(|b| b.hooks.as_ref())
-        .and_then(|h| h.pre.as_deref())
-    {
+    if let Some(pre_hook) = workspace.hook("bootstrap", "pre") {
         crate::runner::run_lifecycle_hook(pre_hook, "pre-bootstrap", &workspace.root_path, &[])
             .await?;
     }
@@ -152,10 +149,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 
     pb.finish_and_clear();
 
-    if let Some(post_hook) = bootstrap_config(workspace)
-        .and_then(|b| b.hooks.as_ref())
-        .and_then(|h| h.post.as_deref())
-    {
+    if let Some(post_hook) = workspace.hook("bootstrap", "post") {
         crate::runner::run_lifecycle_hook(post_hook, "post-bootstrap", &workspace.root_path, &[])
             .await?;
     }

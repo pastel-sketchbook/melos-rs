@@ -1429,6 +1429,16 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     if should_changelog {
         if let Some(ref mapped) = conventional_commits {
             let repo = workspace.config.repository.as_ref();
+            let make_changelog_opts = || ChangelogOptions {
+                include_body,
+                only_breaking_bodies,
+                include_hash,
+                include_scopes,
+                repository: repo,
+                include_types: changelog_include_types.as_deref(),
+                exclude_types: changelog_exclude_types.as_deref(),
+                include_date,
+            };
             println!("\n{} Generating changelogs...", "$".cyan());
             for (pkg, _bump) in &packages_to_version {
                 if let Some(commits) = mapped.get(&pkg.name)
@@ -1439,17 +1449,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .find(|(n, _)| n == &pkg.name)
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("unknown");
-                    let changelog_opts = ChangelogOptions {
-                        include_body,
-                        only_breaking_bodies,
-                        include_hash,
-                        include_scopes,
-                        repository: repo,
-                        include_types: changelog_include_types.as_deref(),
-                        exclude_types: changelog_exclude_types.as_deref(),
-                        include_date,
-                    };
-                    let entry = generate_changelog_entry(new_ver, commits, &changelog_opts);
+                    let entry = generate_changelog_entry(new_ver, commits, &make_changelog_opts());
                     write_changelog(&pkg.path, &entry)?;
                     println!(
                         "  {} Updated CHANGELOG.md for {}",
@@ -1471,18 +1471,11 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         .first()
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("0.0.0");
-                    let changelog_opts = ChangelogOptions {
-                        include_body,
-                        only_breaking_bodies,
-                        include_hash,
-                        include_scopes,
-                        repository: repo,
-                        include_types: changelog_include_types.as_deref(),
-                        exclude_types: changelog_exclude_types.as_deref(),
-                        include_date,
-                    };
-                    let entry =
-                        generate_changelog_entry(summary_version, &all_commits, &changelog_opts);
+                    let entry = generate_changelog_entry(
+                        summary_version,
+                        &all_commits,
+                        &make_changelog_opts(),
+                    );
                     write_changelog(&workspace.root_path, &entry)?;
                     println!("  {} Updated workspace CHANGELOG.md", "OK".green());
                 }
@@ -1513,18 +1506,11 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                             .first()
                             .map(|(_, v)| v.as_str())
                             .unwrap_or("0.0.0");
-                        let changelog_opts = ChangelogOptions {
-                            include_body,
-                            only_breaking_bodies,
-                            include_hash,
-                            include_scopes,
-                            repository: repo,
-                            include_types: changelog_include_types.as_deref(),
-                            exclude_types: changelog_exclude_types.as_deref(),
-                            include_date,
-                        };
-                        let entry =
-                            generate_changelog_entry(agg_version, &agg_commits, &changelog_opts);
+                        let entry = generate_changelog_entry(
+                            agg_version,
+                            &agg_commits,
+                            &make_changelog_opts(),
+                        );
 
                         // If the file has a description configured, ensure it's at the top
                         let full_entry = if let Some(ref desc) = agg.description {

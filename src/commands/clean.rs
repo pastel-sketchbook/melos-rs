@@ -32,14 +32,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(pre_hook) = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.clean.as_ref())
-        .and_then(|cfg| cfg.hooks.as_ref())
-        .and_then(|h| h.pre.as_deref())
-    {
+    if let Some(pre_hook) = workspace.hook("clean", "pre") {
         crate::runner::run_lifecycle_hook(pre_hook, "pre-clean", &workspace.root_path, &[]).await?;
     }
 
@@ -170,14 +163,7 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
 
     println!("\n{}", "All packages cleaned.".green());
 
-    if let Some(post_hook) = workspace
-        .config
-        .command
-        .as_ref()
-        .and_then(|c| c.clean.as_ref())
-        .and_then(|cfg| cfg.hooks.as_ref())
-        .and_then(|h| h.post.as_deref())
-    {
+    if let Some(post_hook) = workspace.hook("clean", "post") {
         crate::runner::run_lifecycle_hook(post_hook, "post-clean", &workspace.root_path, &[])
             .await?;
     }

@@ -148,6 +148,55 @@ impl Workspace {
         })
     }
 
+    /// Extract a lifecycle hook command for a given command and phase.
+    ///
+    /// `command` is one of `"bootstrap"`, `"clean"`, `"test"`, `"publish"`.
+    /// `phase` is `"pre"` or `"post"`.
+    ///
+    /// Returns `None` if no hook is configured for the given command/phase.
+    ///
+    /// This centralises the four-level `Option` chain
+    /// (`config.command → command_config → hooks → phase`) that was previously
+    /// duplicated at every hook call-site.
+    pub fn hook(&self, command: &str, phase: &str) -> Option<&str> {
+        let cmd = self.config.command.as_ref()?;
+        match command {
+            "bootstrap" => {
+                let h = cmd.bootstrap.as_ref()?.hooks.as_ref()?;
+                match phase {
+                    "pre" => h.pre.as_deref(),
+                    "post" => h.post.as_deref(),
+                    _ => None,
+                }
+            }
+            "clean" => {
+                let h = cmd.clean.as_ref()?.hooks.as_ref()?;
+                match phase {
+                    "pre" => h.pre.as_deref(),
+                    "post" => h.post.as_deref(),
+                    _ => None,
+                }
+            }
+            "test" => {
+                let h = cmd.test.as_ref()?.hooks.as_ref()?;
+                match phase {
+                    "pre" => h.pre.as_deref(),
+                    "post" => h.post.as_deref(),
+                    _ => None,
+                }
+            }
+            "publish" => {
+                let h = cmd.publish.as_ref()?.hooks.as_ref()?;
+                match phase {
+                    "pre" => h.pre.as_deref(),
+                    "post" => h.post.as_deref(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Build environment variables that are available to scripts and commands
     ///
     /// Melos provides these env vars:
@@ -308,8 +357,36 @@ fn discover_nested_workspace_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
+
+    use crate::config::{
+        BootstrapCommandConfig, BootstrapHooks, CleanCommandConfig, CleanHooks, CommandConfig,
+        MelosConfig, PublishCommandConfig, PublishHooks, TestCommandConfig, TestHooks,
+    };
+
+    /// Helper to build a minimal workspace with optional command config.
+    fn make_workspace_with_commands(command: Option<CommandConfig>) -> Workspace {
+        Workspace {
+            root_path: PathBuf::from("/workspace"),
+            config_source: ConfigSource::MelosYaml(PathBuf::from("/workspace/melos.yaml")),
+            config: MelosConfig {
+                name: "test".to_string(),
+                packages: vec!["packages/**".to_string()],
+                repository: None,
+                sdk_path: None,
+                command,
+                scripts: HashMap::new(),
+                ignore: None,
+                categories: HashMap::new(),
+                use_root_as_package: None,
+                discover_nested_workspaces: None,
+            },
+            packages: vec![],
+            sdk_path: None,
+        }
+    }
 
     #[test]
     fn test_pubspec_has_melos_key_positive() {
@@ -411,5 +488,138 @@ mod tests {
         let pkg = Package::from_path(&pkg_dir).unwrap();
         let nested = discover_nested_workspace_packages(dir.path(), &[pkg]).unwrap();
         assert!(nested.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspace::hook() tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_hook_no_command_config() {
+        let ws = make_workspace_with_commands(None);
+        assert!(ws.hook("bootstrap", "pre").is_none());
+        assert!(ws.hook("clean", "post").is_none());
+    }
+
+    #[test]
+    fn test_hook_bootstrap_pre() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: Some(BootstrapCommandConfig {
+                run_pub_get_in_parallel: None,
+                enforce_versions_for_dependency_resolution: None,
+                enforce_lockfile: None,
+                run_pub_get_offline: None,
+                dependency_override_paths: None,
+                environment: None,
+                dependencies: None,
+                dev_dependencies: None,
+                hooks: Some(BootstrapHooks {
+                    pre: Some("echo pre-bootstrap".to_string()),
+                    post: None,
+                }),
+            }),
+            clean: None,
+            publish: None,
+            test: None,
+        }));
+        assert_eq!(ws.hook("bootstrap", "pre"), Some("echo pre-bootstrap"));
+        assert!(ws.hook("bootstrap", "post").is_none());
+    }
+
+    #[test]
+    fn test_hook_clean_post() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: None,
+            clean: Some(CleanCommandConfig {
+                hooks: Some(CleanHooks {
+                    pre: None,
+                    post: Some("echo post-clean".to_string()),
+                }),
+            }),
+            publish: None,
+            test: None,
+        }));
+        assert!(ws.hook("clean", "pre").is_none());
+        assert_eq!(ws.hook("clean", "post"), Some("echo post-clean"));
+    }
+
+    #[test]
+    fn test_hook_test_both() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: None,
+            clean: None,
+            publish: None,
+            test: Some(TestCommandConfig {
+                hooks: Some(TestHooks {
+                    pre: Some("echo pre-test".to_string()),
+                    post: Some("echo post-test".to_string()),
+                }),
+            }),
+        }));
+        assert_eq!(ws.hook("test", "pre"), Some("echo pre-test"));
+        assert_eq!(ws.hook("test", "post"), Some("echo post-test"));
+    }
+
+    #[test]
+    fn test_hook_publish_pre() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: None,
+            clean: None,
+            publish: Some(PublishCommandConfig {
+                hooks: Some(PublishHooks {
+                    pre: Some("echo pre-publish".to_string()),
+                    post: None,
+                }),
+            }),
+            test: None,
+        }));
+        assert_eq!(ws.hook("publish", "pre"), Some("echo pre-publish"));
+        assert!(ws.hook("publish", "post").is_none());
+    }
+
+    #[test]
+    fn test_hook_unknown_command() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: None,
+            clean: None,
+            publish: None,
+            test: None,
+        }));
+        assert!(ws.hook("unknown", "pre").is_none());
+    }
+
+    #[test]
+    fn test_hook_unknown_phase() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: None,
+            clean: Some(CleanCommandConfig {
+                hooks: Some(CleanHooks {
+                    pre: Some("echo pre".to_string()),
+                    post: Some("echo post".to_string()),
+                }),
+            }),
+            publish: None,
+            test: None,
+        }));
+        assert!(ws.hook("clean", "during").is_none());
+    }
+
+    #[test]
+    fn test_hook_no_hooks_configured() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: None,
+            clean: Some(CleanCommandConfig { hooks: None }),
+            publish: None,
+            test: None,
+        }));
+        assert!(ws.hook("clean", "pre").is_none());
+        assert!(ws.hook("clean", "post").is_none());
     }
 }

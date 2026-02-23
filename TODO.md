@@ -499,3 +499,24 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
   - `test_pubspec_resolution_field_parsed`, `test_pubspec_resolution_field_absent`, `test_pubspec_resolution_case_insensitive`
   - `test_uses_workspace_resolution_true`, `test_uses_workspace_resolution_false`
   - `test_generate_overrides_skips_workspace_resolution`, `test_bootstrap_skips_overrides_when_all_workspace_resolution`
+
+### Batch 26: GoF Design Patterns (LOC-reducing only)
+- [x] Analysis: Evaluated 5 GoF pattern candidates, applied 2 that reduce LOC
+  - Full rationale documented in `docs/rationale/0003_gof_patterns.md`
+  - 9 GoF patterns already in use idiomatically (Iterator, Builder, Strategy, etc.)
+  - 3 candidates deferred (Observer +29 LOC, Strategy +50 LOC, Chain of Responsibility +25 LOC)
+- [x] Theme A: Template Method — `Workspace::hook()` (-44 LOC)
+  - Added `hook(&self, command: &str, phase: &str) -> Option<&str>` to `Workspace`
+  - Centralizes 4-level Option chain: config.command → command_config → hooks → phase
+  - Supports `"bootstrap"`, `"clean"`, `"test"`, `"publish"` commands with `"pre"`/`"post"` phases
+  - Replaced 8 hook extraction call sites across 4 files (bootstrap.rs ×2, clean.rs ×2, test.rs ×2, publish.rs ×2)
+  - Each site reduced from 5-7 lines to 1 line
+  - Version hooks excluded (use `pre_commit`/`post_commit` fields, different pattern)
+- [x] Theme B: Builder — `make_changelog_opts` closure factory (-15 LOC)
+  - Replaced 3 identical 10-line `ChangelogOptions` struct constructions in `version.rs`
+  - Closure captures 8 shared locals and returns fresh `ChangelogOptions` at each call site
+- [x] Tests: 8 new tests (371 total: 351 unit + 20 integration)
+  - `test_hook_no_command_config`, `test_hook_bootstrap_pre`, `test_hook_clean_post`
+  - `test_hook_test_both`, `test_hook_publish_pre`, `test_hook_unknown_command`
+  - `test_hook_unknown_phase`, `test_hook_no_hooks_configured`
+- [x] Benchmark: melos-rs list 67.92x faster than melos list (7.6ms vs 518.2ms)
