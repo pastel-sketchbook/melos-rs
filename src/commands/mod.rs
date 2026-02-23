@@ -1,5 +1,6 @@
 pub mod analyze;
 pub mod bootstrap;
+pub mod build;
 pub mod clean;
 pub mod exec;
 pub mod format;

@@ -667,6 +667,7 @@ mod tests {
                 command: Some(CommandConfig {
                     version: None,
                     bootstrap: bootstrap_config,
+                    build: None,
                     clean: None,
                     publish: None,
                     test: None,
@@ -1255,6 +1256,7 @@ mod tests {
                         dev_dependencies: Some(shared_dev_deps),
                         hooks: None,
                     }),
+                    build: None,
                     clean: None,
                     publish: None,
                     test: None,

@@ -150,7 +150,7 @@ impl Workspace {
 
     /// Extract a lifecycle hook command for a given command and phase.
     ///
-    /// `command` is one of `"bootstrap"`, `"clean"`, `"test"`, `"publish"`.
+    /// `command` is one of `"bootstrap"`, `"build"`, `"clean"`, `"test"`, `"publish"`.
     /// `phase` is `"pre"` or `"post"`.
     ///
     /// Returns `None` if no hook is configured for the given command/phase.
@@ -163,6 +163,14 @@ impl Workspace {
         match command {
             "bootstrap" => {
                 let h = cmd.bootstrap.as_ref()?.hooks.as_ref()?;
+                match phase {
+                    "pre" => h.pre.as_deref(),
+                    "post" => h.post.as_deref(),
+                    _ => None,
+                }
+            }
+            "build" => {
+                let h = cmd.build.as_ref()?.hooks.as_ref()?;
                 match phase {
                     "pre" => h.pre.as_deref(),
                     "post" => h.post.as_deref(),
@@ -535,6 +543,7 @@ mod tests {
                     post: None,
                 }),
             }),
+            build: None,
             clean: None,
             publish: None,
             test: None,
@@ -548,6 +557,7 @@ mod tests {
         let ws = make_workspace_with_commands(Some(CommandConfig {
             version: None,
             bootstrap: None,
+            build: None,
             clean: Some(CleanCommandConfig {
                 hooks: Some(CleanHooks {
                     pre: None,
@@ -566,6 +576,7 @@ mod tests {
         let ws = make_workspace_with_commands(Some(CommandConfig {
             version: None,
             bootstrap: None,
+            build: None,
             clean: None,
             publish: None,
             test: Some(TestCommandConfig {
@@ -584,6 +595,7 @@ mod tests {
         let ws = make_workspace_with_commands(Some(CommandConfig {
             version: None,
             bootstrap: None,
+            build: None,
             clean: None,
             publish: Some(PublishCommandConfig {
                 hooks: Some(PublishHooks {
@@ -602,6 +614,7 @@ mod tests {
         let ws = make_workspace_with_commands(Some(CommandConfig {
             version: None,
             bootstrap: None,
+            build: None,
             clean: None,
             publish: None,
             test: None,
@@ -614,6 +627,7 @@ mod tests {
         let ws = make_workspace_with_commands(Some(CommandConfig {
             version: None,
             bootstrap: None,
+            build: None,
             clean: Some(CleanCommandConfig {
                 hooks: Some(CleanHooks {
                     pre: Some("echo pre".to_string()),
@@ -631,6 +645,7 @@ mod tests {
         let ws = make_workspace_with_commands(Some(CommandConfig {
             version: None,
             bootstrap: None,
+            build: None,
             clean: Some(CleanCommandConfig { hooks: None }),
             publish: None,
             test: None,

@@ -632,11 +632,225 @@ This meant the command ran in ALL packages instead of only those containing `pub
   - 2 unit tests for `extract_exec_command()` fallback: equals form stripped, space form stripped
 - [x] `task check:all` passes — 420 tests, zero clippy warnings
 
+## Batch 33 — Build command config parsing & CLI wiring (v0.3.0, Batch A)
+
+Beyond-Melos-parity feature: `melos-rs build` replaces 20-30 duplicated build scripts with a
+single declarative config block + CLI interface. This batch implements config parsing, CLI args,
+and full command wiring.
+
+- [x] Bumped `Cargo.toml` version to `0.3.0`
+- [x] Created `docs/rationale/0004_build_command.md` (detailed rationale document)
+- [x] Added config structs to `src/config/mod.rs`:
+  - `BuildCommandConfig` (flavors, defaultFlavor, android, ios, packageFilters, hooks)
+  - `FlavorConfig` (target, mode)
+  - `BuildMode` enum (Release, Debug, Profile) with Display impl
+  - `AndroidBuildConfig` (types, defaultType, extraArgs, simulator)
+  - `IosBuildConfig` (extraArgs, simulator)
+  - `SimulatorConfig` (enabled, command)
+  - `BuildHooks` (pre, post)
+  - Wired `build: Option<BuildCommandConfig>` into `CommandConfig`
+- [x] Created `src/commands/build.rs` (706 lines) with:
+  - `BuildArgs` struct (clap derive) with all CLI flags
+  - `Platform` enum (Android, Ios) with Display, dir_name(), default_build_type()
+  - `build_flutter_command()` — assembles flutter build command string
+  - `resolve_platforms()`, `resolve_flavors()`, `resolve_android_build_type()` helpers
+  - `run()` async function — full build execution with filter merging, platform iteration,
+    flavor iteration, hooks, dry-run, fail-fast
+- [x] Wired build command into CLI:
+  - `pub mod build` in `src/commands/mod.rs`
+  - `Build(BuildArgs)` variant in `Commands` enum in `src/cli.rs`
+  - `"build"` in `OVERRIDABLE_COMMANDS` and dispatch in `src/main.rs`
+  - `"build"` arm in `get_overridable_command_name()` in `src/main.rs`
+  - `"build"` arm in `Workspace::hook()` in `src/workspace.rs`
+- [x] Tests: 25 new tests (445 total: 419 unit + 26 integration)
+  - 5 command assembly: Android prod release, Android QA debug, iOS prod release,
+    profile mode, extra args
+  - 5 platform resolution: default is all, android only, ios only, all flag, both explicit
+  - 6 flavor resolution: explicit, multiple, unknown errors, default from config,
+    single available, multiple no default errors
+  - 3 platform methods: display, dir_name, default_build_type
+  - 1 build mode: display
+  - 5 config parsing: full config, minimal, android defaults, simulator, flavor default mode,
+    with package filters
+- [x] `task check:all` passes — 446 tests (420 unit + 26 integration), zero clippy warnings
+
 ## Remaining / Future
 
 Stretch goals and out-of-scope items. None of these are required for Melos 7.4.0 CLI parity.
 
 - [ ] Plugin system for custom commands
 - [ ] GitHub Actions integration helpers
-- [ ] `build:android` / `build:ios` wrapper commands (flavor/environment support, artifact resolution, simulator/bundletool) — low priority, out of scope for CLI parity
 - [ ] IDE integration (IntelliJ, VS Code) — out of scope for CLI tool
+
+---
+
+## Build Command — `melos-rs build` (Beyond Melos Parity)
+
+Melos has no built-in build command. Teams currently define 20–30 nearly identical scripts
+in `melos.yaml` that differ only in platform/flavor/mode. `melos-rs build` eliminates this
+boilerplate with a single declarative config block + CLI interface.
+
+### Problem
+
+A typical Flutter monorepo `melos.yaml` has explosive script duplication for builds:
+- `build:android`, `build:android-qa`, `build:android-dev`
+- `build:android-aab`, `build:android-simulator`, `build:android-simulator-qa`, `build:android-simulator-dev`
+- `build:ios`, `build:ios-qa`, `build:ios-dev`
+- `build:ios-simulator`, `build:ios-simulator-qa`, `build:ios-simulator-dev`
+- `build:all`, `build:all-simulator`, `build:all-simulator-qa`
+- `build:all:patch-version`, `build:all:minor-version`, `build:all:major-version`
+
+Each script is essentially `flutter build <type> -t lib/main_<flavor>.dart --<mode> --flavor <flavor>`
+with minor variations. This is ~170 lines of YAML that should be ~20 lines of config.
+
+### Config Design (`melos.yaml`)
+
+```yaml
+command:
+  build:
+    # Flavor definitions — entry point, build mode, and extra args per flavor
+    flavors:
+      prod:
+        target: lib/main_prod.dart       # -t flag
+        mode: release                     # --release / --debug / --profile
+      qa:
+        target: lib/main_qa.dart
+        mode: debug
+      dev:
+        target: lib/main_dev.dart
+        mode: debug
+
+    # Default flavor when --flavor is not specified on CLI
+    defaultFlavor: prod
+
+    # Platform-specific config
+    android:
+      # Build types to produce (maps to `flutter build <type>`)
+      types: [appbundle, apk]
+      # Default type when --type is not specified
+      defaultType: appbundle
+      # Simulator post-build: bundletool extraction to universal.apk
+      simulator:
+        enabled: true
+        # Command template. Placeholders: {aab_path}, {output_dir}, {flavor}, {mode}
+        command: >-
+          bundletool build-apks --overwrite --mode=universal
+          --bundle={aab_path} --output={output_dir}/{flavor}-unv.apks
+          && unzip -o {output_dir}/{flavor}-unv.apks universal.apk -d {output_dir}
+
+    ios:
+      # Extra args appended to all iOS builds
+      extraArgs: ["--export-options-plist", "ios/runner/exportOptions.plist"]
+      # Simulator post-build: xcodebuild for .app file
+      simulator:
+        enabled: true
+        # Command template. Placeholders: {flavor}, {mode}, {configuration}
+        command: >-
+          xcodebuild -configuration {configuration}
+          -workspace ios/Runner.xcworkspace -scheme {flavor}
+          -sdk iphonesimulator -derivedDataPath build/ios/archive/simulator
+
+    # Package filters applied to all build targets (same as script packageFilters)
+    packageFilters:
+      flutter: true
+
+    # Hooks
+    hooks:
+      pre: echo "Starting build..."
+      post: echo "Build complete."
+```
+
+### CLI Interface
+
+```
+melos-rs build [OPTIONS]
+
+PLATFORMS:
+    --android              Build for Android
+    --ios                  Build for iOS
+    --all                  Build for all platforms (default when none specified)
+
+FLAVORS:
+    --flavor <NAME>        Build flavor/environment (default: config defaultFlavor)
+                           Can be specified multiple times: --flavor prod --flavor qa
+
+ANDROID OPTIONS:
+    --type <TYPE>          Android build type: apk, appbundle (default: config defaultType)
+    --simulator            Build simulator-compatible artifact (bundletool extraction)
+
+IOS OPTIONS:
+    --simulator            Build simulator .app via xcodebuild instead of .ipa
+    --export-options-plist <PATH>  Override export options plist
+
+GENERAL:
+    --dry-run              Print commands without executing
+    --fail-fast            Stop on first failure
+    -c, --concurrency <N>  Max concurrent builds (default: 1)
+    --version-bump <TYPE>  Bump version before build: patch, minor, major
+    --build-number-bump    Increment build number before build
+    --scope <GLOB>         Filter packages by name
+    --ignore <GLOB>        Exclude packages by name
+```
+
+### Examples
+
+```bash
+# Build prod APK for Android (replaces `melos run build:android`)
+melos-rs build --android --type apk
+
+# Build QA appbundle (replaces `melos run build:android-qa`)
+melos-rs build --android --flavor qa
+
+# Build prod IPA for iOS (replaces `melos run build:ios`)
+melos-rs build --ios
+
+# Build simulator artifacts for both platforms (replaces `melos run build:all-simulator`)
+melos-rs build --all --simulator
+
+# Build QA simulator for iOS (replaces `melos run build:ios-simulator-qa`)
+melos-rs build --ios --simulator --flavor qa
+
+# Bump patch version and build all prod (replaces `melos run build:all:patch-version`)
+melos-rs build --all --version-bump patch
+
+# Build all flavors at once
+melos-rs build --android --flavor prod --flavor qa --flavor dev
+```
+
+### Implementation Batches
+
+#### Batch A — Config parsing & CLI args ✅ (Batch 33)
+- [x] Add `BuildCommandConfig` struct with `flavors`, `defaultFlavor`, `android`, `ios`, `packageFilters`, `hooks`
+- [x] Add `FlavorConfig` struct with `target`, `mode` fields
+- [x] Add `PlatformConfig` struct with `types`, `defaultType`, `extraArgs`, `simulator` fields
+- [x] Add `SimulatorConfig` struct with `enabled`, `command` template fields
+- [x] Wire into `CommandConfig.build: Option<BuildCommandConfig>` in `config/mod.rs`
+- [x] Add `BuildArgs` struct in `commands/build.rs` with clap derive
+- [x] Add `Build(BuildArgs)` variant to `Commands` enum in `cli.rs`
+- [x] Add `"build"` to `OVERRIDABLE_COMMANDS` in `main.rs`
+- [x] Implement `build_flutter_command()`, `resolve_platforms()`, `resolve_flavors()`, `run()`
+- [x] Hook support via `workspace.hook("build", "pre")` / `workspace.hook("build", "post")`
+- [x] Tests: config parsing for all build config variants + command assembly + resolution logic
+
+#### Batch B — Core build command execution ✅ (included in Batch 33)
+- [x] Implement `build_flutter_command()` — assembles `flutter build <type> -t <target> --<mode> --flavor <flavor> [extraArgs]`
+- [x] Implement `commands::build::run()` — filter packages (flutter + dirExists), build command, execute via ProcessRunner
+- [x] Platform detection: `--android` filters to `dirExists: android`, `--ios` filters to `dirExists: ios`
+- [x] Multi-flavor support: iterate flavors, build each sequentially
+- [x] Hook support via `workspace.hook("build", "pre")` / `workspace.hook("build", "post")`
+- [x] Dry-run mode
+- [x] Tests: command string assembly for all platform/flavor/mode combos
+
+#### Batch C — Simulator builds & post-processing
+- [ ] Implement simulator post-build for Android (bundletool extraction)
+- [ ] Implement simulator post-build for iOS (xcodebuild)
+- [ ] Template placeholder expansion: `{aab_path}`, `{output_dir}`, `{flavor}`, `{mode}`, `{configuration}`
+- [ ] Resolve artifact output paths from Flutter build conventions
+- [ ] Tests: template expansion, simulator command assembly
+
+#### Batch D — Version bump integration & composite builds
+- [ ] `--version-bump` calls into existing `commands::version` before building
+- [ ] `--build-number-bump` increments build number in pubspec.yaml
+- [ ] `--all` platform flag builds Android then iOS sequentially
+- [ ] Progress reporting: per-platform, per-flavor status
+- [ ] Tests: version bump + build integration, multi-platform sequencing

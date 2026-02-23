@@ -2,9 +2,9 @@ use clap::{Args, Parser, Subcommand};
 use clap_complete::Shell;
 
 use crate::commands::{
-    analyze::AnalyzeArgs, exec::ExecArgs, format::FormatArgs, health::HealthArgs, init::InitArgs,
-    list::ListArgs, pub_cmds::PubArgs, publish::PublishArgs, run::RunArgs, test::TestArgs,
-    version::VersionArgs,
+    analyze::AnalyzeArgs, build::BuildArgs, exec::ExecArgs, format::FormatArgs, health::HealthArgs,
+    init::InitArgs, list::ListArgs, pub_cmds::PubArgs, publish::PublishArgs, run::RunArgs,
+    test::TestArgs, version::VersionArgs,
 };
 
 /// melos-rs: A Rust CLI for Flutter/Dart monorepo management
@@ -155,6 +155,9 @@ pub enum Commands {
     /// Initialize the workspace by linking packages and running `pub get`
     #[command(alias = "bs")]
     Bootstrap(BootstrapArgs),
+
+    /// Build Flutter apps for Android and/or iOS with declarative config
+    Build(BuildArgs),
 
     /// Clean all packages (runs `flutter clean` in each)
     Clean(CleanArgs),

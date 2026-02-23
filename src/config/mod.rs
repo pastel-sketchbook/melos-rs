@@ -429,6 +429,9 @@ pub struct CommandConfig {
 
     /// Test command config
     pub test: Option<TestCommandConfig>,
+
+    /// Build command config (beyond Melos parity — see docs/rationale/0004)
+    pub build: Option<BuildCommandConfig>,
 }
 
 /// Configuration for the `version` command
@@ -822,6 +825,182 @@ pub struct PublishHooks {
     pub pre: Option<String>,
 
     /// Script to run after publishing
+    pub post: Option<String>,
+}
+
+// ── Build command config (beyond Melos parity) ─────────────────────────
+
+/// Configuration for the `build` command.
+///
+/// Replaces 20–30 duplicated build scripts with a single declarative block.
+/// See `docs/rationale/0004_build_command.md` for design rationale.
+///
+/// ```yaml
+/// command:
+///   build:
+///     flavors:
+///       prod:
+///         target: lib/main_prod.dart
+///         mode: release
+///     defaultFlavor: prod
+///     android:
+///       types: [appbundle, apk]
+///       defaultType: appbundle
+///     ios:
+///       extraArgs: ["--export-options-plist", "ios/runner/exportOptions.plist"]
+/// ```
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildCommandConfig {
+    /// Flavor definitions keyed by name (e.g. "prod", "qa", "dev")
+    #[serde(default)]
+    pub flavors: HashMap<String, FlavorConfig>,
+
+    /// Default flavor when `--flavor` is not specified on CLI
+    pub default_flavor: Option<String>,
+
+    /// Android platform config
+    pub android: Option<AndroidBuildConfig>,
+
+    /// iOS platform config
+    pub ios: Option<IosBuildConfig>,
+
+    /// Package filters applied to all build targets
+    pub package_filters: Option<filter::PackageFilters>,
+
+    /// Lifecycle hooks (pre/post)
+    pub hooks: Option<BuildHooks>,
+}
+
+/// Configuration for a single build flavor/environment.
+///
+/// Maps a flavor name to its entry point and build mode:
+/// ```yaml
+/// prod:
+///   target: lib/main_prod.dart
+///   mode: release
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FlavorConfig {
+    /// Entry point file (`-t` flag), e.g. `lib/main_prod.dart`
+    pub target: String,
+
+    /// Build mode: `release`, `debug`, or `profile`
+    #[serde(default = "default_release_mode")]
+    pub mode: BuildMode,
+}
+
+/// Flutter build mode
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildMode {
+    Release,
+    Debug,
+    Profile,
+}
+
+impl std::fmt::Display for BuildMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildMode::Release => write!(f, "release"),
+            BuildMode::Debug => write!(f, "debug"),
+            BuildMode::Profile => write!(f, "profile"),
+        }
+    }
+}
+
+fn default_release_mode() -> BuildMode {
+    BuildMode::Release
+}
+
+/// Android-specific build configuration
+///
+/// ```yaml
+/// android:
+///   types: [appbundle, apk]
+///   defaultType: appbundle
+///   simulator:
+///     enabled: true
+///     command: "bundletool build-apks ..."
+/// ```
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidBuildConfig {
+    /// Build types to support (maps to `flutter build <type>`)
+    #[serde(default = "default_android_types")]
+    #[allow(dead_code)] // read in Batch C (simulator builds)
+    pub types: Vec<String>,
+
+    /// Default build type when `--type` is not specified
+    #[serde(default = "default_android_type")]
+    pub default_type: String,
+
+    /// Extra args appended to all Android build commands
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+
+    /// Simulator post-build config (bundletool extraction)
+    #[allow(dead_code)] // read in Batch C (simulator builds)
+    pub simulator: Option<SimulatorConfig>,
+}
+
+fn default_android_types() -> Vec<String> {
+    vec!["appbundle".to_string()]
+}
+
+fn default_android_type() -> String {
+    "appbundle".to_string()
+}
+
+/// iOS-specific build configuration
+///
+/// ```yaml
+/// ios:
+///   extraArgs: ["--export-options-plist", "ios/runner/exportOptions.plist"]
+///   simulator:
+///     enabled: true
+///     command: "xcodebuild ..."
+/// ```
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IosBuildConfig {
+    /// Extra args appended to all iOS build commands
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+
+    /// Simulator post-build config (xcodebuild)
+    #[allow(dead_code)] // read in Batch C (simulator builds)
+    pub simulator: Option<SimulatorConfig>,
+}
+
+/// Simulator post-build configuration.
+///
+/// A command template with placeholders that is run after the Flutter build
+/// to produce simulator-compatible artifacts.
+///
+/// Android placeholders: `{aab_path}`, `{output_dir}`, `{flavor}`, `{mode}`
+/// iOS placeholders: `{flavor}`, `{mode}`, `{configuration}`
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // all fields read in Batch C (simulator builds)
+pub struct SimulatorConfig {
+    /// Whether simulator builds are enabled for this platform
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Command template with placeholders
+    pub command: Option<String>,
+}
+
+/// Hooks for the build command
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildHooks {
+    /// Script to run before building
+    pub pre: Option<String>,
+
+    /// Script to run after building
     pub post: Option<String>,
 }
 

@@ -17,6 +17,7 @@ use colored::Colorize;
 const OVERRIDABLE_COMMANDS: &[&str] = &[
     "analyze",
     "bootstrap",
+    "build",
     "clean",
     "exec",
     "format",
@@ -120,6 +121,7 @@ async fn main() -> Result<()> {
         match cli.command {
             Commands::Analyze(args) => commands::analyze::run(&workspace, args).await,
             Commands::Bootstrap(args) => commands::bootstrap::run(&workspace, args).await,
+            Commands::Build(args) => commands::build::run(&workspace, args).await,
             Commands::Clean(args) => commands::clean::run(&workspace, args).await,
             Commands::Completion(_) => unreachable!("completion handled above"),
             Commands::Exec(args) => commands::exec::run(&workspace, args).await,
@@ -155,6 +157,7 @@ fn get_overridable_command_name(command: &Commands) -> Option<&'static str> {
     let name = match command {
         Commands::Analyze(_) => "analyze",
         Commands::Bootstrap(_) => "bootstrap",
+        Commands::Build(_) => "build",
         Commands::Clean(_) => "clean",
         Commands::Exec(_) => "exec",
         Commands::Format(_) => "format",
