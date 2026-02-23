@@ -1,10 +1,12 @@
+use std::path::Path;
+
 use anyhow::{Result, bail};
 use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::FlavorConfig;
 use crate::config::filter::PackageFilters;
+use crate::config::{BuildMode, FlavorConfig, SimulatorConfig};
 use crate::package::filter::apply_filters_with_categories;
 use crate::runner::{ProcessRunner, run_lifecycle_hook};
 use crate::workspace::Workspace;
@@ -134,6 +136,128 @@ pub fn build_flutter_command(
     parts.join(" ")
 }
 
+/// Resolve the artifact output path for a Flutter build.
+///
+/// Flutter uses platform-specific conventions for build output:
+/// - **Android AAB**: `build/app/outputs/bundle/{flavor}{Mode}/app-{flavor}-{mode}.aab`
+///   (e.g., `build/app/outputs/bundle/prodRelease/app-prod-release.aab`)
+/// - **Android APK**: `build/app/outputs/flutter-apk/app-{flavor}-{mode}.apk`
+///   (e.g., `build/app/outputs/flutter-apk/app-prod-release.apk`)
+/// - **iOS IPA**: `build/ios/ipa/*.ipa` (exact name depends on the app)
+///
+/// Returns `None` for unsupported combinations (e.g., iOS IPA — path is app-name-dependent).
+pub fn resolve_artifact_path(
+    platform: Platform,
+    build_type: &str,
+    flavor_name: &str,
+    mode: &BuildMode,
+) -> Option<String> {
+    let mode_str = mode.to_string();
+    match platform {
+        Platform::Android => {
+            let capitalized_mode = capitalize_first(&mode_str);
+            match build_type {
+                "appbundle" => Some(format!(
+                    "build/app/outputs/bundle/{flavor}{mode}/app-{flavor}-{mode_lower}.aab",
+                    flavor = flavor_name,
+                    mode = capitalized_mode,
+                    mode_lower = mode_str,
+                )),
+                "apk" => Some(format!(
+                    "build/app/outputs/flutter-apk/app-{flavor}-{mode}.apk",
+                    flavor = flavor_name,
+                    mode = mode_str,
+                )),
+                _ => None,
+            }
+        }
+        Platform::Ios => None,
+    }
+}
+
+/// Capitalize the first letter of a string (e.g., "release" -> "Release").
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+    }
+}
+
+/// Expand placeholders in a simulator command template.
+///
+/// Supported placeholders:
+/// - `{aab_path}` — resolved AAB artifact path (Android only)
+/// - `{apk_path}` — resolved APK artifact path (Android only)
+/// - `{output_dir}` — the directory containing the artifact
+/// - `{flavor}` — the flavor name (e.g., "prod", "qa")
+/// - `{mode}` — the build mode (e.g., "release", "debug")
+/// - `{configuration}` — Xcode-style configuration: "Debug-{flavor}" (iOS)
+///
+/// Returns `Err` if the template references `{aab_path}` but no AAB path can be resolved.
+pub fn expand_simulator_template(
+    template: &str,
+    platform: Platform,
+    flavor_name: &str,
+    mode: &BuildMode,
+) -> Result<String> {
+    let mode_str = mode.to_string();
+    let mut result = template.to_string();
+
+    result = result.replace("{flavor}", flavor_name);
+    result = result.replace("{mode}", &mode_str);
+
+    // iOS configuration: "Debug-{flavor}"
+    let configuration = format!("Debug-{}", flavor_name);
+    result = result.replace("{configuration}", &configuration);
+
+    // Android artifact paths
+    if result.contains("{aab_path}") {
+        let aab_path =
+            resolve_artifact_path(platform, "appbundle", flavor_name, mode).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cannot resolve AAB path for {} {} (only Android appbundle is supported)",
+                    platform,
+                    flavor_name
+                )
+            })?;
+        let output_dir = Path::new(&aab_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        result = result.replace("{aab_path}", &aab_path);
+        // Also fill {output_dir} if referenced, using the aab_path's directory
+        result = result.replace("{output_dir}", &output_dir);
+    } else if result.contains("{apk_path}") {
+        let apk_path =
+            resolve_artifact_path(platform, "apk", flavor_name, mode).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cannot resolve APK path for {} {} (only Android APK is supported)",
+                    platform,
+                    flavor_name
+                )
+            })?;
+        let output_dir = Path::new(&apk_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        result = result.replace("{apk_path}", &apk_path);
+        result = result.replace("{output_dir}", &output_dir);
+    } else if result.contains("{output_dir}") {
+        // Fallback: resolve output_dir from the default build type for this platform
+        let default_type = platform.default_build_type();
+        let artifact = resolve_artifact_path(platform, default_type, flavor_name, mode);
+        let output_dir = artifact
+            .as_ref()
+            .and_then(|p| Path::new(p).parent())
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        result = result.replace("{output_dir}", &output_dir);
+    }
+
+    Ok(result)
+}
+
 /// Resolve which platforms to build based on CLI flags.
 ///
 /// Returns an error if conflicting flags are given.
@@ -200,6 +324,62 @@ fn resolve_android_build_type(args: &BuildArgs, workspace: &Workspace) -> String
     }
 
     Platform::Android.default_build_type().to_string()
+}
+
+/// Resolve the simulator post-build command for a platform/flavor, if applicable.
+///
+/// Returns `Ok(Some(expanded_command))` when `--simulator` is requested and the
+/// platform's simulator config is enabled with a command template.
+/// Returns `Ok(None)` when no simulator step should run.
+/// Returns `Err` when `--simulator` is requested but the config is missing or disabled.
+fn resolve_simulator_command(
+    simulator_requested: bool,
+    platform: Platform,
+    build_config: &crate::config::BuildCommandConfig,
+    flavor_name: &str,
+    mode: &BuildMode,
+) -> Result<Option<String>> {
+    if !simulator_requested {
+        return Ok(None);
+    }
+
+    let sim_config: Option<&SimulatorConfig> = match platform {
+        Platform::Android => build_config
+            .android
+            .as_ref()
+            .and_then(|a| a.simulator.as_ref()),
+        Platform::Ios => build_config.ios.as_ref().and_then(|i| i.simulator.as_ref()),
+    };
+
+    let Some(sim) = sim_config else {
+        bail!(
+            "--simulator requested but no simulator config found for {}.\n\
+             Add a `command.build.{}.simulator` section to melos.yaml.",
+            platform,
+            platform,
+        );
+    };
+
+    if !sim.enabled {
+        bail!(
+            "--simulator requested but simulator is disabled for {}.\n\
+             Set `command.build.{}.simulator.enabled: true` in melos.yaml.",
+            platform,
+            platform,
+        );
+    }
+
+    let Some(ref template) = sim.command else {
+        bail!(
+            "--simulator requested but no command template found for {}.\n\
+             Set `command.build.{}.simulator.command` in melos.yaml.",
+            platform,
+            platform,
+        );
+    };
+
+    let expanded = expand_simulator_template(template, platform, flavor_name, mode)?;
+    Ok(Some(expanded))
 }
 
 /// Run the `build` command
@@ -330,6 +510,19 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
                 for pkg in &packages {
                     println!("  {} {} → {}", "DRY".yellow(), pkg.name, cmd);
                 }
+
+                // Show simulator post-build in dry-run too
+                if let Some(sim_cmd) = resolve_simulator_command(
+                    args.simulator,
+                    *platform,
+                    build_config,
+                    flavor_name,
+                    &flavor.mode,
+                )? {
+                    for pkg in &packages {
+                        println!("  {} {} → {}", "DRY".yellow().dimmed(), pkg.name, sim_cmd);
+                    }
+                }
                 continue;
             }
 
@@ -349,6 +542,42 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
                     platform,
                     flavor_name
                 );
+            }
+
+            // Simulator post-build step
+            if let Some(sim_cmd) = resolve_simulator_command(
+                args.simulator,
+                *platform,
+                build_config,
+                flavor_name,
+                &flavor.mode,
+            )? {
+                println!(
+                    "\n{} {} {} simulator post-build ({} package(s))\n",
+                    "SIMULATOR".magenta().bold(),
+                    platform.to_string().bold(),
+                    flavor_name.bold(),
+                    packages.len().to_string().cyan(),
+                );
+
+                // Run simulator command sequentially in each package dir
+                // (concurrency=1: bundletool/xcodebuild are heavy processes)
+                let sim_runner = ProcessRunner::new(1, args.fail_fast);
+                let sim_results = sim_runner
+                    .run_in_packages(&packages, &sim_cmd, &env_vars, None, &workspace.packages)
+                    .await?;
+
+                let sim_failed = sim_results.iter().filter(|(_, success)| !success).count();
+                total_failed += sim_failed;
+
+                if sim_failed > 0 && args.fail_fast {
+                    bail!(
+                        "{} package(s) failed simulator post-build {} {}",
+                        sim_failed,
+                        platform,
+                        flavor_name
+                    );
+                }
             }
         }
     }
@@ -702,5 +931,332 @@ mod tests {
             yaml_serde::from_str(yaml).expect("should parse build config with filters");
         let filters = config.package_filters.expect("package_filters");
         assert_eq!(filters.flutter, Some(true));
+    }
+
+    // ── resolve_artifact_path tests ─────────────────────────────────────
+
+    #[test]
+    fn test_resolve_artifact_path_android_aab_prod_release() {
+        let path =
+            resolve_artifact_path(Platform::Android, "appbundle", "prod", &BuildMode::Release);
+        assert_eq!(
+            path,
+            Some("build/app/outputs/bundle/prodRelease/app-prod-release.aab".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_artifact_path_android_aab_qa_debug() {
+        let path = resolve_artifact_path(Platform::Android, "appbundle", "qa", &BuildMode::Debug);
+        assert_eq!(
+            path,
+            Some("build/app/outputs/bundle/qaDebug/app-qa-debug.aab".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_artifact_path_android_apk_prod_release() {
+        let path = resolve_artifact_path(Platform::Android, "apk", "prod", &BuildMode::Release);
+        assert_eq!(
+            path,
+            Some("build/app/outputs/flutter-apk/app-prod-release.apk".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_artifact_path_android_apk_dev_debug() {
+        let path = resolve_artifact_path(Platform::Android, "apk", "dev", &BuildMode::Debug);
+        assert_eq!(
+            path,
+            Some("build/app/outputs/flutter-apk/app-dev-debug.apk".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_artifact_path_android_unknown_type() {
+        let path = resolve_artifact_path(Platform::Android, "unknown", "prod", &BuildMode::Release);
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_resolve_artifact_path_ios_returns_none() {
+        let path = resolve_artifact_path(Platform::Ios, "ipa", "prod", &BuildMode::Release);
+        assert!(path.is_none());
+    }
+
+    // ── capitalize_first tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_capitalize_first_basic() {
+        assert_eq!(capitalize_first("release"), "Release");
+        assert_eq!(capitalize_first("debug"), "Debug");
+        assert_eq!(capitalize_first("profile"), "Profile");
+    }
+
+    #[test]
+    fn test_capitalize_first_empty() {
+        assert_eq!(capitalize_first(""), "");
+    }
+
+    #[test]
+    fn test_capitalize_first_single_char() {
+        assert_eq!(capitalize_first("a"), "A");
+    }
+
+    // ── expand_simulator_template tests ─────────────────────────────────
+
+    #[test]
+    fn test_expand_template_android_bundletool() {
+        let template = "bundletool build-apks --overwrite --mode=universal --bundle={aab_path} --output={output_dir}/{flavor}-unv.apks && unzip -o {output_dir}/{flavor}-unv.apks universal.apk -d {output_dir}";
+        let result =
+            expand_simulator_template(template, Platform::Android, "qa", &BuildMode::Debug)
+                .unwrap();
+        assert_eq!(
+            result,
+            "bundletool build-apks --overwrite --mode=universal \
+             --bundle=build/app/outputs/bundle/qaDebug/app-qa-debug.aab \
+             --output=build/app/outputs/bundle/qaDebug/qa-unv.apks \
+             && unzip -o build/app/outputs/bundle/qaDebug/qa-unv.apks universal.apk \
+             -d build/app/outputs/bundle/qaDebug"
+        );
+    }
+
+    #[test]
+    fn test_expand_template_android_prod_release() {
+        let template = "bundletool build-apks --bundle={aab_path} --output={output_dir}/out.apks";
+        let result =
+            expand_simulator_template(template, Platform::Android, "prod", &BuildMode::Release)
+                .unwrap();
+        assert_eq!(
+            result,
+            "bundletool build-apks \
+             --bundle=build/app/outputs/bundle/prodRelease/app-prod-release.aab \
+             --output=build/app/outputs/bundle/prodRelease/out.apks"
+        );
+    }
+
+    #[test]
+    fn test_expand_template_ios_xcodebuild() {
+        let template = "xcodebuild -configuration {configuration} -workspace ios/Runner.xcworkspace -scheme {flavor} -sdk iphonesimulator -derivedDataPath build/ios/archive/simulator";
+        let result =
+            expand_simulator_template(template, Platform::Ios, "prod", &BuildMode::Release)
+                .unwrap();
+        assert_eq!(
+            result,
+            "xcodebuild -configuration Debug-prod -workspace ios/Runner.xcworkspace -scheme prod -sdk iphonesimulator -derivedDataPath build/ios/archive/simulator"
+        );
+    }
+
+    #[test]
+    fn test_expand_template_ios_qa() {
+        let template =
+            "xcodebuild -configuration {configuration} -scheme {flavor} -sdk iphonesimulator";
+        let result =
+            expand_simulator_template(template, Platform::Ios, "qa", &BuildMode::Debug).unwrap();
+        assert_eq!(
+            result,
+            "xcodebuild -configuration Debug-qa -scheme qa -sdk iphonesimulator"
+        );
+    }
+
+    #[test]
+    fn test_expand_template_flavor_and_mode_only() {
+        let template = "echo Building {flavor} in {mode} mode";
+        let result =
+            expand_simulator_template(template, Platform::Android, "dev", &BuildMode::Debug)
+                .unwrap();
+        assert_eq!(result, "echo Building dev in debug mode");
+    }
+
+    #[test]
+    fn test_expand_template_apk_path() {
+        let template = "install {apk_path}";
+        let result =
+            expand_simulator_template(template, Platform::Android, "prod", &BuildMode::Release)
+                .unwrap();
+        assert_eq!(
+            result,
+            "install build/app/outputs/flutter-apk/app-prod-release.apk"
+        );
+    }
+
+    #[test]
+    fn test_expand_template_output_dir_fallback() {
+        let template = "ls {output_dir}";
+        let result =
+            expand_simulator_template(template, Platform::Android, "prod", &BuildMode::Release)
+                .unwrap();
+        assert_eq!(result, "ls build/app/outputs/bundle/prodRelease");
+    }
+
+    #[test]
+    fn test_expand_template_output_dir_ios_fallback_empty() {
+        let template = "ls {output_dir}";
+        let result =
+            expand_simulator_template(template, Platform::Ios, "prod", &BuildMode::Release)
+                .unwrap();
+        // iOS has no artifact path resolution, so output_dir is empty
+        assert_eq!(result, "ls ");
+    }
+
+    #[test]
+    fn test_expand_template_aab_path_fails_for_ios() {
+        let template = "bundletool --bundle={aab_path}";
+        let result =
+            expand_simulator_template(template, Platform::Ios, "prod", &BuildMode::Release);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot resolve AAB path")
+        );
+    }
+
+    // ── resolve_simulator_command tests ──────────────────────────────────
+
+    fn make_build_config_with_simulator(
+        android_sim: Option<SimulatorConfig>,
+        ios_sim: Option<SimulatorConfig>,
+    ) -> crate::config::BuildCommandConfig {
+        use std::collections::HashMap;
+        let mut flavors = HashMap::new();
+        flavors.insert(
+            "prod".to_string(),
+            FlavorConfig {
+                target: "lib/main.dart".to_string(),
+                mode: BuildMode::Release,
+            },
+        );
+        crate::config::BuildCommandConfig {
+            flavors,
+            default_flavor: Some("prod".to_string()),
+            android: Some(crate::config::AndroidBuildConfig {
+                types: vec!["appbundle".to_string()],
+                default_type: "appbundle".to_string(),
+                extra_args: vec![],
+                simulator: android_sim,
+            }),
+            ios: Some(crate::config::IosBuildConfig {
+                extra_args: vec![],
+                simulator: ios_sim,
+            }),
+            package_filters: None,
+            hooks: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_simulator_not_requested() {
+        let config = make_build_config_with_simulator(None, None);
+        let result = resolve_simulator_command(
+            false,
+            Platform::Android,
+            &config,
+            "prod",
+            &BuildMode::Release,
+        )
+        .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_simulator_android_enabled() {
+        let sim = SimulatorConfig {
+            enabled: true,
+            command: Some("bundletool --bundle={aab_path}".to_string()),
+        };
+        let config = make_build_config_with_simulator(Some(sim), None);
+        let result = resolve_simulator_command(
+            true,
+            Platform::Android,
+            &config,
+            "prod",
+            &BuildMode::Release,
+        )
+        .unwrap();
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("bundletool"));
+    }
+
+    #[test]
+    fn test_resolve_simulator_ios_enabled() {
+        let sim = SimulatorConfig {
+            enabled: true,
+            command: Some("xcodebuild -configuration {configuration} -scheme {flavor}".to_string()),
+        };
+        let config = make_build_config_with_simulator(None, Some(sim));
+        let result =
+            resolve_simulator_command(true, Platform::Ios, &config, "prod", &BuildMode::Release)
+                .unwrap();
+        assert_eq!(
+            result,
+            Some("xcodebuild -configuration Debug-prod -scheme prod".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_simulator_no_config_errors() {
+        let config = make_build_config_with_simulator(None, None);
+        let result = resolve_simulator_command(
+            true,
+            Platform::Android,
+            &config,
+            "prod",
+            &BuildMode::Release,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no simulator config")
+        );
+    }
+
+    #[test]
+    fn test_resolve_simulator_disabled_errors() {
+        let sim = SimulatorConfig {
+            enabled: false,
+            command: Some("bundletool".to_string()),
+        };
+        let config = make_build_config_with_simulator(Some(sim), None);
+        let result = resolve_simulator_command(
+            true,
+            Platform::Android,
+            &config,
+            "prod",
+            &BuildMode::Release,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("simulator is disabled")
+        );
+    }
+
+    #[test]
+    fn test_resolve_simulator_no_command_errors() {
+        let sim = SimulatorConfig {
+            enabled: true,
+            command: None,
+        };
+        let config = make_build_config_with_simulator(Some(sim), None);
+        let result = resolve_simulator_command(
+            true,
+            Platform::Android,
+            &config,
+            "prod",
+            &BuildMode::Release,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no command template")
+        );
     }
 }

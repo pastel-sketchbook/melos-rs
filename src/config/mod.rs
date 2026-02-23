@@ -929,7 +929,7 @@ fn default_release_mode() -> BuildMode {
 pub struct AndroidBuildConfig {
     /// Build types to support (maps to `flutter build <type>`)
     #[serde(default = "default_android_types")]
-    #[allow(dead_code)] // read in Batch C (simulator builds)
+    #[allow(dead_code)] // parsed for config completeness; used in Batch D for type validation
     pub types: Vec<String>,
 
     /// Default build type when `--type` is not specified
@@ -941,7 +941,6 @@ pub struct AndroidBuildConfig {
     pub extra_args: Vec<String>,
 
     /// Simulator post-build config (bundletool extraction)
-    #[allow(dead_code)] // read in Batch C (simulator builds)
     pub simulator: Option<SimulatorConfig>,
 }
 
@@ -970,7 +969,6 @@ pub struct IosBuildConfig {
     pub extra_args: Vec<String>,
 
     /// Simulator post-build config (xcodebuild)
-    #[allow(dead_code)] // read in Batch C (simulator builds)
     pub simulator: Option<SimulatorConfig>,
 }
 
@@ -983,7 +981,6 @@ pub struct IosBuildConfig {
 /// iOS placeholders: `{flavor}`, `{mode}`, `{configuration}`
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // all fields read in Batch C (simulator builds)
 pub struct SimulatorConfig {
     /// Whether simulator builds are enabled for this platform
     #[serde(default)]

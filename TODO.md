@@ -841,12 +841,16 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Dry-run mode
 - [x] Tests: command string assembly for all platform/flavor/mode combos
 
-#### Batch C — Simulator builds & post-processing
-- [ ] Implement simulator post-build for Android (bundletool extraction)
-- [ ] Implement simulator post-build for iOS (xcodebuild)
-- [ ] Template placeholder expansion: `{aab_path}`, `{output_dir}`, `{flavor}`, `{mode}`, `{configuration}`
-- [ ] Resolve artifact output paths from Flutter build conventions
-- [ ] Tests: template expansion, simulator command assembly
+#### Batch C — Simulator builds & post-processing ✅ (Batch 34)
+- [x] `resolve_artifact_path()` — Flutter build output path conventions (AAB, APK)
+- [x] `expand_simulator_template()` — placeholder expansion: `{aab_path}`, `{apk_path}`, `{output_dir}`, `{flavor}`, `{mode}`, `{configuration}`
+- [x] `resolve_simulator_command()` — validates config, expands template, returns command string
+- [x] Wire `--simulator` flag into `build::run()` flow (after regular build, per-package via ProcessRunner)
+- [x] Dry-run mode shows simulator post-build commands
+- [x] Error handling: missing config, disabled simulator, missing template all produce actionable errors
+- [x] Remove `#[allow(dead_code)]` from `IosBuildConfig.simulator`, `AndroidBuildConfig.simulator`, `SimulatorConfig` struct
+- [x] Tests: 24 new tests covering artifact paths, template expansion, simulator command resolution
+- Total: 444 unit tests + 26 integration tests = 470 tests
 
 #### Batch D — Version bump integration & composite builds
 - [ ] `--version-bump` calls into existing `commands::version` before building
