@@ -6,13 +6,29 @@ Parses `melos.yaml`. Discovers packages. Executes commands. Manages versions. **
 
 ## Benchmarks
 
-Measured on a 15-package Flutter monorepo using [hyperfine](https://github.com/sharkdp/hyperfine):
+### 15-package monorepo (synthetic)
+
+Measured using [hyperfine](https://github.com/sharkdp/hyperfine):
 
 | Command | melos | melos-rs | Speedup |
 |:--------|------:|---------:|--------:|
 | `list` | 518 ms | 7.6 ms | **68x** |
 | `list --json` | 525 ms | 7.6 ms | **69x** |
 | `exec -- echo hi` | 555 ms | 29 ms | **19x** |
+
+### 4-package Flutter workspace (real-world)
+
+Measured on [fl_template](https://github.com/nicosResworworked) (4 packages: adapter, model, ui, theme) with Melos 7.4.0 vs melos-rs 0.4.1:
+
+| Command | melos | melos-rs | Speedup |
+|:--------|------:|---------:|--------:|
+| `list` | 546 ms | 32 ms | **17x** |
+| `list --json` | 542 ms | 30 ms | **18x** |
+| `exec -- echo hi` | 570 ms | 35 ms | **16x** |
+| `format --set-exit-if-changed` | 1.36 s | 839 ms | **1.6x** |
+| `analyze` | 9.93 s | 9.81 s | **1.01x** |
+
+For I/O-bound commands (`analyze`, `format`), the bottleneck is the Dart toolchain itself. The speedup is most visible in orchestration-heavy commands (`list`, `exec`) where Dart VM startup overhead dominates.
 
 ## Features
 

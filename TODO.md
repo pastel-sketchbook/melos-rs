@@ -893,7 +893,13 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Created `docs/rationale/0005_proactive_conflict_detection.md`
 - Total: 500 unit tests + 26 integration tests = 526 tests
 
-#### Batch 39 — Analyze --dry-run, --code flags (done, v0.3.3)
+#### Batch 41 — Real-world benchmarks (done, v0.4.1)
+- [x] Built release binary, verified melos 7.4.0 + hyperfine 1.20.0 available
+- [x] Benchmarked 5 commands on fl_template (4-package Flutter workspace): list, list --json, exec, format, analyze
+- [x] Results: 16-18x faster for orchestration commands (list, exec); 1.6x for format; 1.01x for analyze (Dart toolchain bottleneck)
+- [x] Updated README: added second benchmark table for real-world workspace with analysis of speedup patterns
+- [x] Bumped version to 0.4.1
+- Total: 500 unit tests + 26 integration tests = 526 tests (no test changes, benchmarks only) — Analyze --dry-run, --code flags (done, v0.3.3)
 - [x] Added `--dry-run` flag to `analyze` command — runs `dart fix --dry-run` only, skips analysis (conflicts with `--fix`)
 - [x] Added `--code` flag — comma-separated diagnostic codes appended as `--code=<code>` to dart fix command
 - [x] `--code` validated to require `--fix` or `--dry-run`
