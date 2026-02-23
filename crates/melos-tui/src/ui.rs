@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::{Alignment, Constraint, Layout},
     style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
+    Frame,
 };
 
 use crate::app::{ActivePanel, App, AppState};
@@ -16,11 +16,12 @@ use crate::views::packages::draw_packages;
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Four-row layout: header (1), spacer (1), body (fill), footer (1).
-    let [header_area, _spacer, body_area, footer_area] = Layout::vertical([
+    // Five-row layout: header (1), top spacer (1), body (fill), bottom spacer (1), footer (1).
+    let [header_area, _top_spacer, body_area, _bottom_spacer, footer_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
+        Constraint::Length(1),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -116,7 +117,7 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     use super::*;
     use crate::app::PackageRow;
