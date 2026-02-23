@@ -1,16 +1,30 @@
 use ratatui::{
-    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table, TableState},
+    Frame,
 };
 
 use crate::app::App;
 
+/// Build a section header row that spans both columns.
+fn section_header(label: &str) -> Row<'_> {
+    Row::new(vec![
+        Cell::from(label).style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from(""),
+    ])
+}
+
 /// Draw the command/script table into the given area.
 ///
-/// Built-in commands appear first (white), followed by user scripts (cyan).
-/// Scripts with descriptions show them in a second column.
+/// Commands are grouped under "Built-in" and "Scripts" section headers.
+/// Built-in commands appear in white, user scripts in cyan.
+/// Section headers are visual-only rows; the selection highlight always
+/// lands on a real command row.
 /// When `focused` is true, the border is highlighted in cyan.
 pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, focused: bool) {
     let header_cells = ["Command", "Description"]
@@ -18,7 +32,25 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
     let header = Row::new(header_cells).height(1);
 
-    let rows = app.command_rows.iter().map(|cmd| {
+    let has_builtins = app.command_rows.iter().any(|c| c.is_builtin);
+    let first_script_idx = app.command_rows.iter().position(|c| !c.is_builtin);
+
+    let mut visual_rows: Vec<Row<'_>> = Vec::new();
+    let mut selected_visual: usize = 0;
+
+    if has_builtins {
+        visual_rows.push(section_header("-- Built-in --"));
+    }
+
+    for (i, cmd) in app.command_rows.iter().enumerate() {
+        if Some(i) == first_script_idx {
+            visual_rows.push(section_header("-- Scripts --"));
+        }
+
+        if i == app.selected_command {
+            selected_visual = visual_rows.len();
+        }
+
         let name_style = if cmd.is_builtin {
             Style::default().fg(Color::White)
         } else {
@@ -27,11 +59,11 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
         let desc = cmd.description.as_deref().unwrap_or("");
 
-        Row::new(vec![
+        visual_rows.push(Row::new(vec![
             Cell::from(cmd.name.as_str()).style(name_style),
             Cell::from(desc).style(Style::default().fg(Color::DarkGray)),
-        ])
-    });
+        ]));
+    }
 
     let title = format!(" Commands ({}) ", app.command_count());
 
@@ -41,7 +73,7 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         Style::default().fg(Color::DarkGray)
     };
 
-    let table = Table::new(rows, [Constraint::Length(24), Constraint::Fill(1)])
+    let table = Table::new(visual_rows, [Constraint::Length(24), Constraint::Fill(1)])
         .header(header)
         .block(
             Block::default()
@@ -59,7 +91,7 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
     let mut table_state = TableState::default();
     if !app.command_rows.is_empty() {
-        table_state.select(Some(app.selected_command));
+        table_state.select(Some(selected_visual));
     }
 
     frame.render_stateful_widget(table, area, &mut table_state);
@@ -67,7 +99,7 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     use super::*;
     use crate::app::CommandRow;
@@ -124,11 +156,16 @@ mod tests {
     fn test_command_table_shows_builtin_names() {
         let app = App::new();
         let buf = render_commands(&app, 80, 20);
-        // First builtin is "analyze" at row y=2 (border=0, header=1)
-        let row_line = buffer_line(&buf, 2, 80);
+        // Section header "-- Built-in --" at y=2, first builtin "analyze" at y=3
+        let header_row = buffer_line(&buf, 2, 80);
+        assert!(
+            header_row.contains("Built-in"),
+            "Expected 'Built-in' section header, got: {header_row}"
+        );
+        let row_line = buffer_line(&buf, 3, 80);
         assert!(
             row_line.contains("analyze"),
-            "Expected 'analyze' in first row, got: {row_line}"
+            "Expected 'analyze' in first command row, got: {row_line}"
         );
     }
 
@@ -141,18 +178,46 @@ mod tests {
             is_builtin: false,
         });
 
-        let buf = render_commands(&app, 80, 20);
-        // Script is last row, after all builtins
-        let row_count = app.command_rows.len();
-        let script_y = 1 + row_count as u16; // header=1, then rows
-        let row_line = buffer_line(&buf, script_y, 80);
+        let buf = render_commands(&app, 80, 22);
+        // After builtins: "-- Scripts --" header, then script row.
+        // y=0: border, y=1: column header, y=2: "-- Built-in --",
+        // y=3..14: 12 builtins, y=15: "-- Scripts --", y=16: script
+        let scripts_header = buffer_line(&buf, 15, 80);
         assert!(
-            row_line.contains("custom_script"),
-            "Expected 'custom_script' in row, got: {row_line}"
+            scripts_header.contains("Scripts"),
+            "Expected 'Scripts' section header, got: {scripts_header}"
+        );
+        let script_row = buffer_line(&buf, 16, 80);
+        assert!(
+            script_row.contains("custom_script"),
+            "Expected 'custom_script' in row, got: {script_row}"
         );
         assert!(
-            row_line.contains("runs custom logic"),
-            "Expected description in row, got: {row_line}"
+            script_row.contains("runs custom logic"),
+            "Expected description in row, got: {script_row}"
+        );
+    }
+
+    #[test]
+    fn test_command_table_scripts_only_no_builtin_header() {
+        let mut app = App::new();
+        app.command_rows = vec![CommandRow {
+            name: "my_script".to_string(),
+            description: None,
+            is_builtin: false,
+        }];
+
+        let buf = render_commands(&app, 80, 10);
+        // y=2 should be "-- Scripts --" (no built-in header)
+        let section = buffer_line(&buf, 2, 80);
+        assert!(
+            section.contains("Scripts"),
+            "Expected 'Scripts' section header, got: {section}"
+        );
+        let row = buffer_line(&buf, 3, 80);
+        assert!(
+            row.contains("my_script"),
+            "Expected 'my_script' in row, got: {row}"
         );
     }
 
