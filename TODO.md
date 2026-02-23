@@ -813,22 +813,22 @@ raw mode, quit on `q`/`Ctrl+C`, clean teardown on panic.
 
 Load the workspace on startup and display packages in a navigable table.
 
-- [ ] Add `workspace: Option<Workspace>` and `packages: Vec<Package>` to `App`
-- [ ] Load workspace in `main.rs` before entering event loop:
+- [x] Add `workspace: Option<Workspace>` and `packages: Vec<Package>` to `App`
+- [x] Load workspace in `main.rs` before entering event loop:
   - Show "Loading workspace..." text during load
   - Handle errors gracefully (display error in TUI, allow quit)
   - Store workspace warnings for display
-- [ ] Create `crates/melos-tui/src/views/packages.rs`:
+- [x] Create `crates/melos-tui/src/views/packages.rs`:
   - `Table` widget with columns: Name, Version, SDK (Flutter/Dart), Path (relative)
   - `TableState` for row selection (highlight current row)
   - Private packages shown with `(private)` suffix
   - Show package count in header
-- [ ] Wire keyboard navigation in `Idle` state:
+- [x] Wire keyboard navigation in `Idle` state:
   - Up/Down arrows: move selection
   - Home/End: jump to first/last package
   - Page Up/Down: scroll by page
-- [ ] Layout: header bar (workspace name, config source, package count) + package table + footer
-- [ ] Tests: `App` state transitions for keyboard navigation (up/down wrapping, bounds)
+- [x] Layout: header bar (workspace name, config source, package count) + package table + footer
+- [x] Tests: `App` state transitions for keyboard navigation (up/down wrapping, bounds)
 
 #### Batch 50 -- Command picker + tab switching
 

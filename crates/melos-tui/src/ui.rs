@@ -1,12 +1,13 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
-    Frame,
+    widgets::Paragraph,
 };
 
 use crate::app::{App, AppState};
+use crate::views::packages::draw_packages;
 
 /// Render the entire UI for the current frame.
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -26,39 +27,48 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 /// Render the header bar with workspace info.
-fn draw_header(frame: &mut Frame, area: ratatui::layout::Rect, _app: &App) {
+fn draw_header(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let workspace_info = match (&app.workspace_name, &app.config_source_label) {
+        (Some(name), Some(source)) => {
+            let pkg_count = app.package_count();
+            format!("{name} ({source}, {pkg_count} packages)")
+        }
+        _ => "no workspace loaded".to_string(),
+    };
+
     let header = Line::from(vec![
         Span::styled(" melos-tui ", Style::default().fg(Color::Cyan).bold()),
         Span::raw("| "),
-        Span::styled("no workspace loaded", Style::default().fg(Color::DarkGray)),
+        Span::styled(workspace_info, Style::default().fg(Color::White)),
     ]);
     frame.render_widget(Paragraph::new(header), area);
 }
 
 /// Render the main body area.
 fn draw_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let message = match app.state {
-        AppState::Idle => "Press Tab to switch panels. Press Enter to run a command.",
-        AppState::Running => "Command is running...",
-        AppState::Done => "Command finished. Press Esc to return.",
-    };
-
-    let body = Paragraph::new(message)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Workspace ")
-                .padding(Padding::new(1, 1, 1, 1)),
-        )
-        .style(Style::default().fg(Color::White));
-
-    frame.render_widget(body, area);
+    match app.state {
+        AppState::Idle => {
+            draw_packages(frame, area, app);
+        }
+        AppState::Running => {
+            let msg =
+                Paragraph::new("Command is running...").style(Style::default().fg(Color::Yellow));
+            frame.render_widget(msg, area);
+        }
+        AppState::Done => {
+            let msg = Paragraph::new("Command finished. Press Esc to return.")
+                .style(Style::default().fg(Color::Green));
+            frame.render_widget(msg, area);
+        }
+    }
 }
 
 /// Render the footer bar with context-sensitive keybindings.
 fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let keys = match app.state {
-        AppState::Idle => "q:quit  tab:switch  enter:run  /:filter  ?:help",
+        AppState::Idle => {
+            "q:quit  up/down:navigate  home/end:jump  pgup/pgdn:page  tab:switch  enter:run"
+        }
         AppState::Running => "esc:cancel",
         AppState::Done => "esc:back  q:quit",
     };
@@ -72,9 +82,10 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
+    use crate::app::PackageRow;
 
     /// Helper: render app state into a test backend and return the buffer.
     fn render_app(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
@@ -84,45 +95,102 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
+    /// Extract a line from the buffer as a string.
+    fn buffer_line(buf: &ratatui::buffer::Buffer, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+            .collect::<String>()
+    }
+
     #[test]
     fn test_header_contains_melos_tui() {
         let app = App::new();
-        let buf = render_app(&app, 60, 10);
-        let header_line: String = (0..60)
-            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
-            .collect();
+        let buf = render_app(&app, 80, 10);
+        let header_line = buffer_line(&buf, 0, 80);
         assert!(header_line.contains("melos-tui"));
     }
 
     #[test]
-    fn test_footer_shows_quit_key_in_idle() {
+    fn test_header_shows_no_workspace_when_unloaded() {
         let app = App::new();
-        let buf = render_app(&app, 60, 10);
-        let footer_line: String = (0..60)
-            .map(|x| buf.cell((x, 9)).unwrap().symbol().to_string())
-            .collect();
+        let buf = render_app(&app, 80, 10);
+        let header_line = buffer_line(&buf, 0, 80);
+        assert!(header_line.contains("no workspace loaded"));
+    }
+
+    #[test]
+    fn test_header_shows_workspace_info_when_loaded() {
+        let mut app = App::new();
+        app.workspace_name = Some("my_workspace".to_string());
+        app.config_source_label = Some("melos.yaml".to_string());
+        app.package_rows = vec![
+            PackageRow {
+                name: "a".to_string(),
+                version: "1.0.0".to_string(),
+                sdk: "Dart",
+                path: "packages/a".to_string(),
+                is_private: false,
+            },
+            PackageRow {
+                name: "b".to_string(),
+                version: "2.0.0".to_string(),
+                sdk: "Flutter",
+                path: "packages/b".to_string(),
+                is_private: false,
+            },
+        ];
+
+        let buf = render_app(&app, 100, 10);
+        let header_line = buffer_line(&buf, 0, 100);
+        assert!(
+            header_line.contains("my_workspace"),
+            "Expected workspace name, got: {header_line}"
+        );
+        assert!(
+            header_line.contains("melos.yaml"),
+            "Expected config source, got: {header_line}"
+        );
+        assert!(
+            header_line.contains("2 packages"),
+            "Expected package count, got: {header_line}"
+        );
+    }
+
+    #[test]
+    fn test_footer_shows_navigation_keys_in_idle() {
+        let app = App::new();
+        let buf = render_app(&app, 100, 10);
+        let footer_line = buffer_line(&buf, 9, 100);
         assert!(footer_line.contains("q:quit"));
+        assert!(footer_line.contains("up/down:navigate"));
     }
 
     #[test]
     fn test_footer_shows_esc_in_running() {
         let mut app = App::new();
         app.state = AppState::Running;
-        let buf = render_app(&app, 60, 10);
-        let footer_line: String = (0..60)
-            .map(|x| buf.cell((x, 9)).unwrap().symbol().to_string())
-            .collect();
+        let buf = render_app(&app, 80, 10);
+        let footer_line = buffer_line(&buf, 9, 80);
         assert!(footer_line.contains("esc:cancel"));
     }
 
     #[test]
-    fn test_body_shows_workspace_border() {
-        let app = App::new();
-        let buf = render_app(&app, 60, 10);
-        // The body block title should contain "Workspace"
-        let top_border: String = (0..60)
-            .map(|x| buf.cell((x, 1)).unwrap().symbol().to_string())
-            .collect();
-        assert!(top_border.contains("Workspace"));
+    fn test_body_shows_package_table_in_idle() {
+        let mut app = App::new();
+        app.package_rows = vec![PackageRow {
+            name: "test_pkg".to_string(),
+            version: "1.0.0".to_string(),
+            sdk: "Dart",
+            path: "packages/test_pkg".to_string(),
+            is_private: false,
+        }];
+
+        let buf = render_app(&app, 80, 12);
+        // The body area should contain the Packages table border/title
+        let body_top = buffer_line(&buf, 1, 80);
+        assert!(
+            body_top.contains("Packages"),
+            "Expected 'Packages' in body, got: {body_top}"
+        );
     }
 }
