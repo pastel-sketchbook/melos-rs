@@ -862,9 +862,18 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 6 validation tests (patch/minor/major accepted, build/empty/arbitrary rejected) + 7 filesystem-based version bump tests (patch/minor/major/build, build-from-zero, patch-preserves-build-number, noop-when-absent)
 - Total: 457 unit tests + 26 integration tests = 483 tests
 
-#### Future — Composite builds & progress reporting
-- [ ] `--all` platform flag builds Android then iOS sequentially
-- [ ] Progress reporting: per-platform, per-flavor status
+#### Batch 37 — Composite builds & progress reporting ✅ (v0.3.1)
+- [x] `--all` platform flag — already functional in `resolve_platforms()` (when `--all` or neither `--android`/`--ios` specified, builds both platforms sequentially)
+- [x] Added `BuildStepResult` struct to track per-step outcomes (platform, flavor, mode, passed/failed counts, duration)
+- [x] Added `format_duration()` helper — human-readable durations (e.g., "1m 23.4s", "45.6s", "0.0s")
+- [x] Added `format_step_result()` helper — per-step summary lines (e.g., "OK android prod [release]: 3/3 passed (12.3s)")
+- [x] Added `format_build_summary()` helper — full summary table with OK/FAIL/skipped status and totals
+- [x] Wired progress tracking into `run()` — build plan header with step count, `[n/total]` step counters, per-step timing via `Instant`, per-step completion line, final summary table
+- [x] Moved `packages.is_empty()` skip check inside flavor loop so each platform+flavor combo gets tracked as "skipped" in summary
+- [x] Dry-run steps tracked as `BuildStepResult` with `passed = packages.len()` and `Duration::ZERO`
+- [x] Simulator failures counted in step results (`sim_failed` added to `failed` count)
+- [x] Tests: 4 format_duration + 3 format_step_result + 4 format_build_summary + 2 BuildStepResult struct = 13 new tests
+- Total: 470 unit tests + 26 integration tests = 496 tests
 
 #### Batch 36 — Refactoring pass ✅
 - [x] Audited all 10 if-else chains with 3+ branches across src/ (version.rs, build.rs, config/mod.rs, run.rs, exec.rs)

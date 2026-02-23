@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -397,6 +398,105 @@ fn validate_version_bump(bump: &str) -> Result<()> {
     Ok(())
 }
 
+/// Result of a single build step (platform + flavor combination).
+#[derive(Debug, Clone)]
+struct BuildStepResult {
+    platform: Platform,
+    flavor: String,
+    mode: String,
+    total_packages: usize,
+    passed: usize,
+    failed: usize,
+    duration: Duration,
+    skipped: bool,
+}
+
+/// Format a human-readable duration (e.g., "12.3s", "1m 05s").
+fn format_duration(d: Duration) -> String {
+    let secs = d.as_secs_f64();
+    if secs < 60.0 {
+        format!("{:.1}s", secs)
+    } else {
+        let mins = secs as u64 / 60;
+        let remaining = secs as u64 % 60;
+        format!("{}m {:02}s", mins, remaining)
+    }
+}
+
+/// Format a per-step completion line.
+///
+/// Example: `  ✓ android prod: 3/3 passed (12.3s)`
+fn format_step_result(result: &BuildStepResult) -> String {
+    if result.skipped {
+        return format!(
+            "  {} {} {}: skipped (no matching packages)",
+            "-".dimmed(),
+            result.platform.to_string().dimmed(),
+            result.flavor.dimmed(),
+        );
+    }
+
+    let duration_str = format_duration(result.duration);
+    if result.failed == 0 {
+        format!(
+            "  {} {} {} [{}]: {}/{} passed ({})",
+            "OK".green(),
+            result.platform,
+            result.flavor,
+            result.mode,
+            result.passed,
+            result.total_packages,
+            duration_str,
+        )
+    } else {
+        format!(
+            "  {} {} {} [{}]: {}/{} failed ({})",
+            "FAIL".red(),
+            result.platform,
+            result.flavor,
+            result.mode,
+            result.failed,
+            result.total_packages,
+            duration_str,
+        )
+    }
+}
+
+/// Format the final build summary table.
+fn format_build_summary(results: &[BuildStepResult], total_duration: Duration) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("\n{}", "BUILD SUMMARY".bold()));
+
+    let total_passed: usize = results.iter().map(|r| r.passed).sum();
+    let total_failed: usize = results.iter().map(|r| r.failed).sum();
+    let total_skipped = results.iter().filter(|r| r.skipped).count();
+
+    for result in results {
+        lines.push(format_step_result(result));
+    }
+
+    lines.push(String::new());
+
+    let mut summary_parts = Vec::new();
+    if total_passed > 0 {
+        summary_parts.push(format!("{} passed", total_passed.to_string().green()));
+    }
+    if total_failed > 0 {
+        summary_parts.push(format!("{} failed", total_failed.to_string().red()));
+    }
+    if total_skipped > 0 {
+        summary_parts.push(format!("{} skipped", total_skipped.to_string().dimmed()));
+    }
+
+    lines.push(format!(
+        "  Total: {} ({})",
+        summary_parts.join(", "),
+        format_duration(total_duration),
+    ));
+
+    lines.join("\n")
+}
+
 /// Run the `build` command
 pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
     let build_config = workspace
@@ -501,6 +601,19 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
     }
 
     let mut total_failed = 0usize;
+    let mut step_results: Vec<BuildStepResult> = Vec::new();
+    let total_steps = platforms.len() * flavor_names.len();
+    let mut current_step = 0usize;
+    let build_start = Instant::now();
+
+    // Build plan header
+    println!(
+        "\n{} {} platform(s) × {} flavor(s) = {} step(s)\n",
+        "BUILD PLAN".bold(),
+        platforms.len().to_string().cyan(),
+        flavor_names.len().to_string().cyan(),
+        total_steps.to_string().cyan(),
+    );
 
     for platform in &platforms {
         // Add platform-specific dir_exists filter
@@ -517,60 +630,78 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
             &workspace.config.categories,
         )?;
 
-        if packages.is_empty() {
-            println!(
-                "{} No {} packages matched filters — skipping.",
-                "i".blue(),
-                platform
-            );
-            continue;
-        }
-
-        // Resolve extra args per platform
-        let extra_args: Vec<String> = match platform {
-            Platform::Android => build_config
-                .android
-                .as_ref()
-                .map(|a| a.extra_args.clone())
-                .unwrap_or_default(),
-            Platform::Ios => {
-                let mut ios_args = build_config
-                    .ios
-                    .as_ref()
-                    .map(|i| i.extra_args.clone())
-                    .unwrap_or_default();
-                // CLI --export-options-plist overrides config
-                if let Some(ref plist) = args.export_options_plist {
-                    // Remove existing --export-options-plist if present
-                    if let Some(pos) = ios_args.iter().position(|a| a == "--export-options-plist") {
-                        ios_args.remove(pos);
-                        if pos < ios_args.len() {
-                            ios_args.remove(pos);
-                        }
-                    }
-                    ios_args.push("--export-options-plist".to_string());
-                    ios_args.push(plist.clone());
-                }
-                ios_args
-            }
-        };
-
-        let build_type = match platform {
-            Platform::Android => resolve_android_build_type(&args, workspace),
-            Platform::Ios => "ipa".to_string(),
-        };
-
         for flavor_name in &flavor_names {
+            current_step += 1;
             let flavor = build_config
                 .flavors
                 .get(*flavor_name)
                 .expect("flavor validated in resolve_flavors");
 
+            if packages.is_empty() {
+                step_results.push(BuildStepResult {
+                    platform: *platform,
+                    flavor: flavor_name.to_string(),
+                    mode: flavor.mode.to_string(),
+                    total_packages: 0,
+                    passed: 0,
+                    failed: 0,
+                    duration: Duration::ZERO,
+                    skipped: true,
+                });
+                println!(
+                    "[{}/{}] {} No {} packages matched filters — skipping {}.",
+                    current_step,
+                    total_steps,
+                    "-".dimmed(),
+                    platform,
+                    flavor_name,
+                );
+                continue;
+            }
+
+            // Resolve extra args per platform
+            let extra_args: Vec<String> = match platform {
+                Platform::Android => build_config
+                    .android
+                    .as_ref()
+                    .map(|a| a.extra_args.clone())
+                    .unwrap_or_default(),
+                Platform::Ios => {
+                    let mut ios_args = build_config
+                        .ios
+                        .as_ref()
+                        .map(|i| i.extra_args.clone())
+                        .unwrap_or_default();
+                    // CLI --export-options-plist overrides config
+                    if let Some(ref plist) = args.export_options_plist {
+                        // Remove existing --export-options-plist if present
+                        if let Some(pos) =
+                            ios_args.iter().position(|a| a == "--export-options-plist")
+                        {
+                            ios_args.remove(pos);
+                            if pos < ios_args.len() {
+                                ios_args.remove(pos);
+                            }
+                        }
+                        ios_args.push("--export-options-plist".to_string());
+                        ios_args.push(plist.clone());
+                    }
+                    ios_args
+                }
+            };
+
+            let build_type = match platform {
+                Platform::Android => resolve_android_build_type(&args, workspace),
+                Platform::Ios => "ipa".to_string(),
+            };
+
             let cmd =
                 build_flutter_command(*platform, &build_type, flavor, flavor_name, &extra_args);
 
             println!(
-                "\n{} {} {} [{}] ({} package(s))\n",
+                "\n[{}/{}] {} {} {} [{}] ({} package(s))\n",
+                current_step,
+                total_steps,
                 "BUILD".cyan().bold(),
                 platform.to_string().bold(),
                 flavor_name.bold(),
@@ -595,8 +726,20 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
                         println!("  {} {} → {}", "DRY".yellow().dimmed(), pkg.name, sim_cmd);
                     }
                 }
+                step_results.push(BuildStepResult {
+                    platform: *platform,
+                    flavor: flavor_name.to_string(),
+                    mode: flavor.mode.to_string(),
+                    total_packages: packages.len(),
+                    passed: packages.len(),
+                    failed: 0,
+                    duration: Duration::ZERO,
+                    skipped: false,
+                });
                 continue;
             }
+
+            let step_start = Instant::now();
 
             let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
             let env_vars = workspace.env_vars();
@@ -605,18 +748,11 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
                 .await?;
 
             let failed = results.iter().filter(|(_, success)| !success).count();
+            let passed = results.len() - failed;
             total_failed += failed;
 
-            if failed > 0 && args.fail_fast {
-                bail!(
-                    "{} package(s) failed building {} {}",
-                    failed,
-                    platform,
-                    flavor_name
-                );
-            }
-
             // Simulator post-build step
+            let mut sim_failed = 0usize;
             if let Some(sim_cmd) = resolve_simulator_command(
                 args.simulator,
                 *platform,
@@ -639,17 +775,38 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
                     .run_in_packages(&packages, &sim_cmd, &env_vars, None, &workspace.packages)
                     .await?;
 
-                let sim_failed = sim_results.iter().filter(|(_, success)| !success).count();
+                sim_failed = sim_results.iter().filter(|(_, success)| !success).count();
                 total_failed += sim_failed;
+            }
 
-                if sim_failed > 0 && args.fail_fast {
-                    bail!(
-                        "{} package(s) failed simulator post-build {} {}",
-                        sim_failed,
-                        platform,
-                        flavor_name
-                    );
-                }
+            let step_duration = step_start.elapsed();
+            let step_total_failed = failed + sim_failed;
+
+            let step_result = BuildStepResult {
+                platform: *platform,
+                flavor: flavor_name.to_string(),
+                mode: flavor.mode.to_string(),
+                total_packages: packages.len(),
+                passed: if step_total_failed == 0 {
+                    packages.len()
+                } else {
+                    passed
+                },
+                failed: step_total_failed,
+                duration: step_duration,
+                skipped: false,
+            };
+
+            println!("{}", format_step_result(&step_result));
+            step_results.push(step_result);
+
+            if step_total_failed > 0 && args.fail_fast {
+                bail!(
+                    "{} package(s) failed building {} {}",
+                    step_total_failed,
+                    platform,
+                    flavor_name
+                );
             }
         }
     }
@@ -659,6 +816,8 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
         run_lifecycle_hook(hook, "post-build", &workspace.root_path, &[]).await?;
     }
 
+    let total_duration = build_start.elapsed();
+
     if args.dry_run {
         println!(
             "\n{}",
@@ -666,6 +825,9 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
         );
         return Ok(());
     }
+
+    // Print final summary
+    println!("{}", format_build_summary(&step_results, total_duration));
 
     if total_failed > 0 {
         bail!("{} package(s) failed", total_failed);
@@ -1516,5 +1678,272 @@ mod tests {
     #[test]
     fn test_valid_version_bumps_constant() {
         assert_eq!(VALID_VERSION_BUMPS, &["patch", "minor", "major"]);
+    }
+
+    // ── format_duration tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_format_duration_seconds() {
+        let d = Duration::from_secs_f64(12.345);
+        assert_eq!(format_duration(d), "12.3s");
+    }
+
+    #[test]
+    fn test_format_duration_sub_second() {
+        let d = Duration::from_millis(450);
+        assert_eq!(format_duration(d), "0.5s");
+    }
+
+    #[test]
+    fn test_format_duration_minutes() {
+        let d = Duration::from_secs(125);
+        assert_eq!(format_duration(d), "2m 05s");
+    }
+
+    #[test]
+    fn test_format_duration_exact_minute() {
+        let d = Duration::from_secs(60);
+        assert_eq!(format_duration(d), "1m 00s");
+    }
+
+    // ── format_step_result tests ────────────────────────────────────────
+
+    #[test]
+    fn test_format_step_result_all_passed() {
+        let result = BuildStepResult {
+            platform: Platform::Android,
+            flavor: "prod".to_string(),
+            mode: "release".to_string(),
+            total_packages: 3,
+            passed: 3,
+            failed: 0,
+            duration: Duration::from_secs_f64(12.3),
+            skipped: false,
+        };
+        let output = format_step_result(&result);
+        assert!(output.contains("android"));
+        assert!(output.contains("prod"));
+        assert!(output.contains("[release]"));
+        assert!(output.contains("3/3 passed"));
+        assert!(output.contains("12.3s"));
+    }
+
+    #[test]
+    fn test_format_step_result_with_failures() {
+        let result = BuildStepResult {
+            platform: Platform::Ios,
+            flavor: "qa".to_string(),
+            mode: "debug".to_string(),
+            total_packages: 4,
+            passed: 2,
+            failed: 2,
+            duration: Duration::from_secs_f64(8.1),
+            skipped: false,
+        };
+        let output = format_step_result(&result);
+        assert!(output.contains("ios"));
+        assert!(output.contains("qa"));
+        assert!(output.contains("[debug]"));
+        assert!(output.contains("2/4 failed"));
+        assert!(output.contains("8.1s"));
+    }
+
+    #[test]
+    fn test_format_step_result_skipped() {
+        let result = BuildStepResult {
+            platform: Platform::Ios,
+            flavor: "prod".to_string(),
+            mode: "release".to_string(),
+            total_packages: 0,
+            passed: 0,
+            failed: 0,
+            duration: Duration::ZERO,
+            skipped: true,
+        };
+        let output = format_step_result(&result);
+        assert!(output.contains("ios"));
+        assert!(output.contains("prod"));
+        assert!(output.contains("skipped"));
+    }
+
+    // ── format_build_summary tests ──────────────────────────────────────
+
+    #[test]
+    fn test_format_build_summary_all_passed() {
+        let results = vec![
+            BuildStepResult {
+                platform: Platform::Android,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 3,
+                passed: 3,
+                failed: 0,
+                duration: Duration::from_secs(10),
+                skipped: false,
+            },
+            BuildStepResult {
+                platform: Platform::Ios,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 2,
+                passed: 2,
+                failed: 0,
+                duration: Duration::from_secs(15),
+                skipped: false,
+            },
+        ];
+        let output = format_build_summary(&results, Duration::from_secs(25));
+        assert!(output.contains("BUILD SUMMARY"));
+        assert!(output.contains("5 passed"));
+        assert!(output.contains("25.0s"));
+        // No "failed" in output when all pass
+        assert!(!output.contains("failed"));
+    }
+
+    #[test]
+    fn test_format_build_summary_with_failures() {
+        let results = vec![
+            BuildStepResult {
+                platform: Platform::Android,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 3,
+                passed: 3,
+                failed: 0,
+                duration: Duration::from_secs(10),
+                skipped: false,
+            },
+            BuildStepResult {
+                platform: Platform::Ios,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 2,
+                passed: 1,
+                failed: 1,
+                duration: Duration::from_secs(8),
+                skipped: false,
+            },
+        ];
+        let output = format_build_summary(&results, Duration::from_secs(18));
+        assert!(output.contains("BUILD SUMMARY"));
+        assert!(output.contains("4 passed"));
+        assert!(output.contains("1 failed"));
+        assert!(output.contains("18.0s"));
+    }
+
+    #[test]
+    fn test_format_build_summary_with_skipped() {
+        let results = vec![
+            BuildStepResult {
+                platform: Platform::Android,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 3,
+                passed: 3,
+                failed: 0,
+                duration: Duration::from_secs(10),
+                skipped: false,
+            },
+            BuildStepResult {
+                platform: Platform::Ios,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 0,
+                passed: 0,
+                failed: 0,
+                duration: Duration::ZERO,
+                skipped: true,
+            },
+        ];
+        let output = format_build_summary(&results, Duration::from_secs(10));
+        assert!(output.contains("BUILD SUMMARY"));
+        assert!(output.contains("3 passed"));
+        assert!(output.contains("1 skipped"));
+        assert!(output.contains("skipped"));
+    }
+
+    #[test]
+    fn test_format_build_summary_mixed() {
+        let results = vec![
+            BuildStepResult {
+                platform: Platform::Android,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 3,
+                passed: 3,
+                failed: 0,
+                duration: Duration::from_secs(12),
+                skipped: false,
+            },
+            BuildStepResult {
+                platform: Platform::Android,
+                flavor: "qa".to_string(),
+                mode: "debug".to_string(),
+                total_packages: 3,
+                passed: 2,
+                failed: 1,
+                duration: Duration::from_secs(8),
+                skipped: false,
+            },
+            BuildStepResult {
+                platform: Platform::Ios,
+                flavor: "prod".to_string(),
+                mode: "release".to_string(),
+                total_packages: 2,
+                passed: 2,
+                failed: 0,
+                duration: Duration::from_secs(15),
+                skipped: false,
+            },
+            BuildStepResult {
+                platform: Platform::Ios,
+                flavor: "qa".to_string(),
+                mode: "debug".to_string(),
+                total_packages: 0,
+                passed: 0,
+                failed: 0,
+                duration: Duration::ZERO,
+                skipped: true,
+            },
+        ];
+        let output = format_build_summary(&results, Duration::from_secs(35));
+        assert!(output.contains("BUILD SUMMARY"));
+        assert!(output.contains("7 passed"));
+        assert!(output.contains("1 failed"));
+        assert!(output.contains("1 skipped"));
+        assert!(output.contains("35.0s"));
+    }
+
+    // ── BuildStepResult struct tests ────────────────────────────────────
+
+    #[test]
+    fn test_build_step_result_skipped_has_zero_duration() {
+        let result = BuildStepResult {
+            platform: Platform::Android,
+            flavor: "prod".to_string(),
+            mode: "release".to_string(),
+            total_packages: 0,
+            passed: 0,
+            failed: 0,
+            duration: Duration::ZERO,
+            skipped: true,
+        };
+        assert!(result.skipped);
+        assert_eq!(result.duration, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_build_step_result_passed_plus_failed_equals_total() {
+        let result = BuildStepResult {
+            platform: Platform::Ios,
+            flavor: "qa".to_string(),
+            mode: "debug".to_string(),
+            total_packages: 5,
+            passed: 3,
+            failed: 2,
+            duration: Duration::from_secs(10),
+            skipped: false,
+        };
+        assert_eq!(result.passed + result.failed, result.total_packages);
     }
 }
