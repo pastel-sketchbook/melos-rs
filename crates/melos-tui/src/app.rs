@@ -483,6 +483,14 @@ pub struct App {
     pub command_opts: Option<CommandOpts>,
     /// Currently selected option row index in the overlay.
     pub selected_option: usize,
+
+    // --- Filter bar state (Batch 54) ---
+    /// Whether the filter input bar is currently active (user is typing).
+    pub filter_active: bool,
+    /// Current filter text (may be non-empty even when input is inactive = applied filter).
+    pub filter_text: String,
+    /// Indices into `package_rows` matching the filter. Empty when no filter applied.
+    pub filtered_indices: Vec<usize>,
 }
 
 impl App {
@@ -529,6 +537,9 @@ impl App {
             show_options: false,
             command_opts: None,
             selected_option: 0,
+            filter_active: false,
+            filter_text: String::new(),
+            filtered_indices: Vec::new(),
         }
     }
 
@@ -598,6 +609,11 @@ impl App {
         self.quit
     }
 
+    /// Update page size from terminal height (called on resize).
+    pub fn update_page_size(&mut self, term_height: u16) {
+        self.page_size = term_height.saturating_sub(5) as usize;
+    }
+
     /// Handle a key press event.
     pub fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         // When help overlay is visible, only ? and Esc dismiss it.
@@ -612,6 +628,12 @@ impl App {
         // When options overlay is visible, handle option navigation and toggling.
         if self.show_options {
             self.handle_options_key(code);
+            return;
+        }
+
+        // When filter input bar is active, intercept all keys for text editing.
+        if self.filter_active {
+            self.handle_filter_key(code);
             return;
         }
 
@@ -750,16 +772,24 @@ impl App {
             // Help overlay
             (KeyCode::Char('?'), _) => self.show_help = true,
 
+            // Filter bar activation
+            (KeyCode::Char('/'), false) => self.activate_filter(),
+
             _ => {}
         }
     }
 
-    /// Handle the Escape key in Idle state (quit).
+    /// Handle the Escape key in Idle state.
     ///
+    /// If a filter is applied, clears the filter. Otherwise quits.
     /// Running and Done states are handled by the early-return blocks in
     /// `handle_key()` before this is ever reached.
     fn handle_esc(&mut self) {
-        self.quit = true;
+        if self.has_filter() {
+            self.cancel_filter();
+        } else {
+            self.quit = true;
+        }
     }
 
     /// Scroll output log down by `n` lines, clamping to the end.
@@ -995,6 +1025,104 @@ impl App {
         self.health_report = Some(report);
     }
 
+    // --- Filter bar methods (Batch 54) ---
+
+    /// Activate the filter input bar.
+    fn activate_filter(&mut self) {
+        self.filter_active = true;
+    }
+
+    /// Apply the current filter text and close the input bar.
+    ///
+    /// If the filter text is empty, clears any active filter. Otherwise,
+    /// performs a case-insensitive substring match on package names.
+    fn apply_filter(&mut self) {
+        self.filter_active = false;
+        if self.filter_text.is_empty() {
+            self.filtered_indices.clear();
+        } else {
+            let query = self.filter_text.to_lowercase();
+            self.filtered_indices = self
+                .package_rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.name.to_lowercase().contains(&query))
+                .map(|(i, _)| i)
+                .collect();
+        }
+        self.selected_package = 0;
+    }
+
+    /// Cancel filter input and clear any active filter.
+    fn cancel_filter(&mut self) {
+        self.filter_active = false;
+        self.filter_text.clear();
+        self.filtered_indices.clear();
+        self.selected_package = 0;
+    }
+
+    /// Recompute filtered indices from the current filter text.
+    ///
+    /// Called on each keystroke during filter input for live preview.
+    fn recompute_filter(&mut self) {
+        if self.filter_text.is_empty() {
+            self.filtered_indices.clear();
+        } else {
+            let query = self.filter_text.to_lowercase();
+            self.filtered_indices = self
+                .package_rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.name.to_lowercase().contains(&query))
+                .map(|(i, _)| i)
+                .collect();
+        }
+        self.selected_package = 0;
+    }
+
+    /// Handle key presses while the filter input bar is active.
+    fn handle_filter_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Enter => self.apply_filter(),
+            KeyCode::Esc => self.cancel_filter(),
+            KeyCode::Backspace => {
+                self.filter_text.pop();
+                self.recompute_filter();
+            }
+            KeyCode::Char(c) => {
+                self.filter_text.push(c);
+                self.recompute_filter();
+            }
+            _ => {}
+        }
+    }
+
+    /// Returns true if a package filter is currently applied (non-empty filter text with results).
+    pub fn has_filter(&self) -> bool {
+        !self.filter_text.is_empty()
+    }
+
+    /// Returns the number of visible packages (filtered if active, otherwise total).
+    pub fn visible_package_count(&self) -> usize {
+        if self.has_filter() {
+            self.filtered_indices.len()
+        } else {
+            self.package_rows.len()
+        }
+    }
+
+    /// Returns the visible package rows (filtered if active, otherwise all).
+    pub fn visible_packages(&self) -> Vec<&PackageRow> {
+        if self.has_filter() {
+            self.filtered_indices
+                .iter()
+                .filter_map(|&i| self.package_rows.get(i))
+                .collect()
+        } else {
+            self.package_rows.iter().collect()
+        }
+    }
+
     /// Toggle between Packages and Commands panels.
     fn toggle_panel(&mut self) {
         self.active_panel = match self.active_panel {
@@ -1016,7 +1144,7 @@ impl App {
     /// Get (selected_index, list_len) for the active panel.
     fn active_selection(&self) -> (usize, usize) {
         match self.active_panel {
-            ActivePanel::Packages => (self.selected_package, self.package_rows.len()),
+            ActivePanel::Packages => (self.selected_package, self.visible_package_count()),
             ActivePanel::Commands => (self.selected_command, self.command_rows.len()),
         }
     }
@@ -2822,5 +2950,300 @@ mod tests {
         app.start_command("health");
         app.on_command_cancelled();
         assert!(app.running_command.is_none());
+    }
+
+    // --- Filter bar tests (Batch 54) ---
+
+    /// Helper: create an App with named package rows for filter testing.
+    fn app_with_named_packages(names: &[&str]) -> App {
+        let mut app = App::new();
+        app.workspace_name = Some("test".to_string());
+        for name in names {
+            app.package_rows.push(PackageRow {
+                name: name.to_string(),
+                version: "1.0.0".to_string(),
+                sdk: "Dart",
+                path: format!("packages/{name}"),
+                is_private: false,
+            });
+        }
+        app
+    }
+
+    #[test]
+    fn test_slash_activates_filter() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        assert!(!app.filter_active);
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.filter_active);
+    }
+
+    #[test]
+    fn test_filter_typing_appends_chars() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.filter_text, "al");
+    }
+
+    #[test]
+    fn test_filter_backspace_removes_last_char() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.filter_text, "a");
+    }
+
+    #[test]
+    fn test_filter_backspace_on_empty_is_noop() {
+        let mut app = app_with_named_packages(&["alpha", "beta"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.filter_text.is_empty());
+        assert!(app.filter_active);
+    }
+
+    #[test]
+    fn test_filter_enter_applies_and_closes() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.filter_active);
+        assert!(app.has_filter());
+        assert_eq!(app.filter_text, "l");
+        // Only "alpha" contains 'l'.
+        assert_eq!(app.visible_package_count(), 1);
+    }
+
+    #[test]
+    fn test_filter_esc_cancels_and_clears() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.filter_active);
+        assert!(!app.has_filter());
+        assert!(app.filter_text.is_empty());
+        assert!(app.filtered_indices.is_empty());
+    }
+
+    #[test]
+    fn test_filter_live_preview_recomputes_on_keystroke() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        // 'l' matches only "alpha"
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.filtered_indices.len(), 1);
+        assert_eq!(app.filtered_indices[0], 0); // index of "alpha"
+        // Backspace to clear, then 'e' matches "beta" only
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Char('e'));
+        assert_eq!(app.filtered_indices.len(), 1);
+        assert_eq!(app.filtered_indices[0], 1); // index of "beta"
+    }
+
+    #[test]
+    fn test_filter_case_insensitive() {
+        let mut app = app_with_named_packages(&["Alpha", "BETA", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.visible_package_count(), 1);
+        let visible = app.visible_packages();
+        assert_eq!(visible[0].name, "BETA");
+    }
+
+    #[test]
+    fn test_has_filter_returns_false_when_empty() {
+        let app = App::new();
+        assert!(!app.has_filter());
+    }
+
+    #[test]
+    fn test_has_filter_returns_true_with_text() {
+        let mut app = app_with_named_packages(&["alpha"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.has_filter());
+    }
+
+    #[test]
+    fn test_visible_package_count_without_filter() {
+        let app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        assert_eq!(app.visible_package_count(), 3);
+    }
+
+    #[test]
+    fn test_visible_package_count_with_filter() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Enter);
+        // Only "alpha" contains 'l'
+        assert_eq!(app.visible_package_count(), 1);
+    }
+
+    #[test]
+    fn test_visible_packages_without_filter() {
+        let app = app_with_named_packages(&["alpha", "beta"]);
+        let visible = app.visible_packages();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].name, "alpha");
+        assert_eq!(visible[1].name, "beta");
+    }
+
+    #[test]
+    fn test_visible_packages_with_filter() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Enter);
+        let visible = app.visible_packages();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].name, "beta");
+    }
+
+    #[test]
+    fn test_filter_resets_selected_package_on_apply() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        app.selected_package = 2;
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.selected_package, 0);
+    }
+
+    #[test]
+    fn test_filter_resets_selected_package_on_cancel() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        app.selected_package = 2;
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.selected_package, 0);
+    }
+
+    #[test]
+    fn test_filter_empty_result() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('z'));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.has_filter());
+        assert_eq!(app.visible_package_count(), 0);
+        assert!(app.visible_packages().is_empty());
+    }
+
+    #[test]
+    fn test_esc_in_idle_clears_filter_instead_of_quit() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma"]);
+        // Apply a filter first.
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.has_filter());
+        // Esc should clear filter, not quit.
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.has_filter());
+        assert!(!app.quit);
+        // Second Esc should now quit.
+        press(&mut app, KeyCode::Esc);
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn test_filter_input_blocks_other_keys() {
+        let mut app = app_with_named_packages(&["alpha", "beta"]);
+        app.active_panel = ActivePanel::Packages;
+        press(&mut app, KeyCode::Char('/'));
+        // 'j' should go into filter text, not move selection.
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.filter_text, "j");
+        assert_eq!(app.selected_package, 0); // Unchanged (recompute resets to 0).
+    }
+
+    #[test]
+    fn test_filter_navigation_uses_visible_count() {
+        let mut app = app_with_named_packages(&["alpha", "beta", "gamma", "delta"]);
+        app.active_panel = ActivePanel::Packages;
+        // Apply filter matching 2 packages: "alpha" and "delta" (contain 'l').
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('l'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.visible_package_count(), 2);
+        // Navigate down: should wrap at 2 (visible count), not 4 (total).
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.selected_package, 1);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.selected_package, 0); // Wrapped.
+    }
+
+    #[test]
+    fn test_filter_enter_with_empty_text_clears_filter() {
+        let mut app = app_with_named_packages(&["alpha", "beta"]);
+        // First apply a real filter.
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.has_filter());
+        // Now open filter again, clear text, and press Enter.
+        press(&mut app, KeyCode::Char('/'));
+        // Backspace to clear the existing text.
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.filter_text.is_empty());
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.has_filter());
+        assert_eq!(app.visible_package_count(), 2);
+    }
+
+    #[test]
+    fn test_update_page_size() {
+        let mut app = App::new();
+        app.update_page_size(40);
+        assert_eq!(app.page_size, 35); // 40 - 5
+    }
+
+    #[test]
+    fn test_update_page_size_small_terminal() {
+        let mut app = App::new();
+        app.update_page_size(3);
+        assert_eq!(app.page_size, 0); // saturating_sub(5) from 3
+    }
+
+    #[test]
+    fn test_slash_only_activates_in_idle() {
+        let mut app = app_with_named_packages(&["alpha"]);
+        app.state = AppState::Running;
+        press(&mut app, KeyCode::Char('/'));
+        assert!(!app.filter_active);
+    }
+
+    #[test]
+    fn test_filter_preserves_text_after_apply() {
+        let mut app = app_with_named_packages(&["alpha", "beta"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        // Filter text should persist after apply (user can see what's filtered).
+        assert_eq!(app.filter_text, "a");
+        assert!(!app.filter_active);
+    }
+
+    #[test]
+    fn test_reactivate_filter_keeps_existing_text() {
+        let mut app = app_with_named_packages(&["alpha", "beta"]);
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.filter_text, "a");
+        // Reactivate filter -- text should still be 'a'.
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.filter_active);
+        assert_eq!(app.filter_text, "a");
     }
 }

@@ -59,8 +59,8 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Commands::Tui = cli.command {
-        return launch_tui();
+    if let Commands::Tui(ref args) = cli.command {
+        return launch_tui(args.workspace.as_deref());
     }
 
     // Find and load workspace
@@ -138,7 +138,7 @@ async fn main() -> Result<()> {
             Commands::Format(args) => commands::format::run(&workspace, args).await,
             Commands::Health(args) => commands::health::run(&workspace, args).await,
             Commands::Init(_) => unreachable!("init handled above"),
-            Commands::Tui => unreachable!("tui handled above"),
+            Commands::Tui(_) => unreachable!("tui handled above"),
             Commands::List(args) => commands::list::run(&workspace, args).await,
             Commands::Pub(args) => commands::pub_cmds::run(&workspace, args).await,
             Commands::Publish(args) => commands::publish::run(&workspace, args).await,
@@ -179,7 +179,7 @@ fn get_overridable_command_name(command: &Commands) -> Option<&'static str> {
         Commands::Version(_) => "version",
         Commands::Test(_) => "test",
         // `run`, `init`, `completion`, `tui` are never overridden
-        Commands::Run(_) | Commands::Init(_) | Commands::Completion(_) | Commands::Tui => {
+        Commands::Run(_) | Commands::Init(_) | Commands::Completion(_) | Commands::Tui(_) => {
             return None;
         }
     };
@@ -235,11 +235,15 @@ fn command_has_builtin_flags(command: &Commands) -> bool {
 /// Launch the `melos-tui` binary by exec-ing into it.
 ///
 /// Looks for the binary on PATH. If not found, prints a helpful install message.
-fn launch_tui() -> Result<()> {
+fn launch_tui(workspace: Option<&str>) -> Result<()> {
     use std::process::Command;
 
     let binary = "melos-tui";
-    let status = Command::new(binary).status();
+    let mut cmd = Command::new(binary);
+    if let Some(ws) = workspace {
+        cmd.args(["--workspace", ws]);
+    }
+    let status = cmd.status();
 
     match status {
         Ok(s) if s.success() => Ok(()),

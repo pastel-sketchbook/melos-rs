@@ -1,8 +1,8 @@
 use ratatui::{
     layout::Constraint,
     style::{Color, Modifier, Style},
-    text::Span,
-    widgets::{Block, Borders, Cell, Row, Table, TableState},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
     Frame,
 };
 
@@ -12,20 +12,98 @@ use crate::app::App;
 ///
 /// Uses `TableState` to track selection highlighting and scroll offset.
 /// When `focused` is true, the border is highlighted in cyan.
+/// Respects the active package filter: only matching packages are shown.
 pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, focused: bool) {
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    // No workspace loaded: show actionable error message.
+    if app.workspace_name.is_none() {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Packages ")
+            .border_style(Style::default().fg(Color::Red));
+        let message = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No workspace found",
+                Style::default().fg(Color::Red).bold(),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Run `melos-rs init` to create a workspace,",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  or run from a directory with melos.yaml.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .block(block);
+        frame.render_widget(message, area);
+        return;
+    }
+
+    let visible = app.visible_packages();
+
+    // No packages match the current filter.
+    if visible.is_empty() && app.has_filter() {
+        let title = format!(" Packages (0/{}) ", app.package_count());
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style);
+        let message = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  No packages match \"{}\"", app.filter_text),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Press Esc to clear filter",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .block(block);
+        frame.render_widget(message, area);
+        return;
+    }
+
+    // No packages at all (workspace loaded but empty).
+    if visible.is_empty() {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Packages (0) ")
+            .border_style(border_style);
+        let message = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  No packages found",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Check `packages` globs in melos.yaml",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .block(block);
+        frame.render_widget(message, area);
+        return;
+    }
+
     let header_cells = ["Name", "Version", "SDK", "Path"]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
     let header = Row::new(header_cells).height(1);
 
-    let max_name_len = app
-        .package_rows
-        .iter()
-        .map(|pkg| pkg.name.len())
-        .max()
-        .unwrap_or(0);
+    let max_name_len = visible.iter().map(|pkg| pkg.name.len()).max().unwrap_or(0);
 
-    let rows = app.package_rows.iter().map(|pkg| {
+    let rows = visible.iter().map(|pkg| {
         let name_display = if pkg.is_private {
             format!("{:<width$}(private)", pkg.name, width = max_name_len + 1)
         } else {
@@ -49,12 +127,14 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         ])
     });
 
-    let title = format!(" Packages ({}) ", app.package_count());
-
-    let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+    let title = if app.has_filter() {
+        format!(
+            " Packages ({}/{}) ",
+            app.visible_package_count(),
+            app.package_count()
+        )
     } else {
-        Style::default().fg(Color::DarkGray)
+        format!(" Packages ({}) ", app.package_count())
     };
 
     let table = Table::new(
@@ -82,7 +162,7 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
     .highlight_symbol(">> ");
 
     let mut table_state = TableState::default();
-    if !app.package_rows.is_empty() {
+    if !visible.is_empty() {
         table_state.select(Some(app.selected_package));
     }
 
@@ -119,6 +199,7 @@ mod tests {
 
     fn make_app_with_rows(rows: Vec<PackageRow>) -> App {
         let mut app = App::new();
+        app.workspace_name = Some("test".to_string());
         app.package_rows = rows;
         app
     }
@@ -236,13 +317,39 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_table_shows_zero_count() {
+    fn test_no_workspace_shows_error_message() {
         let app = App::new();
         let buf = render_packages(&app, 80, 10);
-        let title_line = buffer_line(&buf, 0, 80);
+        let all_text: String = (0..10)
+            .map(|y| buffer_line(&buf, y, 80))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            title_line.contains("Packages (0)"),
-            "Expected 'Packages (0)' in title, got: {title_line}"
+            all_text.contains("No workspace found"),
+            "Expected 'No workspace found' message, got: {all_text}"
+        );
+        assert!(
+            all_text.contains("melos-rs init"),
+            "Expected init suggestion, got: {all_text}"
+        );
+    }
+
+    #[test]
+    fn test_empty_workspace_shows_no_packages() {
+        let mut app = App::new();
+        app.workspace_name = Some("test".to_string());
+        let buf = render_packages(&app, 80, 10);
+        let all_text: String = (0..10)
+            .map(|y| buffer_line(&buf, y, 80))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all_text.contains("No packages found"),
+            "Expected 'No packages found' message, got: {all_text}"
+        );
+        assert!(
+            all_text.contains("Packages (0)"),
+            "Expected 'Packages (0)' in title, got: {all_text}"
         );
     }
 
@@ -269,6 +376,71 @@ mod tests {
         assert!(
             row_line.contains("Flutter"),
             "Expected 'Flutter' in row, got: {row_line}"
+        );
+    }
+
+    #[test]
+    fn test_filtered_title_shows_visible_of_total() {
+        let mut app = make_app_with_rows(vec![
+            PackageRow {
+                name: "alpha".to_string(),
+                version: "1.0.0".to_string(),
+                sdk: "Dart",
+                path: "packages/alpha".to_string(),
+                is_private: false,
+            },
+            PackageRow {
+                name: "beta".to_string(),
+                version: "1.0.0".to_string(),
+                sdk: "Dart",
+                path: "packages/beta".to_string(),
+                is_private: false,
+            },
+            PackageRow {
+                name: "gamma".to_string(),
+                version: "1.0.0".to_string(),
+                sdk: "Dart",
+                path: "packages/gamma".to_string(),
+                is_private: false,
+            },
+        ]);
+        // Simulate an applied filter matching "alpha" and "gamma" (contain 'a').
+        app.filter_text = "a".to_string();
+        app.filtered_indices = vec![0, 2];
+
+        let buf = render_packages(&app, 80, 10);
+        let title_line = buffer_line(&buf, 0, 80);
+        assert!(
+            title_line.contains("Packages (2/3)"),
+            "Expected 'Packages (2/3)' in title, got: {title_line}"
+        );
+    }
+
+    #[test]
+    fn test_empty_filter_result_shows_message() {
+        let mut app = make_app_with_rows(vec![PackageRow {
+            name: "alpha".to_string(),
+            version: "1.0.0".to_string(),
+            sdk: "Dart",
+            path: "packages/alpha".to_string(),
+            is_private: false,
+        }]);
+        // Simulate a filter with no matches.
+        app.filter_text = "xyz".to_string();
+        app.filtered_indices = vec![];
+
+        let buf = render_packages(&app, 80, 10);
+        let all_text: String = (0..10)
+            .map(|y| buffer_line(&buf, y, 80))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all_text.contains("No packages match \"xyz\""),
+            "Expected 'No packages match' message, got: {all_text}"
+        );
+        assert!(
+            all_text.contains("Packages (0/1)"),
+            "Expected 'Packages (0/1)' in title, got: {all_text}"
         );
     }
 }

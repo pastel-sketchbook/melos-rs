@@ -1,7 +1,9 @@
 use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use crossterm::{
     event::{Event, EventStream, KeyEventKind},
     execute,
@@ -24,12 +26,48 @@ mod views;
 use app::App;
 use event::recv_core_event;
 
+/// Interactive terminal UI for melos-rs workspace management.
+#[derive(Parser)]
+#[command(name = "melos-tui", version)]
+struct Cli {
+    /// Path to workspace directory (defaults to current directory).
+    #[arg(long, value_name = "DIR")]
+    workspace: Option<PathBuf>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize file logging before anything else.
     let _guard = logging::init();
 
     info!("melos-tui starting");
+
+    let cli = Cli::parse();
+
+    // Respect NO_COLOR / TERM=dumb: TUI requires a capable terminal.
+    if std::env::var_os("NO_COLOR").is_some() {
+        anyhow::bail!(
+            "NO_COLOR is set. The TUI requires color support.\n\
+             Use `melos-rs` CLI commands directly instead."
+        );
+    }
+    if std::env::var("TERM").ok().as_deref() == Some("dumb") {
+        anyhow::bail!(
+            "TERM=dumb detected. The TUI requires a capable terminal.\n\
+             Use `melos-rs` CLI commands directly instead."
+        );
+    }
+
+    // If --workspace is provided, change to that directory first.
+    if let Some(ref ws_path) = cli.workspace {
+        std::env::set_current_dir(ws_path).with_context(|| {
+            format!(
+                "Failed to change to workspace directory: {}",
+                ws_path.display()
+            )
+        })?;
+        info!(path = %ws_path.display(), "changed to workspace directory");
+    }
 
     // Install panic hook that restores terminal before printing the panic.
     let original_hook = std::panic::take_hook();
@@ -99,7 +137,7 @@ async fn run(
 
     // Set page size from terminal height (body area minus header, footer, table border, header row).
     let term_height = terminal.size()?.height;
-    app.page_size = term_height.saturating_sub(5) as usize;
+    app.update_page_size(term_height);
     debug!(
         height = term_height,
         page_size = app.page_size,
@@ -133,6 +171,10 @@ async fn run(
                             "key press"
                         );
                         app.handle_key(key.code, key.modifiers);
+                    }
+                    Some(Ok(Event::Resize(_w, h))) => {
+                        debug!(height = h, "terminal resized");
+                        app.update_page_size(h);
                     }
                     Some(Err(e)) => {
                         error!("event stream error: {e}");

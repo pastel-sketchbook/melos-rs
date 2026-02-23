@@ -112,10 +112,39 @@ fn draw_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     }
 }
 
-/// Render the footer bar with context-sensitive keybindings.
+/// Render the footer bar with context-sensitive keybindings or filter input.
 fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    // When the filter input bar is active, show the filter prompt instead of keybindings.
+    if app.filter_active {
+        let footer = Line::from(vec![
+            Span::styled(" /", Style::default().fg(Color::Yellow).bold()),
+            Span::raw(&app.filter_text),
+            Span::styled("_", Style::default().fg(Color::DarkGray)),
+        ]);
+        frame.render_widget(Paragraph::new(footer), area);
+        return;
+    }
+
+    // When a filter is applied (but input is closed), show the filter indicator.
+    if app.has_filter() && app.state == AppState::Idle {
+        let footer = Line::from(vec![
+            Span::styled(
+                format!(" filter: {} ", app.filter_text),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                "| /:edit  esc:clear  j/k:navigate  tab:switch  enter:run  ?:help",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(footer), area);
+        return;
+    }
+
     let keys = match app.state {
-        AppState::Idle => "q:quit  j/k:navigate  g/G:jump  f/b:page  tab:switch  enter:run  ?:help",
+        AppState::Idle => {
+            "q:quit  j/k:navigate  g/G:jump  f/b:page  tab:switch  /:filter  enter:run  ?:help"
+        }
         AppState::Running => "esc:cancel",
         AppState::Done if app.health_report.is_some() => {
             "esc/enter/q:back  tab:switch tabs  j/k:scroll  g/G:jump  f/b:page  ctrl+c:quit"
@@ -286,6 +315,51 @@ mod tests {
         assert!(
             all_text.contains("Navigation"),
             "Expected 'Navigation' section in help overlay"
+        );
+    }
+
+    #[test]
+    fn test_footer_shows_filter_hint_in_idle() {
+        let app = App::new();
+        let buf = render_app(&app, 100, 10);
+        let footer_line = buffer_line(&buf, 9, 100);
+        assert!(
+            footer_line.contains("/:filter"),
+            "Expected '/:filter' in Idle footer, got: {footer_line}"
+        );
+    }
+
+    #[test]
+    fn test_footer_shows_filter_input_bar_when_active() {
+        let mut app = App::new();
+        app.filter_active = true;
+        app.filter_text = "abc".to_string();
+        let buf = render_app(&app, 100, 10);
+        let footer_line = buffer_line(&buf, 9, 100);
+        assert!(
+            footer_line.contains("/abc"),
+            "Expected '/abc' filter prompt, got: {footer_line}"
+        );
+    }
+
+    #[test]
+    fn test_footer_shows_filter_indicator_when_applied() {
+        let mut app = App::new();
+        app.filter_text = "test".to_string();
+        app.filtered_indices = vec![0]; // Simulate non-empty filter result.
+        let buf = render_app(&app, 100, 10);
+        let footer_line = buffer_line(&buf, 9, 100);
+        assert!(
+            footer_line.contains("filter: test"),
+            "Expected 'filter: test' indicator, got: {footer_line}"
+        );
+        assert!(
+            footer_line.contains("/:edit"),
+            "Expected '/:edit' hint, got: {footer_line}"
+        );
+        assert!(
+            footer_line.contains("esc:clear"),
+            "Expected 'esc:clear' hint, got: {footer_line}"
         );
     }
 }

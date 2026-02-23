@@ -196,7 +196,15 @@ pub enum Commands {
     Version(VersionArgs),
 
     /// Launch the interactive terminal UI (requires melos-tui binary)
-    Tui,
+    Tui(TuiArgs),
+}
+
+/// Arguments for the `tui` command
+#[derive(Args, Debug)]
+pub struct TuiArgs {
+    /// Path to workspace directory (defaults to current directory)
+    #[arg(long)]
+    pub workspace: Option<String>,
 }
 
 /// Arguments for the `bootstrap` command

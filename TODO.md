@@ -1028,24 +1028,24 @@ Display command results and workspace health information.
 
 Final polish batch for a production-ready TUI experience.
 
-- [ ] Implement filter bar:
+- [x] Implement filter bar:
   - `/` key activates text input mode in footer area
   - Type to filter packages by name (fuzzy or glob)
   - `Enter` applies filter, `Esc` cancels
   - Filter persists until cleared (show active filter indicator)
-- [ ] Handle terminal resize events:
+- [x] Handle terminal resize events:
   - Recompute layout on `crossterm::event::Event::Resize`
   - Clamp scroll positions to new panel dimensions
-- [ ] Handle workspace not found gracefully:
+- [x] Handle workspace not found gracefully:
   - Show actionable error message with suggestion to run `melos-rs init`
   - Allow quit from error state
-- [ ] Handle no packages found:
+- [x] Handle no packages found:
   - Show "No packages found" in package list with config hint
-- [ ] Add `--workspace` / `--config` CLI arg to `melos-tui` for explicit workspace path
-- [ ] Respect `NO_COLOR` / `TERM=dumb` environment variables (disable TUI, fall back to error)
-- [ ] Update root `Cargo.toml` version for TUI release
-- [ ] Verify `melos-tui` against test workspace: load, navigate, run format, view results, health
-- [ ] Verify `task check:all` passes with all three crates
+- [x] Add `--workspace` / `--config` CLI arg to `melos-tui` for explicit workspace path
+- [x] Respect `NO_COLOR` / `TERM=dumb` environment variables (disable TUI, fall back to error)
+- [x] Update root `Cargo.toml` version for TUI release
+- [x] Verify `melos-tui` against test workspace: load, navigate, run format, view results, health
+- [x] Verify `task check:all` passes with all three crates
 
 ---
 

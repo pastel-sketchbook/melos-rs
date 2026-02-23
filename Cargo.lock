@@ -1032,6 +1032,7 @@ name = "melos-tui"
 version = "0.6.4"
 dependencies = [
  "anyhow",
+ "clap",
  "crossterm",
  "futures",
  "melos-core",
