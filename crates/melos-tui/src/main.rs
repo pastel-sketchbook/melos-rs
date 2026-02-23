@@ -210,10 +210,12 @@ async fn run(
                 info!(command = cmd_name, "dispatching command");
                 let ws = Arc::clone(ws);
                 let name = cmd_name.clone();
+                let opts = app.command_opts.take();
                 let (tx, rx) = mpsc::unbounded_channel();
 
-                let handle =
-                    tokio::spawn(async move { dispatch::dispatch_command(&name, &ws, tx).await });
+                let handle = tokio::spawn(
+                    async move { dispatch::dispatch_command(&name, &ws, tx, opts).await },
+                );
 
                 core_rx = Some(rx);
                 task_handle = Some(handle);

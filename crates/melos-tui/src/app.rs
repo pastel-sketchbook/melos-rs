@@ -65,6 +65,9 @@ pub struct CommandRow {
     pub description: Option<String>,
     /// Whether this is a built-in command (vs. a user script).
     pub is_builtin: bool,
+    /// Whether this command is supported for TUI execution.
+    /// Unsupported commands (exec, run, build, version, list) require CLI args.
+    pub is_supported: bool,
 }
 
 /// Built-in commands available in the command picker.
@@ -82,6 +85,287 @@ const BUILTIN_COMMANDS: &[&str] = &[
     "test",
     "version",
 ];
+
+/// Commands that can be dispatched from the TUI (no CLI args required).
+const SUPPORTED_COMMANDS: &[&str] = &[
+    "analyze",
+    "bootstrap",
+    "clean",
+    "format",
+    "health",
+    "publish",
+    "test",
+];
+
+/// Per-command configuration options shown in the options overlay.
+#[derive(Debug, Clone)]
+pub enum CommandOpts {
+    Analyze {
+        concurrency: usize,
+        fatal_warnings: bool,
+        fatal_infos: bool,
+        no_fatal: bool,
+    },
+    Bootstrap {
+        concurrency: usize,
+        enforce_lockfile: bool,
+        offline: bool,
+        no_example: bool,
+    },
+    Clean {
+        concurrency: usize,
+    },
+    Format {
+        concurrency: usize,
+        set_exit_if_changed: bool,
+        line_length: Option<u32>,
+    },
+    Test {
+        concurrency: usize,
+        fail_fast: bool,
+        coverage: bool,
+        update_goldens: bool,
+        no_run: bool,
+    },
+    Publish {
+        concurrency: usize,
+        dry_run: bool,
+    },
+    Health {
+        version_drift: bool,
+        missing_fields: bool,
+        sdk_consistency: bool,
+    },
+}
+
+impl CommandOpts {
+    /// Build default options for the given command name.
+    ///
+    /// Returns `None` for unsupported commands.
+    pub fn build_default(name: &str) -> Option<Self> {
+        match name {
+            "analyze" => Some(Self::Analyze {
+                concurrency: 1,
+                fatal_warnings: false,
+                fatal_infos: false,
+                no_fatal: false,
+            }),
+            "bootstrap" => Some(Self::Bootstrap {
+                concurrency: 1,
+                enforce_lockfile: false,
+                offline: false,
+                no_example: false,
+            }),
+            "clean" => Some(Self::Clean { concurrency: 1 }),
+            "format" => Some(Self::Format {
+                concurrency: 1,
+                set_exit_if_changed: false,
+                line_length: None,
+            }),
+            "test" => Some(Self::Test {
+                concurrency: 1,
+                fail_fast: false,
+                coverage: false,
+                update_goldens: false,
+                no_run: false,
+            }),
+            "publish" => Some(Self::Publish {
+                concurrency: 1,
+                dry_run: true,
+            }),
+            "health" => Some(Self::Health {
+                version_drift: true,
+                missing_fields: true,
+                sdk_consistency: true,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Return option labels and their current boolean/numeric values for rendering.
+    pub fn option_rows(&self) -> Vec<OptionRow> {
+        match self {
+            Self::Analyze {
+                concurrency,
+                fatal_warnings,
+                fatal_infos,
+                no_fatal,
+            } => vec![
+                OptionRow::Number("concurrency", *concurrency),
+                OptionRow::Bool("fatal-warnings", *fatal_warnings),
+                OptionRow::Bool("fatal-infos", *fatal_infos),
+                OptionRow::Bool("no-fatal", *no_fatal),
+            ],
+            Self::Bootstrap {
+                concurrency,
+                enforce_lockfile,
+                offline,
+                no_example,
+            } => vec![
+                OptionRow::Number("concurrency", *concurrency),
+                OptionRow::Bool("enforce-lockfile", *enforce_lockfile),
+                OptionRow::Bool("offline", *offline),
+                OptionRow::Bool("no-example", *no_example),
+            ],
+            Self::Clean { concurrency } => {
+                vec![OptionRow::Number("concurrency", *concurrency)]
+            }
+            Self::Format {
+                concurrency,
+                set_exit_if_changed,
+                line_length,
+            } => vec![
+                OptionRow::Number("concurrency", *concurrency),
+                OptionRow::Bool("set-exit-if-changed", *set_exit_if_changed),
+                OptionRow::OptNumber("line-length", *line_length),
+            ],
+            Self::Test {
+                concurrency,
+                fail_fast,
+                coverage,
+                update_goldens,
+                no_run,
+            } => vec![
+                OptionRow::Number("concurrency", *concurrency),
+                OptionRow::Bool("fail-fast", *fail_fast),
+                OptionRow::Bool("coverage", *coverage),
+                OptionRow::Bool("update-goldens", *update_goldens),
+                OptionRow::Bool("no-run", *no_run),
+            ],
+            Self::Publish {
+                concurrency,
+                dry_run,
+            } => vec![
+                OptionRow::Number("concurrency", *concurrency),
+                OptionRow::Bool("dry-run", *dry_run),
+            ],
+            Self::Health {
+                version_drift,
+                missing_fields,
+                sdk_consistency,
+            } => vec![
+                OptionRow::Bool("version-drift", *version_drift),
+                OptionRow::Bool("missing-fields", *missing_fields),
+                OptionRow::Bool("sdk-consistency", *sdk_consistency),
+            ],
+        }
+    }
+
+    /// Toggle a boolean option at the given index. No-op if index is out of range
+    /// or points to a non-boolean option.
+    /// Toggle a boolean option at the given visual row index.
+    /// No-op if the index is out of range or points to a non-boolean option.
+    pub fn toggle_bool(&mut self, visual_index: usize) {
+        let rows = self.option_rows();
+        let bool_offset = rows
+            .iter()
+            .take(visual_index)
+            .filter(|r| matches!(r, OptionRow::Bool(..)))
+            .count();
+        if let Some(OptionRow::Bool(..)) = rows.get(visual_index) {
+            let mut fields = self.bool_fields_mut();
+            if let Some(val) = fields.get_mut(bool_offset) {
+                **val = !**val;
+            }
+        }
+    }
+
+    /// Increment a numeric option at the given visual row index.
+    pub fn increment_at(&mut self, visual_index: usize) {
+        let rows = self.option_rows();
+        let num_offset = rows
+            .iter()
+            .take(visual_index)
+            .filter(|r| matches!(r, OptionRow::Number(..)))
+            .count();
+        if let Some(OptionRow::Number(..)) = rows.get(visual_index) {
+            let mut fields = self.number_fields_mut();
+            if let Some(val) = fields.get_mut(num_offset) {
+                **val = val.saturating_add(1);
+            }
+        }
+    }
+
+    /// Decrement a numeric option at the given visual row index (minimum 1).
+    pub fn decrement_at(&mut self, visual_index: usize) {
+        let rows = self.option_rows();
+        let num_offset = rows
+            .iter()
+            .take(visual_index)
+            .filter(|r| matches!(r, OptionRow::Number(..)))
+            .count();
+        if let Some(OptionRow::Number(..)) = rows.get(visual_index) {
+            let mut fields = self.number_fields_mut();
+            if let Some(val) = fields.get_mut(num_offset)
+                && **val > 1
+            {
+                **val -= 1;
+            }
+        }
+    }
+
+    /// Get mutable references to boolean fields, paired with their option_rows index.
+    fn bool_fields_mut(&mut self) -> Vec<&mut bool> {
+        match self {
+            Self::Analyze {
+                fatal_warnings,
+                fatal_infos,
+                no_fatal,
+                ..
+            } => vec![fatal_warnings, fatal_infos, no_fatal],
+            Self::Bootstrap {
+                enforce_lockfile,
+                offline,
+                no_example,
+                ..
+            } => vec![enforce_lockfile, offline, no_example],
+            Self::Clean { .. } => vec![],
+            Self::Format {
+                set_exit_if_changed,
+                ..
+            } => vec![set_exit_if_changed],
+            Self::Test {
+                fail_fast,
+                coverage,
+                update_goldens,
+                no_run,
+                ..
+            } => vec![fail_fast, coverage, update_goldens, no_run],
+            Self::Publish { dry_run, .. } => vec![dry_run],
+            Self::Health {
+                version_drift,
+                missing_fields,
+                sdk_consistency,
+            } => vec![version_drift, missing_fields, sdk_consistency],
+        }
+    }
+
+    /// Get mutable references to numeric fields.
+    fn number_fields_mut(&mut self) -> Vec<&mut usize> {
+        match self {
+            Self::Analyze { concurrency, .. }
+            | Self::Bootstrap { concurrency, .. }
+            | Self::Clean { concurrency }
+            | Self::Format { concurrency, .. }
+            | Self::Test { concurrency, .. }
+            | Self::Publish { concurrency, .. } => vec![concurrency],
+            Self::Health { .. } => vec![],
+        }
+    }
+
+    /// Number of option rows for this command.
+    pub fn option_count(&self) -> usize {
+        self.option_rows().len()
+    }
+}
+
+/// A single option row for display in the options overlay.
+#[derive(Debug, Clone)]
+pub enum OptionRow {
+    Bool(&'static str, bool),
+    Number(&'static str, usize),
+    OptNumber(&'static str, Option<u32>),
+}
 
 /// Strip ANSI escape sequences from a string.
 ///
@@ -175,6 +459,14 @@ pub struct App {
     pub command_error: Option<String>,
     /// Scroll offset into output_log for Done state viewing.
     pub output_scroll: usize,
+
+    // --- Options overlay state (Batch 51.5) ---
+    /// Whether the options overlay is currently visible.
+    pub show_options: bool,
+    /// Per-command options for the overlay (set when overlay opens).
+    pub command_opts: Option<CommandOpts>,
+    /// Currently selected option row index in the overlay.
+    pub selected_option: usize,
 }
 
 impl App {
@@ -187,6 +479,7 @@ impl App {
                 name: (*name).to_string(),
                 description: None,
                 is_builtin: true,
+                is_supported: SUPPORTED_COMMANDS.contains(name),
             })
             .collect();
 
@@ -213,6 +506,9 @@ impl App {
             exec_messages: Vec::new(),
             command_error: None,
             output_scroll: 0,
+            show_options: false,
+            command_opts: None,
+            selected_option: 0,
         }
     }
 
@@ -239,6 +535,7 @@ impl App {
                 name: (*name).to_string(),
                 description: None,
                 is_builtin: true,
+                is_supported: SUPPORTED_COMMANDS.contains(name),
             })
             .collect();
 
@@ -255,6 +552,7 @@ impl App {
                 name: name.clone(),
                 description: entry.description().map(String::from),
                 is_builtin: false,
+                is_supported: false,
             });
         }
 
@@ -288,6 +586,12 @@ impl App {
                 KeyCode::Char('?') | KeyCode::Esc => self.show_help = false,
                 _ => {}
             }
+            return;
+        }
+
+        // When options overlay is visible, handle option navigation and toggling.
+        if self.show_options {
+            self.handle_options_key(code);
             return;
         }
 
@@ -404,14 +708,94 @@ impl App {
 
     /// Request execution of the currently selected command.
     ///
-    /// Sets `pending_command` which the main loop consumes to spawn the task.
+    /// For supported commands, opens the options overlay so the user can
+    /// configure options before running. For unsupported commands, sets
+    /// `pending_command` directly (the main loop will show an error).
     /// Only fires when the Commands panel is active and a valid command is selected.
     fn request_execute(&mut self) {
         if self.state != AppState::Idle || self.active_panel != ActivePanel::Commands {
             return;
         }
         if let Some(cmd) = self.command_rows.get(self.selected_command) {
+            if cmd.is_supported
+                && let Some(opts) = CommandOpts::build_default(&cmd.name)
+            {
+                self.command_opts = Some(opts);
+                self.selected_option = 0;
+                self.show_options = true;
+                return;
+            }
+            // Unsupported: dispatch directly (dispatch.rs will bail with error).
             self.pending_command = Some(cmd.name.clone());
+        }
+    }
+
+    /// Confirm execution from the options overlay.
+    ///
+    /// Transfers `command_opts` into `pending_opts` and sets `pending_command`.
+    fn confirm_options(&mut self) {
+        if let Some(cmd) = self.command_rows.get(self.selected_command) {
+            self.pending_command = Some(cmd.name.clone());
+        }
+        self.show_options = false;
+    }
+
+    /// Dismiss the options overlay without executing.
+    fn dismiss_options(&mut self) {
+        self.show_options = false;
+        self.command_opts = None;
+        self.selected_option = 0;
+    }
+
+    /// Handle key presses while the options overlay is visible.
+    fn handle_options_key(&mut self, code: KeyCode) {
+        let opt_count = self.command_opts.as_ref().map_or(0, |o| o.option_count());
+
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => self.dismiss_options(),
+            KeyCode::Enter => self.confirm_options(),
+
+            // Navigation within option rows (+ the "Run" action row at the end).
+            KeyCode::Char('j') | KeyCode::Down => {
+                // +1 for the "Run" action row.
+                let total = opt_count + 1;
+                self.selected_option = (self.selected_option + 1) % total;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let total = opt_count + 1;
+                self.selected_option = if self.selected_option == 0 {
+                    total - 1
+                } else {
+                    self.selected_option - 1
+                };
+            }
+
+            // Toggle boolean / adjust numbers at the selected row.
+            KeyCode::Char(' ') => {
+                if self.selected_option < opt_count {
+                    if let Some(opts) = &mut self.command_opts {
+                        opts.toggle_bool(self.selected_option);
+                    }
+                } else {
+                    // Space on "Run" row: confirm.
+                    self.confirm_options();
+                }
+            }
+            KeyCode::Char('+') | KeyCode::Right => {
+                if self.selected_option < opt_count
+                    && let Some(opts) = &mut self.command_opts
+                {
+                    opts.increment_at(self.selected_option);
+                }
+            }
+            KeyCode::Char('-') | KeyCode::Left => {
+                if self.selected_option < opt_count
+                    && let Some(opts) = &mut self.command_opts
+                {
+                    opts.decrement_at(self.selected_option);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -556,7 +940,11 @@ impl App {
             let abs = (-delta) as usize;
             if abs > current {
                 // Wrap: single-step up wraps to end; page-up clamps to 0.
-                if abs == 1 { len - 1 } else { 0 }
+                if abs == 1 {
+                    len - 1
+                } else {
+                    0
+                }
             } else {
                 current - abs
             }
@@ -564,7 +952,11 @@ impl App {
             let abs = delta as usize;
             if current + abs >= len {
                 // Wrap: single-step down wraps to start; page-down clamps to end.
-                if abs == 1 { 0 } else { len - 1 }
+                if abs == 1 {
+                    0
+                } else {
+                    len - 1
+                }
             } else {
                 current + abs
             }
@@ -623,6 +1015,7 @@ mod tests {
                 name: format!("cmd_{i}"),
                 description: None,
                 is_builtin: i < 3,
+                is_supported: true,
             })
             .collect();
         app.active_panel = ActivePanel::Commands;
@@ -1095,8 +1488,17 @@ mod tests {
     fn test_enter_on_commands_panel_sets_pending_command() {
         let mut app = App::new();
         app.active_panel = ActivePanel::Commands;
-        app.selected_command = 0; // "analyze"
+        app.selected_command = 0; // "analyze" (supported)
+
+        // First Enter opens the options overlay.
         press(&mut app, KeyCode::Enter);
+        assert!(app.show_options);
+        assert!(app.command_opts.is_some());
+        assert!(app.pending_command.is_none());
+
+        // Second Enter confirms and sets pending_command.
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.show_options);
         assert_eq!(app.pending_command.as_deref(), Some("analyze"));
     }
 
@@ -1132,6 +1534,13 @@ mod tests {
         app.active_panel = ActivePanel::Commands;
         // Select "format" (index 5 in BUILTIN_COMMANDS: analyze,bootstrap,build,clean,exec,format)
         app.selected_command = 5;
+
+        // First Enter opens options overlay for supported command.
+        press(&mut app, KeyCode::Enter);
+        assert!(app.show_options);
+        assert!(app.pending_command.is_none());
+
+        // Second Enter confirms.
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.pending_command.as_deref(), Some("format"));
     }
@@ -1267,11 +1676,10 @@ mod tests {
         app.state = AppState::Running;
         app.on_command_finished(Ok(Err(anyhow::anyhow!("command failed"))));
         assert_eq!(app.state, AppState::Done);
-        assert!(
-            app.command_error
-                .as_ref()
-                .is_some_and(|e| e.contains("command failed"))
-        );
+        assert!(app
+            .command_error
+            .as_ref()
+            .is_some_and(|e| e.contains("command failed")));
     }
 
     // --- on_command_cancelled tests ---
@@ -1316,8 +1724,14 @@ mod tests {
         app.active_panel = ActivePanel::Commands;
         assert_eq!(app.state, AppState::Idle);
 
-        // Press Enter to request command.
+        // Press Enter to open options overlay (analyze is supported).
         press(&mut app, KeyCode::Enter);
+        assert!(app.show_options);
+        assert!(app.pending_command.is_none());
+
+        // Press Enter again to confirm options and request command.
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.show_options);
         assert_eq!(app.pending_command.as_deref(), Some("analyze"));
 
         // Main loop consumes pending_command and calls start_command.
@@ -1505,5 +1919,426 @@ mod tests {
             is_stderr: false,
         });
         assert_eq!(app.output_log[0].1, "SUCCESS");
+    }
+
+    // --- CommandOpts tests ---
+
+    #[test]
+    fn test_build_default_analyze() {
+        let opts = CommandOpts::build_default("analyze").unwrap();
+        assert!(matches!(
+            opts,
+            CommandOpts::Analyze {
+                concurrency: 1,
+                fatal_warnings: false,
+                fatal_infos: false,
+                no_fatal: false,
+            }
+        ));
+        assert_eq!(opts.option_count(), 4);
+    }
+
+    #[test]
+    fn test_build_default_bootstrap() {
+        let opts = CommandOpts::build_default("bootstrap").unwrap();
+        assert!(matches!(
+            opts,
+            CommandOpts::Bootstrap {
+                concurrency: 1,
+                enforce_lockfile: false,
+                offline: false,
+                no_example: false,
+            }
+        ));
+        assert_eq!(opts.option_count(), 4);
+    }
+
+    #[test]
+    fn test_build_default_clean() {
+        let opts = CommandOpts::build_default("clean").unwrap();
+        assert!(matches!(opts, CommandOpts::Clean { concurrency: 1 }));
+        assert_eq!(opts.option_count(), 1);
+    }
+
+    #[test]
+    fn test_build_default_format() {
+        let opts = CommandOpts::build_default("format").unwrap();
+        assert!(matches!(
+            opts,
+            CommandOpts::Format {
+                concurrency: 1,
+                set_exit_if_changed: false,
+                line_length: None,
+            }
+        ));
+        assert_eq!(opts.option_count(), 3);
+    }
+
+    #[test]
+    fn test_build_default_test() {
+        let opts = CommandOpts::build_default("test").unwrap();
+        assert!(matches!(
+            opts,
+            CommandOpts::Test {
+                concurrency: 1,
+                fail_fast: false,
+                coverage: false,
+                update_goldens: false,
+                no_run: false,
+            }
+        ));
+        assert_eq!(opts.option_count(), 5);
+    }
+
+    #[test]
+    fn test_build_default_publish() {
+        let opts = CommandOpts::build_default("publish").unwrap();
+        assert!(matches!(
+            opts,
+            CommandOpts::Publish {
+                concurrency: 1,
+                dry_run: true,
+            }
+        ));
+        assert_eq!(opts.option_count(), 2);
+    }
+
+    #[test]
+    fn test_build_default_health() {
+        let opts = CommandOpts::build_default("health").unwrap();
+        assert!(matches!(
+            opts,
+            CommandOpts::Health {
+                version_drift: true,
+                missing_fields: true,
+                sdk_consistency: true,
+            }
+        ));
+        assert_eq!(opts.option_count(), 3);
+    }
+
+    #[test]
+    fn test_build_default_unsupported_returns_none() {
+        assert!(CommandOpts::build_default("exec").is_none());
+        assert!(CommandOpts::build_default("run").is_none());
+        assert!(CommandOpts::build_default("build").is_none());
+        assert!(CommandOpts::build_default("version").is_none());
+        assert!(CommandOpts::build_default("list").is_none());
+        assert!(CommandOpts::build_default("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_toggle_bool_at_visual_index() {
+        let mut opts = CommandOpts::build_default("analyze").unwrap();
+        // Index 0 is concurrency (Number), index 1 is fatal-warnings (Bool).
+        opts.toggle_bool(1);
+        match &opts {
+            CommandOpts::Analyze {
+                fatal_warnings, ..
+            } => assert!(*fatal_warnings),
+            _ => panic!("wrong variant"),
+        }
+        // Toggle again to verify it flips back.
+        opts.toggle_bool(1);
+        match &opts {
+            CommandOpts::Analyze {
+                fatal_warnings, ..
+            } => assert!(!*fatal_warnings),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_toggle_bool_on_number_is_noop() {
+        let mut opts = CommandOpts::build_default("analyze").unwrap();
+        let before = opts.clone();
+        // Index 0 is concurrency (Number) -- toggle should be no-op.
+        opts.toggle_bool(0);
+        assert_eq!(format!("{opts:?}"), format!("{before:?}"));
+    }
+
+    #[test]
+    fn test_toggle_bool_out_of_range_is_noop() {
+        let mut opts = CommandOpts::build_default("clean").unwrap();
+        let before = opts.clone();
+        opts.toggle_bool(99);
+        assert_eq!(format!("{opts:?}"), format!("{before:?}"));
+    }
+
+    #[test]
+    fn test_toggle_bool_third_field() {
+        // Analyze: index 3 = no_fatal (third bool field)
+        let mut opts = CommandOpts::build_default("analyze").unwrap();
+        opts.toggle_bool(3);
+        match &opts {
+            CommandOpts::Analyze { no_fatal, .. } => assert!(*no_fatal),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_increment_at_visual_index() {
+        let mut opts = CommandOpts::build_default("analyze").unwrap();
+        // Index 0 is concurrency (Number).
+        opts.increment_at(0);
+        match &opts {
+            CommandOpts::Analyze { concurrency, .. } => assert_eq!(*concurrency, 2),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_decrement_at_visual_index() {
+        let mut opts = CommandOpts::build_default("analyze").unwrap();
+        // Increment twice then decrement once: should be 2.
+        opts.increment_at(0);
+        opts.increment_at(0);
+        opts.decrement_at(0);
+        match &opts {
+            CommandOpts::Analyze { concurrency, .. } => assert_eq!(*concurrency, 2),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_decrement_at_minimum_is_one() {
+        let mut opts = CommandOpts::build_default("analyze").unwrap();
+        // Default is 1, decrement should stay at 1.
+        opts.decrement_at(0);
+        match &opts {
+            CommandOpts::Analyze { concurrency, .. } => assert_eq!(*concurrency, 1),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_increment_on_bool_is_noop() {
+        let mut opts = CommandOpts::build_default("analyze").unwrap();
+        let before = opts.clone();
+        // Index 1 is a bool field.
+        opts.increment_at(1);
+        assert_eq!(format!("{opts:?}"), format!("{before:?}"));
+    }
+
+    #[test]
+    fn test_health_all_bools_toggle() {
+        let mut opts = CommandOpts::build_default("health").unwrap();
+        // Health has 3 bool rows at indices 0, 1, 2.
+        opts.toggle_bool(0);
+        opts.toggle_bool(1);
+        opts.toggle_bool(2);
+        match &opts {
+            CommandOpts::Health {
+                version_drift,
+                missing_fields,
+                sdk_consistency,
+            } => {
+                assert!(!*version_drift);
+                assert!(!*missing_fields);
+                assert!(!*sdk_consistency);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_option_rows_labels() {
+        let opts = CommandOpts::build_default("format").unwrap();
+        let rows = opts.option_rows();
+        assert_eq!(rows.len(), 3);
+        match &rows[0] {
+            OptionRow::Number(label, val) => {
+                assert_eq!(*label, "concurrency");
+                assert_eq!(*val, 1);
+            }
+            _ => panic!("expected Number"),
+        }
+        match &rows[1] {
+            OptionRow::Bool(label, val) => {
+                assert_eq!(*label, "set-exit-if-changed");
+                assert!(!val);
+            }
+            _ => panic!("expected Bool"),
+        }
+        match &rows[2] {
+            OptionRow::OptNumber(label, val) => {
+                assert_eq!(*label, "line-length");
+                assert!(val.is_none());
+            }
+            _ => panic!("expected OptNumber"),
+        }
+    }
+
+    // --- Options overlay key handling tests ---
+
+    fn app_with_options(command: &str) -> App {
+        let mut app = App::new();
+        app.active_panel = ActivePanel::Commands;
+        // Find the command index in command_rows.
+        let idx = app
+            .command_rows
+            .iter()
+            .position(|c| c.name == command)
+            .expect("command not found in builtin list");
+        app.selected_command = idx;
+        // Open the options overlay.
+        press(&mut app, KeyCode::Enter);
+        assert!(app.show_options, "options overlay should be visible");
+        app
+    }
+
+    #[test]
+    fn test_options_j_navigates_down() {
+        let mut app = app_with_options("analyze");
+        assert_eq!(app.selected_option, 0);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected_option, 1);
+    }
+
+    #[test]
+    fn test_options_k_wraps_to_bottom() {
+        let mut app = app_with_options("analyze");
+        assert_eq!(app.selected_option, 0);
+        // k at 0 wraps to last (4 opts + 1 Run row = 5 total, last = 4).
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.selected_option, 4);
+    }
+
+    #[test]
+    fn test_options_j_wraps_around() {
+        let mut app = app_with_options("clean");
+        // Clean has 1 option + 1 Run row = 2 total.
+        assert_eq!(app.selected_option, 0);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected_option, 1); // "Run" row
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected_option, 0); // wrapped
+    }
+
+    #[test]
+    fn test_options_space_toggles_bool() {
+        let mut app = app_with_options("analyze");
+        // Move to index 1 (fatal-warnings).
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char(' '));
+        match app.command_opts.as_ref().unwrap() {
+            CommandOpts::Analyze {
+                fatal_warnings, ..
+            } => assert!(*fatal_warnings),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_options_space_on_run_confirms() {
+        let mut app = app_with_options("clean");
+        // Clean: 1 option, Run is at index 1.
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected_option, 1);
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!app.show_options);
+        assert!(app.pending_command.is_some());
+    }
+
+    #[test]
+    fn test_options_plus_increments() {
+        let mut app = app_with_options("analyze");
+        // Index 0 = concurrency.
+        press(&mut app, KeyCode::Char('+'));
+        match app.command_opts.as_ref().unwrap() {
+            CommandOpts::Analyze { concurrency, .. } => assert_eq!(*concurrency, 2),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_options_minus_decrements() {
+        let mut app = app_with_options("analyze");
+        // Increment to 3, then decrement to 2.
+        press(&mut app, KeyCode::Char('+'));
+        press(&mut app, KeyCode::Char('+'));
+        press(&mut app, KeyCode::Char('-'));
+        match app.command_opts.as_ref().unwrap() {
+            CommandOpts::Analyze { concurrency, .. } => assert_eq!(*concurrency, 2),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_options_esc_dismisses() {
+        let mut app = app_with_options("analyze");
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.show_options);
+        assert!(app.command_opts.is_none());
+        assert!(app.pending_command.is_none());
+    }
+
+    #[test]
+    fn test_options_q_dismisses() {
+        let mut app = app_with_options("format");
+        press(&mut app, KeyCode::Char('q'));
+        assert!(!app.show_options);
+        assert!(app.command_opts.is_none());
+        assert!(app.pending_command.is_none());
+    }
+
+    #[test]
+    fn test_options_enter_confirms() {
+        let mut app = app_with_options("test");
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.show_options);
+        assert_eq!(app.pending_command.as_deref(), Some("test"));
+    }
+
+    // --- Unsupported command bypass tests ---
+
+    #[test]
+    fn test_unsupported_command_skips_overlay() {
+        let mut app = App::new();
+        app.active_panel = ActivePanel::Commands;
+        // "exec" is at index 4 (analyze=0, bootstrap=1, build=2, clean=3, exec=4).
+        app.selected_command = 4;
+        press(&mut app, KeyCode::Enter);
+        // Should set pending_command directly without opening overlay.
+        assert!(!app.show_options);
+        assert!(app.command_opts.is_none());
+        assert_eq!(app.pending_command.as_deref(), Some("exec"));
+    }
+
+    #[test]
+    fn test_unsupported_command_build_skips_overlay() {
+        let mut app = App::new();
+        app.active_panel = ActivePanel::Commands;
+        // "build" is at index 2.
+        app.selected_command = 2;
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.show_options);
+        assert_eq!(app.pending_command.as_deref(), Some("build"));
+    }
+
+    // --- is_supported field tests ---
+
+    #[test]
+    fn test_is_supported_set_on_builtin_commands() {
+        let app = App::new();
+        for row in &app.command_rows {
+            let expected = SUPPORTED_COMMANDS.contains(&row.name.as_str());
+            assert_eq!(
+                row.is_supported, expected,
+                "is_supported mismatch for '{}'",
+                row.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_supported_commands_match_build_default() {
+        // Every supported command must return Some from build_default.
+        for &name in SUPPORTED_COMMANDS {
+            assert!(
+                CommandOpts::build_default(name).is_some(),
+                "build_default returned None for supported command '{name}'"
+            );
+        }
     }
 }

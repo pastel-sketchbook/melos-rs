@@ -1,8 +1,8 @@
 use ratatui::{
-    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table, TableState},
+    Frame,
 };
 
 use crate::app::App;
@@ -51,7 +51,9 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
             selected_visual = visual_rows.len();
         }
 
-        let name_style = if cmd.is_builtin {
+        let name_style = if !cmd.is_supported {
+            Style::default().fg(Color::DarkGray)
+        } else if cmd.is_builtin {
             Style::default().fg(Color::White)
         } else {
             Style::default().fg(Color::Cyan)
@@ -99,7 +101,7 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     use super::*;
     use crate::app::CommandRow;
@@ -176,6 +178,7 @@ mod tests {
             name: "custom_script".to_string(),
             description: Some("runs custom logic".to_string()),
             is_builtin: false,
+            is_supported: false,
         });
 
         let buf = render_commands(&app, 80, 22);
@@ -205,6 +208,7 @@ mod tests {
             name: "my_script".to_string(),
             description: None,
             is_builtin: false,
+            is_supported: false,
         }];
 
         let buf = render_commands(&app, 80, 10);

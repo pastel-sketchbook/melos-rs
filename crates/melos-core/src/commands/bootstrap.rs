@@ -2,10 +2,92 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::BootstrapCommandConfig;
+use crate::events::Event;
 use crate::package::Package;
+use crate::runner::ProcessRunner;
 use crate::workspace::Workspace;
+
+use super::PackageResults;
+
+/// Options for the bootstrap command (clap-free).
+#[derive(Debug, Clone)]
+pub struct BootstrapOpts {
+    pub concurrency: usize,
+    pub enforce_lockfile: bool,
+    pub no_example: bool,
+    pub offline: bool,
+}
+
+/// Run `pub get` across packages, splitting by SDK type (Flutter vs Dart).
+///
+/// Returns combined [`PackageResults`] from both Flutter and Dart runs.
+pub async fn run(
+    packages: &[Package],
+    workspace: &Workspace,
+    opts: &BootstrapOpts,
+    events: Option<&UnboundedSender<Event>>,
+) -> Result<PackageResults> {
+    let flutter_pkgs: Vec<_> = packages.iter().filter(|p| p.is_flutter).cloned().collect();
+    let dart_pkgs: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
+
+    let runner = ProcessRunner::new(opts.concurrency, false);
+    let mut all_results = Vec::new();
+
+    if !flutter_pkgs.is_empty() {
+        let cmd = build_pub_get_command(
+            "flutter",
+            opts.enforce_lockfile,
+            opts.no_example,
+            opts.offline,
+        );
+        if let Some(tx) = events {
+            let _ = tx.send(Event::Progress {
+                completed: 0,
+                total: flutter_pkgs.len(),
+                message: "flutter pub get...".into(),
+            });
+        }
+        let results = runner
+            .run_in_packages_with_events(
+                &flutter_pkgs,
+                &cmd,
+                &workspace.env_vars(),
+                None,
+                events,
+                &workspace.packages,
+            )
+            .await?;
+        all_results.extend(results);
+    }
+
+    if !dart_pkgs.is_empty() {
+        let cmd =
+            build_pub_get_command("dart", opts.enforce_lockfile, opts.no_example, opts.offline);
+        if let Some(tx) = events {
+            let _ = tx.send(Event::Progress {
+                completed: 0,
+                total: dart_pkgs.len(),
+                message: "dart pub get...".into(),
+            });
+        }
+        let results = runner
+            .run_in_packages_with_events(
+                &dart_pkgs,
+                &cmd,
+                &workspace.env_vars(),
+                None,
+                events,
+                &workspace.packages,
+            )
+            .await?;
+        all_results.extend(results);
+    }
+
+    Ok(PackageResults::from(all_results))
+}
 
 /// Extract the bootstrap command config from the workspace, if present.
 pub fn bootstrap_config(workspace: &Workspace) -> Option<&BootstrapCommandConfig> {
@@ -1166,5 +1248,33 @@ mod tests {
         );
         let content = std::fs::read_to_string(legacy_dir.join("pubspec_overrides.yaml")).unwrap();
         assert!(content.contains("core:"));
+    }
+
+    #[test]
+    fn test_bootstrap_opts_struct_construction() {
+        let opts = BootstrapOpts {
+            concurrency: 4,
+            enforce_lockfile: true,
+            no_example: false,
+            offline: true,
+        };
+        assert_eq!(opts.concurrency, 4);
+        assert!(opts.enforce_lockfile);
+        assert!(!opts.no_example);
+        assert!(opts.offline);
+    }
+
+    #[test]
+    fn test_bootstrap_opts_defaults_sensible() {
+        let opts = BootstrapOpts {
+            concurrency: 1,
+            enforce_lockfile: false,
+            no_example: false,
+            offline: false,
+        };
+        assert_eq!(opts.concurrency, 1);
+        assert!(!opts.enforce_lockfile);
+        assert!(!opts.no_example);
+        assert!(!opts.offline);
     }
 }

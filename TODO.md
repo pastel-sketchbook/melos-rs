@@ -895,6 +895,90 @@ Execute the selected command and consume core events in the TUI event loop.
 - [x] Wire `Esc` in `Running` state to cancel (abort task handle, transition to Idle)
 - [x] Tests: state transitions (Idle -> Running -> Done), event handling updates state
 
+#### Batch 51.5 -- Command options overlay + full subcommand wiring
+
+Wire remaining subcommands into the TUI dispatch and add a pre-execution
+options overlay so users can configure flags (dry-run, concurrency, etc.)
+before running. Unimplemented commands appear in muted/dimmed text.
+
+**Core library additions (melos-core):**
+
+- [x] Add `BootstrapOpts` struct + async `bootstrap::run()` in `commands/bootstrap.rs`
+  - Fields: `concurrency`, `enforce_lockfile`, `no_example`, `offline`
+  - Splits packages into flutter/dart, builds pub get command via `build_pub_get_command()`
+  - Runs via `ProcessRunner` with events, returns `PackageResults`
+- [x] Add `CleanOpts` struct + async `clean::run()` in `commands/clean.rs`
+  - Fields: `concurrency`
+  - Flutter packages: `flutter clean` via `ProcessRunner` with events
+  - Dart packages: removes `build/` and `.dart_tool/` dirs, emits events manually
+  - Returns `PackageResults`
+
+**TUI — Muted text for unimplemented commands:**
+
+- [x] Add `is_implemented()` method or `supported: bool` field to `CommandRow`
+  - Supported: analyze, bootstrap, clean, format, test, publish, health
+  - Not supported (need CLI args): exec, run, build, version, list
+- [x] Render unsupported command names in `Color::DarkGray` (dimmed) in `views/commands.rs`
+- [x] Attempting to run an unsupported command shows inline message instead of dispatch
+  (e.g., "exec requires a command argument — use CLI instead")
+
+**TUI — Command options overlay:**
+
+- [x] Add `CommandOpts` enum to `app.rs` with per-command variants:
+  - `Analyze { concurrency, fatal_warnings, fatal_infos, no_fatal }`
+  - `Bootstrap { concurrency, enforce_lockfile, offline, no_example, dry_run }`
+  - `Clean { concurrency, deep, dry_run }`
+  - `Format { concurrency, set_exit_if_changed, line_length }`
+  - `Test { concurrency, fail_fast, coverage, update_goldens, no_run }`
+  - `Publish { concurrency, dry_run }`
+  - `Health { version_drift, missing_fields, sdk_consistency }`
+- [x] Add `build_default_opts(command_name) -> CommandOpts` constructor with sensible defaults
+- [x] Add `show_options: bool` + `command_opts: Option<CommandOpts>` +
+  `selected_option: usize` fields to `App`
+- [x] When Enter pressed on a supported command: set `show_options = true`,
+  populate `command_opts` with defaults — do NOT execute yet
+- [x] When Enter pressed inside the options overlay: set `pending_command` and execute
+- [x] Esc inside the options overlay: dismiss, return to Idle command list
+
+**TUI — Options overlay view:**
+
+- [x] Create `crates/melos-tui/src/views/options.rs`:
+  - Centered popup (reuse `centered_rect` from `help.rs`)
+  - Title: "Options: {command}" in cyan
+  - List of option rows: `[x] dry-run`, `[ ] fail-fast`, `concurrency: 1`
+  - Highlighted row shows `>>` marker
+  - Footer: `space:toggle  enter:run  esc:back`
+- [x] Key handling in options overlay:
+  - `j`/`k`/Up/Down: navigate option rows
+  - `Space` or `Enter` on boolean: toggle value
+  - `+`/`-` or number keys on numeric fields: increment/decrement
+  - `Enter` on last row or dedicated "Run" action: execute command
+  - `Esc`: dismiss overlay
+
+**TUI — Dispatch wiring:**
+
+- [x] Update `dispatch_command()` signature: `(name, workspace, opts: CommandOpts, tx)` instead of `(name, workspace, tx)`
+- [x] Wire `bootstrap` dispatch: construct `BootstrapOpts` from `CommandOpts::Bootstrap`, call `bootstrap::run()`
+- [x] Wire `clean` dispatch: construct `CleanOpts` from `CommandOpts::Clean`, call `clean::run()`
+- [x] Wire `health` dispatch:
+  - Run `melos_core::commands::health::run()` (sync) on workspace packages
+  - Emit report issues as `Event::PackageOutput` / `Event::Info` events
+  - Return synthetic `PackageResults` (one entry per package, success = no issues)
+- [x] Update existing `analyze`, `format`, `test`, `publish` dispatch arms
+  to read options from `CommandOpts` instead of hardcoded defaults
+- [x] Update `main.rs` event loop to pass `CommandOpts` when spawning dispatch task
+
+**Tests:**
+
+- [x] Core: `BootstrapOpts` + `CleanOpts` struct construction
+- [x] TUI: `CommandOpts` default construction for each command
+- [x] TUI: Enter on supported command sets `show_options = true`
+- [x] TUI: Enter on unsupported command does not set `show_options`
+- [x] TUI: Esc in options overlay returns to Idle
+- [x] TUI: Enter in options overlay sets `pending_command`
+- [x] TUI: option toggle flips boolean value
+- [x] TUI: unsupported commands render in dimmed style
+
 #### Batch 52 -- Live output streaming + progress
 
 Render real-time per-package output and progress during command execution.

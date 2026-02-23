@@ -1,10 +1,132 @@
+use std::time::Instant;
+
+use anyhow::Result;
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::events::Event;
 use crate::package::Package;
+use crate::runner::ProcessRunner;
+use crate::workspace::Workspace;
+
+use super::PackageResults;
+
+/// Options for the clean command (clap-free).
+#[derive(Debug, Clone)]
+pub struct CleanOpts {
+    pub concurrency: usize,
+}
 
 /// Paths removed during a deep clean.
 pub const DEEP_CLEAN_DIRS: &[&str] = &[".dart_tool", "build"];
 
 /// Files removed during a deep clean.
 pub const DEEP_CLEAN_FILES: &[&str] = &["pubspec.lock"];
+
+/// Run clean across packages.
+///
+/// Flutter packages are cleaned via `flutter clean` through the [`ProcessRunner`].
+/// Dart packages are cleaned by removing `build/` and `.dart_tool/` directories,
+/// emitting events manually for each package.
+///
+/// Returns combined [`PackageResults`] from both Flutter and Dart operations.
+pub async fn run(
+    packages: &[Package],
+    workspace: &Workspace,
+    opts: &CleanOpts,
+    events: Option<&UnboundedSender<Event>>,
+) -> Result<PackageResults> {
+    let flutter_pkgs: Vec<_> = packages.iter().filter(|p| p.is_flutter).cloned().collect();
+    let dart_pkgs: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
+
+    let mut all_results = Vec::new();
+
+    // Flutter packages: run `flutter clean` via ProcessRunner.
+    if !flutter_pkgs.is_empty() {
+        if let Some(tx) = events {
+            let _ = tx.send(Event::Progress {
+                completed: 0,
+                total: flutter_pkgs.len(),
+                message: "flutter clean...".into(),
+            });
+        }
+        let runner = ProcessRunner::new(opts.concurrency, false);
+        let results = runner
+            .run_in_packages_with_events(
+                &flutter_pkgs,
+                "flutter clean",
+                &workspace.env_vars(),
+                None,
+                events,
+                &workspace.packages,
+            )
+            .await?;
+        all_results.extend(results);
+    }
+
+    // Dart packages: remove build artifacts manually.
+    if !dart_pkgs.is_empty() {
+        if let Some(tx) = events {
+            let _ = tx.send(Event::Progress {
+                completed: 0,
+                total: dart_pkgs.len(),
+                message: "cleaning dart packages...".into(),
+            });
+        }
+        for (i, pkg) in dart_pkgs.iter().enumerate() {
+            let start = Instant::now();
+            if let Some(tx) = events {
+                let _ = tx.send(Event::PackageStarted {
+                    name: pkg.name.clone(),
+                });
+            }
+
+            let mut success = true;
+            for dir_name in DEEP_CLEAN_DIRS {
+                let dir = pkg.path.join(dir_name);
+                if dir.exists() {
+                    match std::fs::remove_dir_all(&dir) {
+                        Ok(()) => {
+                            if let Some(tx) = events {
+                                let _ = tx.send(Event::PackageOutput {
+                                    name: pkg.name.clone(),
+                                    line: format!("removed {dir_name}/"),
+                                    is_stderr: false,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            success = false;
+                            if let Some(tx) = events {
+                                let _ = tx.send(Event::PackageOutput {
+                                    name: pkg.name.clone(),
+                                    line: format!("failed to remove {dir_name}/: {e}"),
+                                    is_stderr: true,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            let duration = start.elapsed();
+            if let Some(tx) = events {
+                let _ = tx.send(Event::PackageFinished {
+                    name: pkg.name.clone(),
+                    success,
+                    duration,
+                });
+                let _ = tx.send(Event::Progress {
+                    completed: i + 1,
+                    total: dart_pkgs.len(),
+                    message: "cleaning dart packages...".into(),
+                });
+            }
+            all_results.push((pkg.name.clone(), success));
+        }
+    }
+
+    Ok(PackageResults::from(all_results))
+}
 
 /// Result of attempting to remove a `pubspec_overrides.yaml` from a single package.
 #[derive(Debug, Clone, PartialEq)]
@@ -141,5 +263,61 @@ mod tests {
     fn test_remove_pubspec_overrides_empty_packages() {
         let results = remove_pubspec_overrides(&[]);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_clean_opts_struct_construction() {
+        let opts = CleanOpts { concurrency: 8 };
+        assert_eq!(opts.concurrency, 8);
+    }
+
+    #[tokio::test]
+    async fn test_clean_dart_removes_build_dirs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(pkg_dir.join("build")).unwrap();
+        std::fs::create_dir_all(pkg_dir.join(".dart_tool")).unwrap();
+
+        let pkg = make_package("app", pkg_dir.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let workspace = crate::workspace::Workspace {
+            root_path: dir.path().to_path_buf(),
+            config_source: crate::config::ConfigSource::MelosYaml(dir.path().join("melos.yaml")),
+            config: crate::config::MelosConfig {
+                name: "test".to_string(),
+                packages: vec!["packages/**".to_string()],
+                repository: None,
+                sdk_path: None,
+                command: None,
+                scripts: HashMap::new(),
+                ignore: None,
+                categories: HashMap::new(),
+                use_root_as_package: None,
+                discover_nested_workspaces: None,
+            },
+            packages: vec![pkg.clone()],
+            sdk_path: None,
+            warnings: vec![],
+        };
+
+        let opts = CleanOpts { concurrency: 1 };
+        let results = run(&[pkg], &workspace, &opts, Some(&tx)).await.unwrap();
+
+        assert_eq!(results.results.len(), 1);
+        assert!(results.results[0].1, "dart clean should succeed");
+        assert!(!pkg_dir.join("build").exists(), "build/ should be removed");
+        assert!(
+            !pkg_dir.join(".dart_tool").exists(),
+            ".dart_tool/ should be removed"
+        );
+
+        // Verify events were emitted.
+        drop(tx);
+        let mut event_count = 0;
+        while rx.recv().await.is_some() {
+            event_count += 1;
+        }
+        assert!(event_count > 0, "should emit at least one event");
     }
 }
