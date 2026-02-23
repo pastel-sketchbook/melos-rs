@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use colored::Colorize;
 
@@ -399,7 +399,10 @@ async fn run_script_recursive(
                         .current_dir(&workspace.root_path)
                         .envs(&env_vars)
                         .status()
-                        .await?;
+                        .await
+                        .with_context(|| {
+                            format!("Failed to spawn shell for script '{}'", script_name)
+                        })?;
 
                     if !status.success() {
                         bail!(
@@ -481,7 +484,8 @@ async fn run_steps(
                     .current_dir(&workspace.root_path)
                     .envs(env_vars)
                     .status()
-                    .await?;
+                    .await
+                    .with_context(|| format!("Failed to spawn shell for step '{}'", step))?;
 
                 if !status.success() {
                     bail!(
@@ -711,10 +715,13 @@ fn select_script_interactive(
     }
 
     print!("\n{} ", "Enter number or name:".bold());
-    io::stdout().flush()?;
+    io::stdout().flush().context("Failed to flush stdout")?;
 
     let mut input = String::new();
-    io::stdin().lock().read_line(&mut input)?;
+    io::stdin()
+        .lock()
+        .read_line(&mut input)
+        .context("Failed to read user input")?;
     let input = input.trim();
 
     // Try as number first

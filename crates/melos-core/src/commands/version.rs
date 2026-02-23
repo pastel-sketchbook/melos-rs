@@ -810,7 +810,8 @@ pub fn apply_version_bump(pkg: &Package, bump: &str) -> Result<String> {
     };
 
     // Replace version in pubspec.yaml
-    let new_content = regex::Regex::new(r"(?m)^version:\s*\S+")?
+    let new_content = regex::Regex::new(r"(?m)^version:\s*\S+")
+        .context("Failed to compile version regex")?
         .replace(&content, &format!("version: {}", next_version_str))
         .to_string();
 
@@ -853,7 +854,8 @@ pub fn update_dependency_constraint(
         r#"(?m)^(\s+{dep}:\s*)(?:["']?)[<>=^~\d][^"\n]*(?:["']?)"#,
         dep = regex::escape(dep_name)
     );
-    let re = regex::Regex::new(&pattern)?;
+    let re = regex::Regex::new(&pattern)
+        .with_context(|| format!("Failed to compile dependency regex for '{}'", dep_name))?;
 
     if !re.is_match(&content) {
         return Ok(false);

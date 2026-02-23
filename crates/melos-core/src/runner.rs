@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -220,7 +220,7 @@ impl ProcessRunner {
 
         // Wait for all tasks to complete
         for handle in handles {
-            handle.await?;
+            handle.await.context("Package task panicked")?;
         }
 
         let results = results.lock().await;

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
 
@@ -88,10 +88,11 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
             "\n{} Publish these packages to pub.dev? [y/N] ",
             "CONFIRM:".yellow()
         );
-        std::io::Write::flush(&mut std::io::stdout())?;
+        std::io::Write::flush(&mut std::io::stdout()).context("Failed to flush stdout")?;
 
         let mut input = String::new();
-        std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut input)?;
+        std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut input)
+            .context("Failed to read user input")?;
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
             println!("{}", "Aborted.".yellow());

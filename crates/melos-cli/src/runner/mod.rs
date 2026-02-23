@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 
 use melos_core::runner::shell_command;
@@ -23,7 +23,10 @@ pub async fn run_lifecycle_hook(
     for &(key, val) in extra_env {
         cmd.env(key, val);
     }
-    let status = cmd.status().await?;
+    let status = cmd
+        .status()
+        .await
+        .with_context(|| format!("Failed to execute {} hook: {}", label, hook_cmd))?;
 
     if !status.success() {
         anyhow::bail!(

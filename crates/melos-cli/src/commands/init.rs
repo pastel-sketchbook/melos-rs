@@ -127,10 +127,13 @@ fn print_tree(dir: &std::path::Path, cwd: &std::path::Path, legacy: bool, includ
 /// Prompt the user for input with a default value
 fn prompt_with_default(label: &str, default: &str) -> Result<String> {
     print!("{} [{}]: ", label.bold(), default.dimmed());
-    io::stdout().flush()?;
+    io::stdout().flush().context("Failed to flush stdout")?;
 
     let mut input = String::new();
-    io::stdin().lock().read_line(&mut input)?;
+    io::stdin()
+        .lock()
+        .read_line(&mut input)
+        .context("Failed to read user input")?;
     let trimmed = input.trim();
 
     if trimmed.is_empty() {
@@ -144,10 +147,13 @@ fn prompt_with_default(label: &str, default: &str) -> Result<String> {
 fn prompt_yes_no(question: &str, default_yes: bool) -> Result<bool> {
     let hint = if default_yes { "Y/n" } else { "y/N" };
     print!("{} [{}]: ", question.bold(), hint.dimmed());
-    io::stdout().flush()?;
+    io::stdout().flush().context("Failed to flush stdout")?;
 
     let mut input = String::new();
-    io::stdin().lock().read_line(&mut input)?;
+    io::stdin()
+        .lock()
+        .read_line(&mut input)
+        .context("Failed to read user input")?;
     let trimmed = input.trim().to_lowercase();
 
     if trimmed.is_empty() {

@@ -58,8 +58,9 @@ pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
             };
             println!(
                 "{}",
+                // safety: HealthReport derives Serialize with only primitive/String/Option fields
                 serde_json::to_string_pretty(&report)
-                    .expect("safety: HealthReport is always serializable")
+                    .expect("HealthReport is always serializable")
             );
         } else {
             println!("{}", "No packages matched the given filters.".yellow());
@@ -80,8 +81,9 @@ pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
     if args.json {
         println!(
             "{}",
+            // safety: HealthReport derives Serialize with only primitive/String/Option fields
             serde_json::to_string_pretty(&report)
-                .expect("safety: HealthReport is always serializable")
+                .expect("HealthReport is always serializable")
         );
 
         if report.total_issues > 0 {
