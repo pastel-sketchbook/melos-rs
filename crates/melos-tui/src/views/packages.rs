@@ -18,9 +18,16 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
     let header = Row::new(header_cells).height(1);
 
+    let max_name_len = app
+        .package_rows
+        .iter()
+        .map(|pkg| pkg.name.len())
+        .max()
+        .unwrap_or(0);
+
     let rows = app.package_rows.iter().map(|pkg| {
         let name_display = if pkg.is_private {
-            format!("{} (private)", pkg.name)
+            format!("{:<width$}(private)", pkg.name, width = max_name_len + 1)
         } else {
             pkg.name.clone()
         };
@@ -189,6 +196,42 @@ mod tests {
         assert!(
             row_line.contains("(private)"),
             "Expected '(private)' suffix, got: {row_line}"
+        );
+    }
+
+    #[test]
+    fn test_private_suffix_aligned_to_longest_name() {
+        let app = make_app_with_rows(vec![
+            PackageRow {
+                name: "app".to_string(),
+                version: "1.0.0".to_string(),
+                sdk: "Dart",
+                path: "packages/app".to_string(),
+                is_private: true,
+            },
+            PackageRow {
+                name: "long_package_name".to_string(),
+                version: "2.0.0".to_string(),
+                sdk: "Dart",
+                path: "packages/long".to_string(),
+                is_private: true,
+            },
+        ]);
+
+        let buf = render_packages(&app, 100, 10);
+        let row1 = buffer_line(&buf, 2, 100); // "app" row
+        let row2 = buffer_line(&buf, 3, 100); // "long_package_name" row
+
+        // Both "(private)" suffixes should start at the same column
+        let col1 = row1
+            .find("(private)")
+            .expect("row1 should contain (private)");
+        let col2 = row2
+            .find("(private)")
+            .expect("row2 should contain (private)");
+        assert_eq!(
+            col1, col2,
+            "Expected (private) aligned at same column, got col {col1} vs {col2}\nrow1: {row1}\nrow2: {row2}"
         );
     }
 
