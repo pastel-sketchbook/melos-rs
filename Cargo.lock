@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "melos-cli"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "melos-core"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "glob",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "melos-tui"
-version = "0.6.3"
+version = "0.6.4"
 dependencies = [
  "anyhow",
  "crossterm",

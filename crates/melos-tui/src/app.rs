@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers};
+use melos_core::commands::health::HealthReport;
 use melos_core::config::ScriptEntry;
 use melos_core::events::Event as CoreEvent;
 use melos_core::package::Package;
@@ -469,6 +470,12 @@ pub struct App {
     /// Timestamp when the current command started (for elapsed time display).
     pub command_start: Option<Instant>,
 
+    // --- Results state (Batch 53) ---
+    /// Structured health report from the health command (for dashboard rendering).
+    pub health_report: Option<HealthReport>,
+    /// Currently selected tab in the health dashboard (0=drift, 1=missing, 2=sdk).
+    pub health_tab: usize,
+
     // --- Options overlay state (Batch 51.5) ---
     /// Whether the options overlay is currently visible.
     pub show_options: bool,
@@ -517,6 +524,8 @@ impl App {
             output_scroll: 0,
             auto_scroll: true,
             command_start: None,
+            health_report: None,
+            health_tab: 0,
             show_options: false,
             command_opts: None,
             selected_option: 0,
@@ -652,6 +661,7 @@ impl App {
         }
 
         // In Done state, Esc/Enter/q return to Idle; scroll keys navigate output.
+        // Tab/BackTab cycle health dashboard tabs when a health report is present.
         if self.state == AppState::Done {
             let ctrl = modifiers.contains(KeyModifiers::CONTROL);
             let half_page = (self.page_size / 2).max(1);
@@ -660,6 +670,17 @@ impl App {
                     self.state = AppState::Idle;
                 }
                 (KeyCode::Char('c'), true) => self.quit = true,
+                // Health dashboard tab cycling.
+                (KeyCode::Tab, _) if self.health_report.is_some() => {
+                    self.health_tab = (self.health_tab + 1) % 3;
+                }
+                (KeyCode::BackTab, _) if self.health_report.is_some() => {
+                    self.health_tab = if self.health_tab == 0 {
+                        2
+                    } else {
+                        self.health_tab - 1
+                    };
+                }
                 // Scroll navigation in output log
                 (KeyCode::Up | KeyCode::Char('k'), false) => {
                     self.output_scroll = self.output_scroll.saturating_sub(1);
@@ -873,6 +894,8 @@ impl App {
         self.output_scroll = 0;
         self.auto_scroll = true;
         self.command_start = Some(Instant::now());
+        self.health_report = None;
+        self.health_tab = 0;
     }
 
     /// Process a core event received from the running command.
@@ -934,13 +957,14 @@ impl App {
 
     /// Handle command completion after the channel closes and the task handle resolves.
     ///
-    /// `result` is the `JoinHandle` result wrapping the command `Result<PackageResults>`.
+    /// `result` is the `JoinHandle` result wrapping the command `Result<()>`.
+    /// Note: `running_command` is intentionally preserved so the Done state
+    /// can display the command name in the results header.
     pub fn on_command_finished(
         &mut self,
         result: Result<anyhow::Result<()>, tokio::task::JoinError>,
     ) {
         self.state = AppState::Done;
-        self.running_command = None;
         self.running_packages.clear();
         self.command_start = None;
 
@@ -964,6 +988,11 @@ impl App {
         self.running_command = None;
         self.running_packages.clear();
         self.command_start = None;
+    }
+
+    /// Set the structured health report from a completed health command.
+    pub fn set_health_report(&mut self, report: HealthReport) {
+        self.health_report = Some(report);
     }
 
     /// Toggle between Packages and Commands panels.
@@ -1728,7 +1757,8 @@ mod tests {
         app.running_command = Some("analyze".to_string());
         app.on_command_finished(Ok(Ok(())));
         assert_eq!(app.state, AppState::Done);
-        assert!(app.running_command.is_none());
+        // running_command is preserved so Done state can display it.
+        assert_eq!(app.running_command.as_deref(), Some("analyze"));
         assert!(app.command_error.is_none());
     }
 
@@ -2702,5 +2732,95 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
         let elapsed = app.elapsed().unwrap();
         assert!(elapsed >= Duration::from_millis(1));
+    }
+
+    // --- Health report and tab cycling tests (Batch 53) ---
+
+    fn make_health_report() -> HealthReport {
+        HealthReport {
+            version_drift: Some(vec![]),
+            missing_fields: Some(vec![]),
+            sdk_consistency: Some(melos_core::commands::health::SdkConsistencyResult::default()),
+            total_issues: 0,
+        }
+    }
+
+    #[test]
+    fn test_health_report_none_initially() {
+        let app = App::new();
+        assert!(app.health_report.is_none());
+        assert_eq!(app.health_tab, 0);
+    }
+
+    #[test]
+    fn test_start_command_clears_health_report() {
+        let mut app = App::new();
+        app.health_report = Some(make_health_report());
+        app.health_tab = 2;
+        app.start_command("analyze");
+        assert!(app.health_report.is_none());
+        assert_eq!(app.health_tab, 0);
+    }
+
+    #[test]
+    fn test_set_health_report() {
+        let mut app = App::new();
+        app.set_health_report(make_health_report());
+        assert!(app.health_report.is_some());
+    }
+
+    #[test]
+    fn test_done_tab_cycles_health_tab_forward() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        app.health_report = Some(make_health_report());
+        assert_eq!(app.health_tab, 0);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.health_tab, 1);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.health_tab, 2);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.health_tab, 0);
+    }
+
+    #[test]
+    fn test_done_backtab_cycles_health_tab_backward() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        app.health_report = Some(make_health_report());
+        assert_eq!(app.health_tab, 0);
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.health_tab, 2);
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.health_tab, 1);
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.health_tab, 0);
+    }
+
+    #[test]
+    fn test_done_tab_without_health_report_does_nothing() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        // No health report set.
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.health_tab, 0);
+        // Should still be in Done state (Tab didn't return to Idle).
+        assert_eq!(app.state, AppState::Done);
+    }
+
+    #[test]
+    fn test_on_command_finished_preserves_running_command() {
+        let mut app = App::new();
+        app.start_command("health");
+        app.on_command_finished(Ok(Ok(())));
+        assert_eq!(app.running_command.as_deref(), Some("health"));
+    }
+
+    #[test]
+    fn test_on_command_cancelled_clears_running_command() {
+        let mut app = App::new();
+        app.start_command("health");
+        app.on_command_cancelled();
+        assert!(app.running_command.is_none());
     }
 }

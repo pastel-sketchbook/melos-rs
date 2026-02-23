@@ -1008,21 +1008,21 @@ Render real-time per-package output and progress during command execution.
 
 Display command results and workspace health information.
 
-- [ ] Create `crates/melos-tui/src/views/results.rs`:
+- [x] Create `crates/melos-tui/src/views/results.rs`:
   - Summary line: "N passed, M failed" with colored counts
   - Package result list: green check / red X per package with duration
   - Scrollable with same scroll keybindings as output panel
   - Visible in `Done` state in the right panel
-- [ ] Create `crates/melos-tui/src/views/health.rs`:
+- [x] Create `crates/melos-tui/src/views/health.rs`:
   - Three tabs (internal): Version Drift | Missing Fields | SDK Consistency
   - Version drift: table of (dependency, constraint, packages) tuples
   - Missing fields: table of (package, missing field) tuples
   - SDK consistency: table of (SDK, constraint, package count) tuples
   - Uses `melos_core::commands::health::run()` with all checks enabled
-- [ ] Wire health command: select "health" in command panel + Enter runs dashboard
-- [ ] Wire `Esc` in `Done` state to return to `Idle`
-- [ ] Error display: if a command returns `Err`, show error message in right panel with red border
-- [ ] Tests: results summary from PackageResults, health report rendering data
+- [x] Wire health command: select "health" in command panel + Enter runs dashboard
+- [x] Wire `Esc` in `Done` state to return to `Idle`
+- [x] Error display: if a command returns `Err`, show error message in right panel with red border
+- [x] Tests: results summary from PackageResults, health report rendering data
 
 #### Batch 54 -- Polish: filter bar, resize, edge cases
 

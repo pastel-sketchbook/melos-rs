@@ -8,7 +8,6 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::StreamExt;
-use melos_core::commands::PackageResults;
 use melos_core::workspace::Workspace;
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
@@ -110,7 +109,7 @@ async fn run(
     // Event sources.
     let mut event_stream = EventStream::new();
     let mut core_rx: Option<mpsc::UnboundedReceiver<melos_core::events::Event>> = None;
-    let mut task_handle: Option<JoinHandle<Result<PackageResults>>> = None;
+    let mut task_handle: Option<JoinHandle<Result<dispatch::DispatchResult>>> = None;
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
 
     loop {
@@ -159,14 +158,19 @@ async fn run(
                         core_rx = None;
                         if let Some(handle) = task_handle.take() {
                             let join_result = handle.await;
-                            // Map Result<Result<PackageResults>> to Result<Result<()>>
-                            // by discarding PackageResults (already tracked via events).
+                            // Map Result<Result<DispatchResult>> to Result<Result<()>>
+                            // extracting health report and discarding PackageResults
+                            // (already tracked via events).
                             let mapped = match join_result {
-                                Ok(Ok(r)) => {
+                                Ok(Ok(dr)) => {
                                     info!(
-                                        results = r.results.len(),
+                                        results = dr.package_results.results.len(),
+                                        has_health = dr.health_report.is_some(),
                                         "command task completed successfully"
                                     );
+                                    if let Some(report) = dr.health_report {
+                                        app.set_health_report(report);
+                                    }
                                     Ok(Ok(()))
                                 }
                                 Ok(Err(e)) => {

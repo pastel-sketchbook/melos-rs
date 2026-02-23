@@ -15,6 +15,13 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app::CommandOpts;
 
+/// Result of a dispatched command, carrying optional structured data
+/// alongside the standard package results.
+pub struct DispatchResult {
+    pub package_results: PackageResults,
+    pub health_report: Option<HealthReport>,
+}
+
 /// Dispatch a command to the appropriate core `run()` function.
 ///
 /// This is called from a spawned tokio task. The `tx` sender streams
@@ -29,7 +36,7 @@ pub async fn dispatch_command(
     workspace: &Arc<Workspace>,
     tx: UnboundedSender<Event>,
     opts: Option<CommandOpts>,
-) -> Result<PackageResults> {
+) -> Result<DispatchResult> {
     let packages = &workspace.packages;
 
     match name {
@@ -53,7 +60,8 @@ pub async fn dispatch_command(
                     no_fatal: false,
                 },
             };
-            melos_core::commands::analyze::run(packages, workspace, &core_opts, Some(&tx)).await
+            let r = melos_core::commands::analyze::run(packages, workspace, &core_opts, Some(&tx)).await?;
+            Ok(DispatchResult { package_results: r, health_report: None })
         }
         "bootstrap" => {
             let core_opts = match opts {
@@ -75,14 +83,16 @@ pub async fn dispatch_command(
                     offline: false,
                 },
             };
-            melos_core::commands::bootstrap::run(packages, workspace, &core_opts, Some(&tx)).await
+            let r = melos_core::commands::bootstrap::run(packages, workspace, &core_opts, Some(&tx)).await?;
+            Ok(DispatchResult { package_results: r, health_report: None })
         }
         "clean" => {
             let core_opts = match opts {
                 Some(CommandOpts::Clean { concurrency }) => CleanOpts { concurrency },
                 _ => CleanOpts { concurrency: 1 },
             };
-            melos_core::commands::clean::run(packages, workspace, &core_opts, Some(&tx)).await
+            let r = melos_core::commands::clean::run(packages, workspace, &core_opts, Some(&tx)).await?;
+            Ok(DispatchResult { package_results: r, health_report: None })
         }
         "format" => {
             let core_opts = match opts {
@@ -103,7 +113,8 @@ pub async fn dispatch_command(
                     line_length: None,
                 },
             };
-            melos_core::commands::format::run(packages, workspace, &core_opts, Some(&tx)).await
+            let r = melos_core::commands::format::run(packages, workspace, &core_opts, Some(&tx)).await?;
+            Ok(DispatchResult { package_results: r, health_report: None })
         }
         "test" => {
             let core_opts = match opts {
@@ -132,7 +143,8 @@ pub async fn dispatch_command(
                     extra_args: vec![],
                 },
             };
-            melos_core::commands::test::run(packages, workspace, &core_opts, Some(&tx)).await
+            let r = melos_core::commands::test::run(packages, workspace, &core_opts, Some(&tx)).await?;
+            Ok(DispatchResult { package_results: r, health_report: None })
         }
         "publish" => {
             let core_opts = match opts {
@@ -148,7 +160,8 @@ pub async fn dispatch_command(
                     concurrency: 1,
                 },
             };
-            melos_core::commands::publish::run(packages, workspace, &core_opts, Some(&tx)).await
+            let r = melos_core::commands::publish::run(packages, workspace, &core_opts, Some(&tx)).await?;
+            Ok(DispatchResult { package_results: r, health_report: None })
         }
         "health" => {
             let health_opts = match opts {
@@ -188,12 +201,13 @@ pub async fn dispatch_command(
 /// Dispatch the health command, which is synchronous.
 ///
 /// Wraps the sync `health::run()` and emits events to match the async pattern
-/// so the TUI shows progress and results consistently.
+/// so the TUI shows progress and results consistently. Returns the structured
+/// `HealthReport` alongside empty package results for dashboard rendering.
 fn dispatch_health(
     packages: &[melos_core::package::Package],
     opts: &HealthOpts,
     tx: &UnboundedSender<Event>,
-) -> Result<PackageResults> {
+) -> Result<DispatchResult> {
     use std::time::Instant;
 
     let _ = tx.send(Event::CommandStarted {
@@ -242,7 +256,10 @@ fn dispatch_health(
         duration,
     });
 
-    Ok(PackageResults {
-        results: Vec::new(),
+    Ok(DispatchResult {
+        package_results: PackageResults {
+            results: Vec::new(),
+        },
+        health_report: Some(report),
     })
 }
