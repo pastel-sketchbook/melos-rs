@@ -1,0 +1,17 @@
+[package]
+name = "melos-tui"
+description = "Terminal UI for melos-rs - Flutter/Dart monorepo management"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "melos-tui"
+path = "src/main.rs"
+
+[dependencies]
+melos-core = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }

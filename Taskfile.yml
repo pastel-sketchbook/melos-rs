@@ -50,6 +50,12 @@ tasks:
     cmds:
       - cargo run -p melos-cli -- {{.CLI_ARGS}}
 
+  run:tui:
+    desc: "Run melos-tui"
+    deps: [build]
+    cmds:
+      - cargo run -p melos-tui
+
   run:list:
     desc: "List all packages in the workspace"
     cmds:
@@ -82,10 +88,11 @@ tasks:
 
   # --- Install ---
   install:
-    desc: "Install melos-rs binary to ~/.cargo/bin"
+    desc: "Install melos-rs and melos-tui binaries to ~/.cargo/bin"
     deps: [check:all]
     cmds:
       - cargo install --path crates/melos-cli --force
+      - cargo install --path crates/melos-tui --force
 
   # --- Versioning ---
   version:patch:

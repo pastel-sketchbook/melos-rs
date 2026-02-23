@@ -777,25 +777,175 @@ Each core command accepts `UnboundedSender<Event>` and returns a typed result su
 
 ### Phase 4 -- TUI frontend with ratatui
 
-Build `melos-tui` binary consuming `melos-core`.
+Build `melos-tui` binary consuming `melos-core`. See `docs/rationale/0007_tui_frontend.md`
+for full architecture rationale, event loop design, and alternatives considered.
 
-- [ ] Create `crates/melos-tui/Cargo.toml` with deps: `melos-core`, `ratatui`, `crossterm`
-- [ ] Implement terminal setup/teardown (alternate screen, raw mode)
-- [ ] Implement `App` state machine:
-  - `Idle` -- workspace loaded, package list displayed
-  - `Running` -- command executing, live progress
-  - `Done` -- results displayed, scrollable
-- [ ] Implement core event loop: poll crossterm events + core events, render on each frame
-- [ ] **Views:**
-  - Package list (table with name, version, path, flutter/dart)
-  - Command picker (list of available commands + scripts)
-  - Execution panel (live per-package progress, output streaming)
-  - Results panel (pass/fail summary, scrollable output)
-  - Health dashboard (version drift, missing fields, SDK consistency)
-- [ ] Keyboard navigation: arrow keys, enter to run, q to quit, tab to switch panels
-- [ ] Wire workspace loading on startup (show loading spinner)
-- [ ] Wire command execution: user picks command, TUI spawns core task, renders events
-- [ ] Verify `melos-tui` builds and runs against test workspace
+#### Batch 48 -- Crate scaffolding + terminal setup
+
+Create the `melos-tui` crate with minimal working binary: alternate screen,
+raw mode, quit on `q`/`Ctrl+C`, clean teardown on panic.
+
+- [x] Add `crates/melos-tui` to workspace `members` in root `Cargo.toml`
+- [x] Create `crates/melos-tui/Cargo.toml` with deps:
+  - `melos-core` (path)
+  - `ratatui` 0.30 (crossterm backend)
+  - `crossterm` 0.29
+  - `tokio` (full features)
+  - `anyhow`
+- [x] Create `crates/melos-tui/src/main.rs`:
+  - Terminal init: `enable_raw_mode()`, `EnterAlternateScreen`, `CrosstermBackend`
+  - Terminal teardown: `disable_raw_mode()`, `LeaveAlternateScreen` (in `Drop` or deferred)
+  - Panic hook that restores terminal before printing panic
+  - Minimal event loop: poll crossterm events, quit on `q` or `Ctrl+C`
+  - Render empty frame with "melos-tui" title and "q to quit" footer
+- [x] Create `crates/melos-tui/src/app.rs`:
+  - `App` struct with `state: AppState` enum (`Idle`, `Running`, `Done`)
+  - `should_quit: bool` flag
+  - `handle_terminal_event()` method (just quit handling for now)
+- [x] Create `crates/melos-tui/src/ui.rs`:
+  - `draw(frame: &mut Frame, app: &App)` function
+  - Placeholder layout: header block + empty body + footer with keybindings
+- [x] Update `Taskfile.yml` if needed (workspace flags should already work)
+- [x] Verify `cargo build -p melos-tui` compiles and `cargo run -p melos-tui` shows blank TUI
+- [x] Verify `task check:all` still passes (existing 560 tests unaffected)
+
+#### Batch 49 -- Workspace loading + package list view
+
+Load the workspace on startup and display packages in a navigable table.
+
+- [ ] Add `workspace: Option<Workspace>` and `packages: Vec<Package>` to `App`
+- [ ] Load workspace in `main.rs` before entering event loop:
+  - Show "Loading workspace..." text during load
+  - Handle errors gracefully (display error in TUI, allow quit)
+  - Store workspace warnings for display
+- [ ] Create `crates/melos-tui/src/views/packages.rs`:
+  - `Table` widget with columns: Name, Version, SDK (Flutter/Dart), Path (relative)
+  - `TableState` for row selection (highlight current row)
+  - Private packages shown with `(private)` suffix
+  - Show package count in header
+- [ ] Wire keyboard navigation in `Idle` state:
+  - Up/Down arrows: move selection
+  - Home/End: jump to first/last package
+  - Page Up/Down: scroll by page
+- [ ] Layout: header bar (workspace name, config source, package count) + package table + footer
+- [ ] Tests: `App` state transitions for keyboard navigation (up/down wrapping, bounds)
+
+#### Batch 50 -- Command picker + tab switching
+
+Add a command/script list panel and tab-based panel switching.
+
+- [ ] Create `crates/melos-tui/src/views/commands.rs`:
+  - `List` widget showing built-in commands: analyze, bootstrap, build, clean, exec, format,
+    health, list, publish, run, test, version
+  - Below built-in commands: named scripts from `workspace.config.scripts` (non-private)
+  - `ListState` for selection highlighting
+  - Show script description (if any) on the right side
+- [ ] Add `ActivePanel` enum (`Packages`, `Commands`) to `App`
+- [ ] Wire `Tab` key to toggle `ActivePanel` in `Idle` state
+- [ ] Update layout to two-column split:
+  - Left panel (40%): packages table OR command list (based on `ActivePanel`)
+  - Right panel (60%): placeholder "Select a command and press Enter" text
+- [ ] Visual indicator for active panel (highlighted border or bold title)
+- [ ] Wire Up/Down navigation to work on whichever panel is active
+- [ ] Tests: tab switching toggles panel, selection state is independent per panel
+
+#### Batch 51 -- Command execution wiring
+
+Execute the selected command and consume core events in the TUI event loop.
+
+- [ ] Define `AppEvent` enum: `Terminal(crossterm::event::Event)`, `Core(melos_core::events::Event)`, `Tick`
+- [ ] Refactor main event loop to use `tokio::select!` over:
+  - Crossterm event stream (via `crossterm::event::EventStream` or polled reader)
+  - Core event receiver (`mpsc::UnboundedReceiver<Event>`)
+  - Tick interval (250ms idle, 66ms running)
+- [ ] Add `core_rx: Option<mpsc::UnboundedReceiver<Event>>` to `App`
+- [ ] Add `task_handle: Option<JoinHandle<Result<_>>>` to `App` for the running command
+- [ ] Implement `execute_command()` on `App`:
+  - Transition state to `Running`
+  - Create `(tx, rx)` channel pair
+  - Spawn core command as tokio task (e.g., `melos_core::commands::format::run(...)`)
+  - Store `rx` and handle in App
+- [ ] Wire `Enter` key in `Idle` state (command panel active) to `execute_command()`
+- [ ] Implement `handle_core_event()` on `App`:
+  - `PackageStarted`: add to running set
+  - `PackageFinished`: move from running to results
+  - `Progress`: update progress counters
+  - `Warning`/`Info`: append to message log
+  - Channel closed (None): transition to `Done`, join task handle
+- [ ] Wire `Esc` in `Running` state to cancel (abort task handle, transition to Idle)
+- [ ] Tests: state transitions (Idle -> Running -> Done), event handling updates state
+
+#### Batch 52 -- Live output streaming + progress
+
+Render real-time per-package output and progress during command execution.
+
+- [ ] Create `crates/melos-tui/src/views/execution.rs`:
+  - Scrollback buffer: `Vec<(String, String, bool)>` (package_name, line, is_stderr)
+  - Max buffer size: 10,000 lines (configurable)
+  - Auto-scroll when at tail, manual scroll when user has scrolled up
+  - Per-package color assignment (same 10-color rotation as CLI render.rs)
+  - `Paragraph` widget with `Line` spans for colored output
+- [ ] Add `Gauge` widget for progress bar:
+  - Maps core `Progress { completed, total, message }` to gauge percentage
+  - Shows message text alongside gauge
+  - Visible only during `Running` state
+- [ ] Update right panel layout during `Running`:
+  - Top: progress gauge (1 line)
+  - Middle: output stream (fills remaining space)
+  - Bottom: running package names (1-2 lines)
+- [ ] Wire scroll keys during `Running`/`Done`:
+  - Up/Down: scroll output line by line
+  - Page Up/Down: scroll by panel height
+  - Home/End: jump to start/end
+- [ ] Show elapsed time in header during `Running` state
+- [ ] Tests: scrollback buffer append + truncation, auto-scroll logic, progress percentage calc
+
+#### Batch 53 -- Results panel + health dashboard
+
+Display command results and workspace health information.
+
+- [ ] Create `crates/melos-tui/src/views/results.rs`:
+  - Summary line: "N passed, M failed" with colored counts
+  - Package result list: green check / red X per package with duration
+  - Scrollable with same scroll keybindings as output panel
+  - Visible in `Done` state in the right panel
+- [ ] Create `crates/melos-tui/src/views/health.rs`:
+  - Three tabs (internal): Version Drift | Missing Fields | SDK Consistency
+  - Version drift: table of (dependency, constraint, packages) tuples
+  - Missing fields: table of (package, missing field) tuples
+  - SDK consistency: table of (SDK, constraint, package count) tuples
+  - Uses `melos_core::commands::health::run()` with all checks enabled
+- [ ] Wire `h` key in `Idle` state to run health check and show dashboard
+- [ ] Wire `Esc` in `Done` state to return to `Idle`
+- [ ] Error display: if a command returns `Err`, show error message in right panel with red border
+- [ ] Tests: results summary from PackageResults, health report rendering data
+
+#### Batch 54 -- Polish: filter bar, help overlay, edge cases
+
+Final polish batch for a production-ready TUI experience.
+
+- [ ] Implement filter bar:
+  - `/` key activates text input mode in footer area
+  - Type to filter packages by name (fuzzy or glob)
+  - `Enter` applies filter, `Esc` cancels
+  - Filter persists until cleared (show active filter indicator)
+- [ ] Implement help overlay:
+  - `?` key toggles a centered popup with all keybindings
+  - Semi-transparent background (dim underlying content)
+  - `?` or `Esc` dismisses
+- [ ] Handle terminal resize events:
+  - Recompute layout on `crossterm::event::Event::Resize`
+  - Clamp scroll positions to new panel dimensions
+- [ ] Handle workspace not found gracefully:
+  - Show actionable error message with suggestion to run `melos-rs init`
+  - Allow quit from error state
+- [ ] Handle no packages found:
+  - Show "No packages found" in package list with config hint
+- [ ] Add `--workspace` / `--config` CLI arg to `melos-tui` for explicit workspace path
+- [ ] Respect `NO_COLOR` / `TERM=dumb` environment variables (disable TUI, fall back to error)
+- [ ] Update root `Cargo.toml` version for TUI release
+- [ ] Verify `melos-tui` against test workspace: load, navigate, run format, view results, health
+- [ ] Verify `task check:all` passes with all three crates
 
 ---
 
