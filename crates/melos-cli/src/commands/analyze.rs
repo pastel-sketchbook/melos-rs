@@ -71,12 +71,10 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
         return Ok(());
     }
 
-    let action = if args.dry_run {
-        "Previewing fixes for"
-    } else if args.fix {
-        "Fixing and analyzing"
-    } else {
-        "Analyzing"
+    let action = match (args.dry_run, args.fix) {
+        (true, _) => "Previewing fixes for",
+        (false, true) => "Fixing and analyzing",
+        (false, false) => "Analyzing",
     };
 
     println!(

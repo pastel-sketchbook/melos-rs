@@ -155,3 +155,63 @@ task bench:clean
 
 The generated result files (`bench-*.md`) are gitignored. This document
 captures the rationale and a snapshot of results for the record.
+
+## Post core/cli split (Phase 3 complete, v0.5.3)
+
+After extracting all command logic into `melos-core` (zero terminal deps) and
+leaving `melos-cli` as a thin rendering layer, the binary was re-benchmarked to
+confirm no performance regression from the workspace split and event-based
+architecture.
+
+### Architecture delta
+
+| Metric | Before split (v0.4.x) | After split (v0.5.3) |
+|--------|----------------------|---------------------|
+| Crates | 1 binary | 2 (melos-core lib + melos-cli bin) |
+| Core tests | 0 | 495 |
+| CLI tests | ~500 | 39 |
+| Event architecture | Direct print | `UnboundedSender<Event>` channels |
+| Total binary deps | clap + colored + indicatif + all | Same (tree-shaken, core has zero terminal deps) |
+
+### Results
+
+#### `list` -- enumerate workspace packages
+
+| Command | Mean | Min | Max | Relative |
+|:---|---:|---:|---:|---:|
+| `melos list` | 568.9 ± 49.1 ms | 535.1 ms | 771.8 ms | 75.08x |
+| `melos-rs list` | 7.6 ± 0.6 ms | 6.5 ms | 12.8 ms | **1.00** |
+
+**75x faster.** Up from 70x in the pre-split measurement. The improvement is
+within noise (different system load), confirming zero overhead from the crate
+split. The event channel is not used for `list` (pure sync), so no added cost.
+
+#### `list --json` -- JSON output
+
+| Command | Mean | Min | Max | Relative |
+|:---|---:|---:|---:|---:|
+| `melos list --json` | 573.9 ± 44.4 ms | 537.2 ms | 750.2 ms | 77.78x |
+| `melos-rs list --json` | 7.4 ± 0.4 ms | 6.5 ms | 8.7 ms | **1.00** |
+
+**78x faster.** Consistent with the plain `list` result. JSON serialization
+remains negligible.
+
+#### `exec` -- run a command in each package
+
+| Command | Mean | Min | Max | Relative |
+|:---|---:|---:|---:|---:|
+| `melos exec -- echo hi` | 616.9 ± 21.1 ms | 583.7 ms | 666.1 ms | 22.32x |
+| `melos-rs exec -- echo hi` | 27.6 ± 1.1 ms | 25.2 ms | 31.3 ms | **1.00** |
+
+**22x faster.** Slightly improved from 20x pre-split. The event-based
+`ProcessRunner` sends `PackageStarted`/`PackageFinished`/`PackageOutput` events
+through an unbounded channel -- the overhead is sub-microsecond per event, well
+below the subprocess spawning floor.
+
+### Conclusion
+
+The core/cli split and event-based architecture introduced **zero measurable
+performance regression**. All three benchmarks show equal or slightly better
+results compared to the monolithic binary, confirming that the abstraction cost
+of `tokio::sync::mpsc::unbounded_channel` and the additional crate boundary is
+negligible at runtime.

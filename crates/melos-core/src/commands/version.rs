@@ -617,16 +617,15 @@ pub fn write_changelog(pkg_path: &Path, entry: &str) -> Result<()> {
     };
 
     // If there's an existing file with a top-level heading, insert after it
-    let new_content = if existing.starts_with("# ") {
-        // Find end of first line
-        let first_newline = existing.find('\n').unwrap_or(existing.len());
-        let header = &existing[..first_newline];
-        let rest = &existing[first_newline..];
-        format!("{}\n\n{}{}", header, entry, rest)
-    } else if existing.is_empty() {
-        format!("# Changelog\n\n{}", entry)
-    } else {
-        format!("{}\n{}", entry, existing)
+    let new_content = match existing.as_str() {
+        s if s.starts_with("# ") => {
+            let first_newline = s.find('\n').unwrap_or(s.len());
+            let header = &s[..first_newline];
+            let rest = &s[first_newline..];
+            format!("{}\n\n{}{}", header, entry, rest)
+        }
+        "" => format!("# Changelog\n\n{}", entry),
+        _ => format!("{}\n{}", entry, existing),
     };
 
     std::fs::write(&changelog_path, new_content)

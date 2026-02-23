@@ -356,62 +356,67 @@ async fn run_script_recursive(
     // Merge script-level env vars (they take precedence over workspace vars)
     env_vars.extend(script.env().iter().map(|(k, v)| (k.clone(), v.clone())));
 
-    if let Some(steps) = script.steps() {
-        run_steps(workspace, steps, &env_vars, cli_filters, visited, depth).await?;
-    } else if let Some(exec_cmd) = script.exec_command() {
-        // Mode 2: Exec config (per-package execution via config, not string parsing)
-        run_exec_config_script(workspace, script, exec_cmd, &env_vars, cli_filters).await?;
-    } else if let Some(run_command) = script.run_command() {
-        // Mode 3: Traditional run command
-        let substituted =
-            normalize_line_continuations(&substitute_env_vars(run_command, &env_vars));
+    match (script.steps(), script.exec_command(), script.run_command()) {
+        (Some(steps), _, _) => {
+            run_steps(workspace, steps, &env_vars, cli_filters, visited, depth).await?;
+        }
+        (None, Some(exec_cmd), _) => {
+            // Mode 2: Exec config (per-package execution via config, not string parsing)
+            run_exec_config_script(workspace, script, exec_cmd, &env_vars, cli_filters).await?;
+        }
+        (None, None, Some(run_command)) => {
+            // Mode 3: Traditional run command
+            let substituted =
+                normalize_line_continuations(&substitute_env_vars(run_command, &env_vars));
 
-        if is_exec_command(&substituted) {
-            // Legacy exec-style: `melos exec -- <command>` in run string
-            run_exec_script(workspace, script, &substituted, &env_vars, cli_filters).await?;
-        } else {
-            // Regular shell command at workspace root
-            let expanded = expand_command(&substituted)?;
-            for cmd in &expanded {
-                if let Some(ref_name) = extract_melos_run_script_name(cmd)
-                    && workspace.config.scripts.contains_key(ref_name)
-                {
-                    Box::pin(run_script_recursive(
-                        workspace,
-                        ref_name,
-                        cli_filters,
-                        visited,
-                        depth + 1,
-                    ))
-                    .await?;
-                    continue;
-                }
+            if is_exec_command(&substituted) {
+                // Legacy exec-style: `melos exec -- <command>` in run string
+                run_exec_script(workspace, script, &substituted, &env_vars, cli_filters).await?;
+            } else {
+                // Regular shell command at workspace root
+                let expanded = expand_command(&substituted)?;
+                for cmd in &expanded {
+                    if let Some(ref_name) = extract_melos_run_script_name(cmd)
+                        && workspace.config.scripts.contains_key(ref_name)
+                    {
+                        Box::pin(run_script_recursive(
+                            workspace,
+                            ref_name,
+                            cli_filters,
+                            visited,
+                            depth + 1,
+                        ))
+                        .await?;
+                        continue;
+                    }
 
-                println!("{}{} {}", indent, ">".dimmed(), cmd.dimmed());
+                    println!("{}{} {}", indent, ">".dimmed(), cmd.dimmed());
 
-                let (shell, shell_flag) = melos_core::runner::shell_command();
-                let status = tokio::process::Command::new(shell)
-                    .arg(shell_flag)
-                    .arg(cmd)
-                    .current_dir(&workspace.root_path)
-                    .envs(&env_vars)
-                    .status()
-                    .await?;
+                    let (shell, shell_flag) = melos_core::runner::shell_command();
+                    let status = tokio::process::Command::new(shell)
+                        .arg(shell_flag)
+                        .arg(cmd)
+                        .current_dir(&workspace.root_path)
+                        .envs(&env_vars)
+                        .status()
+                        .await?;
 
-                if !status.success() {
-                    bail!(
-                        "Script '{}' failed with exit code: {}",
-                        script_name,
-                        status.code().unwrap_or(-1)
-                    );
+                    if !status.success() {
+                        bail!(
+                            "Script '{}' failed with exit code: {}",
+                            script_name,
+                            status.code().unwrap_or(-1)
+                        );
+                    }
                 }
             }
         }
-    } else {
-        bail!(
-            "Script '{}' has no runnable configuration (no `run`, `exec`, or `steps` defined)",
-            script_name
-        );
+        (None, None, None) => {
+            bail!(
+                "Script '{}' has no runnable configuration (no `run`, `exec`, or `steps` defined)",
+                script_name
+            );
+        }
     }
 
     // Remove from visited so the same script can appear in separate chains

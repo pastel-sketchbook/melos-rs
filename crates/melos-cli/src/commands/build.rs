@@ -295,6 +295,7 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
             let flavor = build_config
                 .flavors
                 .get(*flavor_name)
+                // safety: resolve_flavors() already validated all flavor names exist in config
                 .expect("flavor validated in resolve_flavors");
 
             if packages.is_empty() {
