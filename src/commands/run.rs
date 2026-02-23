@@ -358,7 +358,8 @@ async fn run_script_recursive(
         run_exec_config_script(workspace, script, exec_cmd, &env_vars, cli_filters).await?;
     } else if let Some(run_command) = script.run_command() {
         // Mode 3: Traditional run command
-        let substituted = normalize_line_continuations(&substitute_env_vars(run_command, &env_vars));
+        let substituted =
+            normalize_line_continuations(&substitute_env_vars(run_command, &env_vars));
 
         if is_exec_command(&substituted) {
             // Legacy exec-style: `melos exec -- <command>` in run string

@@ -199,10 +199,43 @@ fn extract_version_constraint(value: &yaml_serde::Value) -> Option<String> {
     }
 }
 
+/// Directories excluded during package discovery.
+///
+/// These contain cached dependencies, build artifacts, or IDE files whose
+/// `pubspec.yaml` files should never be treated as workspace packages.
+/// Matches the ignore patterns used by real Melos:
+///   `.dart_tool`, `.symlinks/plugins`, `.fvm`, `.plugin_symlinks`
+/// plus additional safety exclusions for `.pub-cache`, `build`, and IDE dirs.
+const EXCLUDED_PACKAGE_DIRS: &[&str] = &[
+    ".dart_tool",
+    ".symlinks",
+    ".plugin_symlinks",
+    ".pub-cache",
+    ".pub",
+    ".fvm",
+    "build",
+    ".idea",
+    ".vscode",
+];
+
+/// Returns `true` if any component of `path` (relative to `root`) is in
+/// [`EXCLUDED_PACKAGE_DIRS`], meaning the path lives inside an artifact
+/// directory and should be skipped during package discovery.
+fn is_in_excluded_dir(path: &Path, root: &Path) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    relative
+        .components()
+        .any(|c| matches!(c, std::path::Component::Normal(s) if EXCLUDED_PACKAGE_DIRS.contains(&s.to_str().unwrap_or(""))))
+}
+
 /// Discover all packages in the workspace matching the given glob patterns.
 ///
 /// Glob iteration is sequential (cheap directory matching), but pubspec parsing
 /// is parallelized across cores via rayon for faster discovery in large workspaces.
+///
+/// Directories listed in [`EXCLUDED_PACKAGE_DIRS`] (e.g. `.dart_tool`,
+/// `.symlinks`, `build`) are automatically skipped so that cached
+/// dependencies and build artifacts are never treated as workspace packages.
 pub fn discover_packages(root: &Path, patterns: &[String]) -> Result<Vec<Package>> {
     // Phase 1: collect candidate directories sequentially (glob is fast)
     let mut candidate_dirs: Vec<PathBuf> = Vec::new();
@@ -214,6 +247,11 @@ pub fn discover_packages(root: &Path, patterns: &[String]) -> Result<Vec<Package
             .with_context(|| format!("Invalid glob pattern: {}", pattern))?
         {
             let entry_path = entry.with_context(|| "Failed to read glob entry")?;
+
+            // Skip directories inside artifact/cache directories
+            if is_in_excluded_dir(&entry_path, root) {
+                continue;
+            }
 
             if entry_path.is_dir() && entry_path.join("pubspec.yaml").exists() {
                 candidate_dirs.push(entry_path);
@@ -535,5 +573,233 @@ mod tests {
             resolution: None,
         };
         assert!(!pkg.uses_workspace_resolution());
+    }
+
+    // --- is_in_excluded_dir tests ---
+
+    #[test]
+    fn test_excluded_dir_dart_tool() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/packages/app/.dart_tool/cache/some_pkg");
+        assert!(is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_excluded_dir_symlinks() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/packages/app/.symlinks/plugins/path_provider_windows");
+        assert!(is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_excluded_dir_plugin_symlinks() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/packages/app/.plugin_symlinks/some_plugin");
+        assert!(is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_excluded_dir_fvm() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/.fvm/versions/3.10.0/packages/sky_engine");
+        assert!(is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_excluded_dir_pub_cache() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/packages/app/.pub-cache/hosted/pub.dev/http-1.0.0");
+        assert!(is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_excluded_dir_build() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/packages/app/build/flutter_assets");
+        assert!(is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_excluded_dir_ide_directories() {
+        let root = Path::new("/workspace");
+        assert!(is_in_excluded_dir(
+            Path::new("/workspace/.idea/libraries"),
+            root,
+        ));
+        assert!(is_in_excluded_dir(
+            Path::new("/workspace/.vscode/settings"),
+            root,
+        ));
+    }
+
+    #[test]
+    fn test_not_excluded_normal_package() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/packages/core");
+        assert!(!is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_not_excluded_nested_package() {
+        let root = Path::new("/workspace");
+        let path = Path::new("/workspace/packages/features/auth");
+        assert!(!is_in_excluded_dir(path, root));
+    }
+
+    #[test]
+    fn test_excluded_dir_deeply_nested() {
+        let root = Path::new("/workspace");
+        // .symlinks deeply nested inside a package
+        let path = Path::new("/workspace/packages/app/ios/.symlinks/plugins/url_launcher_ios");
+        assert!(is_in_excluded_dir(path, root));
+    }
+
+    // --- discover_packages exclusion integration tests ---
+
+    #[test]
+    fn test_discover_excludes_dart_tool_packages() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Real package
+        let real_pkg = root.join("packages").join("core");
+        fs::create_dir_all(&real_pkg).unwrap();
+        fs::write(
+            real_pkg.join("pubspec.yaml"),
+            "name: core\nversion: 1.0.0\n",
+        )
+        .unwrap();
+
+        // Cached package inside .dart_tool (should be excluded)
+        let cached_pkg = root
+            .join("packages")
+            .join("core")
+            .join(".dart_tool")
+            .join("package_config")
+            .join("cached_dep");
+        fs::create_dir_all(&cached_pkg).unwrap();
+        fs::write(
+            cached_pkg.join("pubspec.yaml"),
+            "name: cached_dep\nversion: 0.1.0\n",
+        )
+        .unwrap();
+
+        let packages = discover_packages(root, &["packages/**".to_string()]).unwrap();
+        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"core"), "real package should be found");
+        assert!(
+            !names.contains(&"cached_dep"),
+            ".dart_tool packages should be excluded"
+        );
+    }
+
+    #[test]
+    fn test_discover_excludes_symlinks_packages() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Real package
+        let real_pkg = root.join("packages").join("app");
+        fs::create_dir_all(&real_pkg).unwrap();
+        fs::write(real_pkg.join("pubspec.yaml"), "name: app\nversion: 1.0.0\n").unwrap();
+
+        // Symlinked plugin package (should be excluded)
+        let symlink_pkg = root
+            .join("packages")
+            .join("app")
+            .join(".symlinks")
+            .join("plugins")
+            .join("path_provider_windows");
+        fs::create_dir_all(&symlink_pkg).unwrap();
+        fs::write(
+            symlink_pkg.join("pubspec.yaml"),
+            "name: path_provider_windows\nversion: 2.0.0\n",
+        )
+        .unwrap();
+
+        let packages = discover_packages(root, &["packages/**".to_string()]).unwrap();
+        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"app"));
+        assert!(
+            !names.contains(&"path_provider_windows"),
+            ".symlinks packages should be excluded"
+        );
+    }
+
+    #[test]
+    fn test_discover_excludes_build_dir_packages() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Real package
+        let real_pkg = root.join("packages").join("ui");
+        fs::create_dir_all(&real_pkg).unwrap();
+        fs::write(real_pkg.join("pubspec.yaml"), "name: ui\nversion: 1.0.0\n").unwrap();
+
+        // Build artifact package (should be excluded)
+        let build_pkg = root
+            .join("packages")
+            .join("ui")
+            .join("build")
+            .join("some_output");
+        fs::create_dir_all(&build_pkg).unwrap();
+        fs::write(
+            build_pkg.join("pubspec.yaml"),
+            "name: build_artifact\nversion: 0.0.1\n",
+        )
+        .unwrap();
+
+        let packages = discover_packages(root, &["packages/**".to_string()]).unwrap();
+        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"ui"));
+        assert!(
+            !names.contains(&"build_artifact"),
+            "build dir packages should be excluded"
+        );
+    }
+
+    #[test]
+    fn test_discover_excludes_multiple_artifact_dirs() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Real packages
+        let pkg_a = root.join("packages").join("pkg_a");
+        fs::create_dir_all(&pkg_a).unwrap();
+        fs::write(pkg_a.join("pubspec.yaml"), "name: pkg_a\nversion: 1.0.0\n").unwrap();
+
+        let pkg_b = root.join("packages").join("pkg_b");
+        fs::create_dir_all(&pkg_b).unwrap();
+        fs::write(pkg_b.join("pubspec.yaml"), "name: pkg_b\nversion: 1.0.0\n").unwrap();
+
+        // Various artifact packages that should all be excluded
+        for excluded in &[".dart_tool", ".symlinks", ".fvm", ".pub-cache", "build"] {
+            let artifact = root
+                .join("packages")
+                .join("pkg_a")
+                .join(excluded)
+                .join("fake_pkg");
+            fs::create_dir_all(&artifact).unwrap();
+            fs::write(
+                artifact.join("pubspec.yaml"),
+                &format!(
+                    "name: fake_{}\nversion: 0.0.1\n",
+                    excluded.replace(['.', '-'], "_")
+                ),
+            )
+            .unwrap();
+        }
+
+        let packages = discover_packages(root, &["packages/**".to_string()]).unwrap();
+        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+
+        assert_eq!(
+            names.len(),
+            2,
+            "only real packages should be found: {:?}",
+            names
+        );
+        assert!(names.contains(&"pkg_a"));
+        assert!(names.contains(&"pkg_b"));
     }
 }

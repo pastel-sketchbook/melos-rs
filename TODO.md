@@ -576,6 +576,23 @@ End-to-end CLI tests for dry-run modes, health --json, and exec summary.
 - [x] `test_exec_success_summary` — exec outputs standardized "All 2 package(s) passed exec." message
 - [x] `task check:all` passes — 384 tests (358 unit + 26 integration), zero clippy warnings
 
+## Batch 30 — Fix package discovery excluding artifact directories (14 tests)
+
+Real-world bug: `discover_packages()` with `packages/**` glob descended into `.dart_tool`,
+`.symlinks`, `.pub-cache`, and `build` directories, discovering cached dependency pubspec.yaml
+files (e.g. `path_provider_windows`, `url_launcher_example`) as workspace packages.
+
+- [x] Added `EXCLUDED_PACKAGE_DIRS` constant with 9 artifact directory names matching real Melos
+      `_commonIgnorePatterns` (`.dart_tool`, `.symlinks`, `.plugin_symlinks`, `.pub-cache`, `.pub`,
+      `.fvm`, `build`, `.idea`, `.vscode`)
+- [x] Added `is_in_excluded_dir()` helper that checks if any path component is in the exclusion set
+- [x] Updated `discover_packages()` to skip excluded directories before checking for pubspec.yaml
+- [x] Tests: 14 new tests (405 total: 379 unit + 26 integration)
+  - 10 unit tests for `is_in_excluded_dir()` covering all excluded dirs, normal paths, nested paths
+  - 4 integration tests for `discover_packages()` exclusion: `.dart_tool`, `.symlinks`, `build`,
+    and combined multiple artifact directories
+- [x] `task check:all` passes — 405 tests, zero clippy warnings
+
 ## Remaining / Future
 
 Stretch goals and out-of-scope items. None of these are required for Melos 7.4.0 CLI parity.
