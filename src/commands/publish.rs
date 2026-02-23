@@ -27,6 +27,11 @@ pub struct PublishArgs {
     #[arg(long)]
     pub yes: bool,
 
+    /// Print release URL links after publishing (requires `repository` in config).
+    /// Generates prefilled release creation page links for each published package.
+    #[arg(long, short = 'r')]
+    pub release_url: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -170,6 +175,27 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
         }
     }
 
+    // Print release URLs if requested (only for real publishes, not dry runs)
+    if args.release_url && !args.dry_run && !succeeded.is_empty() {
+        if let Some(ref repo) = workspace.config.repository {
+            println!("\n{} Release URLs:", "$".cyan());
+            for pkg_name in &succeeded {
+                if let Some(pkg) = packages.iter().find(|p| &p.name == pkg_name) {
+                    let version = pkg.version.as_deref().unwrap_or("0.0.0");
+                    let tag = format!("{}-v{}", pkg_name, version);
+                    let title = format!("{} v{}", pkg_name, version);
+                    let url = repo.release_url(&tag, &title);
+                    println!("  {} {}", pkg_name.bold(), url);
+                }
+            }
+        } else {
+            println!(
+                "\n{} --release-url requires `repository` in config; skipping.",
+                "WARN:".yellow()
+            );
+        }
+    }
+
     // Run post-publish hook before bail on failure, matching Melos behavior
     if let Some(post_hook) = workspace
         .config
@@ -247,5 +273,35 @@ mod tests {
     #[test]
     fn test_build_git_tag_zero_version() {
         assert_eq!(build_git_tag("utils", "0.0.0"), "utils-v0.0.0");
+    }
+
+    #[test]
+    fn test_release_url_format_matches_tag() {
+        use crate::config::RepositoryConfig;
+
+        let repo = RepositoryConfig {
+            url: "https://github.com/org/repo".to_string(),
+        };
+        let pkg_name = "my_package";
+        let version = "1.2.3";
+        let tag = format!("{}-v{}", pkg_name, version);
+        let title = format!("{} v{}", pkg_name, version);
+        let url = repo.release_url(&tag, &title);
+        assert!(url.contains("tag=my_package-v1.2.3"));
+        assert!(url.contains("title=my_package%20v1.2.3"));
+    }
+
+    #[test]
+    fn test_release_url_prerelease_tag() {
+        use crate::config::RepositoryConfig;
+
+        let repo = RepositoryConfig {
+            url: "https://github.com/org/repo".to_string(),
+        };
+        let tag = format!("{}-v{}", "core", "2.0.0-beta.1");
+        let title = format!("{} v{}", "core", "2.0.0-beta.1");
+        let url = repo.release_url(&tag, &title);
+        assert!(url.contains("tag=core-v2.0.0-beta.1"));
+        assert!(url.starts_with("https://github.com/org/repo/releases/new?"));
     }
 }

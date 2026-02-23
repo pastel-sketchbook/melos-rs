@@ -512,10 +512,19 @@ pub struct VersionCommandConfig {
     #[serde(default)]
     pub changelog_format: Option<ChangelogFormatConfig>,
 
-    /// When true, update git tag references in dependent packages' pubspec.yaml
+    /// Whether to update git tag references in dependent packages' pubspec.yaml
     /// that use git dependencies with `ref:` pointing to a tag of a bumped package.
     #[serde(default)]
     pub update_git_tag_refs: Option<bool>,
+
+    /// Release branch pattern. When set, a release branch is created after versioning.
+    ///
+    /// The pattern supports `{version}` as a placeholder for the resolved version string.
+    /// Example: `release/{version}` creates branches like `release/1.2.3`.
+    ///
+    /// Can be overridden at the CLI with `--release-branch` / `--no-release-branch`.
+    #[serde(default)]
+    pub release_branch: Option<String>,
 }
 
 impl VersionCommandConfig {
@@ -564,6 +573,13 @@ impl VersionCommandConfig {
     /// Whether to update git tag refs in dependent packages
     pub fn should_update_git_tag_refs(&self) -> bool {
         self.update_git_tag_refs.unwrap_or(false)
+    }
+
+    /// Get the release branch pattern, if configured.
+    ///
+    /// Returns `None` when no release branch should be created.
+    pub fn release_branch_pattern(&self) -> Option<&str> {
+        self.release_branch.as_deref()
     }
 
     /// Whether to include the date in changelog version headers (default: false per Melos docs)

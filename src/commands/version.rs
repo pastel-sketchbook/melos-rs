@@ -100,6 +100,17 @@ pub struct VersionArgs {
     #[arg(long, short = 'r')]
     pub release_url: bool,
 
+    /// Create a release branch after versioning. Value is a branch name pattern
+    /// where `{version}` is replaced with the release version.
+    /// Example: `release/{version}` creates `release/1.2.3`.
+    /// Overrides the `releaseBranch` config setting.
+    #[arg(long)]
+    pub release_branch: Option<String>,
+
+    /// Disable release branch creation even if configured.
+    #[arg(long, conflicts_with = "release_branch")]
+    pub no_release_branch: bool,
+
     #[command(flatten)]
     pub filters: crate::cli::GlobalFilterArgs,
 }
@@ -606,6 +617,72 @@ pub fn git_push(root: &Path, include_tags: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Create a release branch from the current HEAD.
+///
+/// The `pattern` string supports a `{version}` placeholder which is replaced
+/// with the provided version string. For example, `release/{version}` with
+/// version `1.2.3` creates a branch named `release/1.2.3`.
+pub fn create_release_branch(root: &Path, pattern: &str, version: &str) -> Result<String> {
+    let branch_name = pattern.replace("{version}", version);
+
+    let status = std::process::Command::new("git")
+        .args(["checkout", "-b", &branch_name])
+        .current_dir(root)
+        .status()
+        .with_context(|| format!("Failed to create release branch '{}'", branch_name))?;
+
+    if !status.success() {
+        bail!("git checkout -b '{}' failed", branch_name);
+    }
+
+    Ok(branch_name)
+}
+
+/// Push a release branch to the remote repository.
+pub fn push_release_branch(root: &Path, branch_name: &str) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .args(["push", "-u", "origin", branch_name])
+        .current_dir(root)
+        .status()
+        .with_context(|| format!("Failed to push release branch '{}'", branch_name))?;
+
+    if !status.success() {
+        bail!("git push -u origin '{}' failed", branch_name);
+    }
+
+    Ok(())
+}
+
+/// Switch back to a branch after creating a release branch.
+pub fn git_checkout(root: &Path, branch: &str) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .args(["checkout", branch])
+        .current_dir(root)
+        .status()
+        .with_context(|| format!("Failed to checkout branch '{}'", branch))?;
+
+    if !status.success() {
+        bail!("git checkout '{}' failed", branch);
+    }
+
+    Ok(())
+}
+
+/// Get the current git branch name.
+pub fn git_current_branch(root: &Path) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(root)
+        .output()
+        .context("Failed to get current git branch")?;
+
+    if !output.status.success() {
+        bail!("git rev-parse --abbrev-ref HEAD failed");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Fetch tags from the remote repository.
@@ -1580,6 +1657,41 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             println!(
                 "\n{} --release-url requires `repository` in config; skipping.",
                 "WARN:".yellow()
+            );
+        }
+    }
+
+    // Create release branch if requested (CLI flag or config pattern)
+    let release_branch_pattern = if args.no_release_branch {
+        None
+    } else {
+        args.release_branch
+            .as_deref()
+            .or_else(|| version_config.and_then(|c| c.release_branch_pattern()))
+    };
+    if let Some(pattern) = release_branch_pattern {
+        // Determine the version string: use the first versioned package's version
+        if let Some((_, version)) = versioned.first() {
+            let original_branch = git_current_branch(&workspace.root_path)?;
+            let branch_name =
+                create_release_branch(&workspace.root_path, pattern, &version.to_string())?;
+            println!(
+                "\n{} Created release branch: {}",
+                "$".cyan(),
+                branch_name.bold()
+            );
+
+            if should_push {
+                push_release_branch(&workspace.root_path, &branch_name)?;
+                println!("  {} Pushed release branch", "OK".green());
+            }
+
+            // Switch back to the original branch
+            git_checkout(&workspace.root_path, &original_branch)?;
+            println!(
+                "  {} Switched back to {}",
+                "OK".green(),
+                original_branch.bold()
             );
         }
     }
@@ -2868,5 +2980,218 @@ command:
             .unwrap();
         let tag = find_latest_git_tag(tmp.path());
         assert_eq!(tag.as_deref(), Some("v1.0.0"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch 24: release branch management
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_release_branch_config() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    releaseBranch: "release/{version}"
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert_eq!(
+            version_config.release_branch_pattern(),
+            Some("release/{version}")
+        );
+    }
+
+    #[test]
+    fn test_parse_release_branch_default_none() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    branch: main
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert!(version_config.release_branch_pattern().is_none());
+    }
+
+    #[test]
+    fn test_parse_release_branch_custom_pattern() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  version:
+    releaseBranch: "releases/v{version}"
+"#;
+        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let version_config = config.command.unwrap().version.unwrap();
+        assert_eq!(
+            version_config.release_branch_pattern(),
+            Some("releases/v{version}")
+        );
+    }
+
+    #[test]
+    fn test_create_release_branch_in_git_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Set up a git repo with an initial commit
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init", "--author", "Test <test@test.com>"])
+            .current_dir(tmp.path())
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+
+        let branch_name = create_release_branch(tmp.path(), "release/{version}", "1.2.3").unwrap();
+        assert_eq!(branch_name, "release/1.2.3");
+
+        // Verify we're on the release branch
+        let current = git_current_branch(tmp.path()).unwrap();
+        assert_eq!(current, "release/1.2.3");
+    }
+
+    #[test]
+    fn test_create_release_branch_custom_pattern() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init", "--author", "Test <test@test.com>"])
+            .current_dir(tmp.path())
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+
+        let branch_name =
+            create_release_branch(tmp.path(), "releases/v{version}", "2.0.0-beta.1").unwrap();
+        assert_eq!(branch_name, "releases/v2.0.0-beta.1");
+    }
+
+    #[test]
+    fn test_git_checkout_back_to_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init", "--author", "Test <test@test.com>"])
+            .current_dir(tmp.path())
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+
+        // Create a release branch and switch back
+        let original = git_current_branch(tmp.path()).unwrap();
+        assert_eq!(original, "main");
+
+        create_release_branch(tmp.path(), "release/{version}", "1.0.0").unwrap();
+        assert_eq!(git_current_branch(tmp.path()).unwrap(), "release/1.0.0");
+
+        git_checkout(tmp.path(), &original).unwrap();
+        assert_eq!(git_current_branch(tmp.path()).unwrap(), "main");
+    }
+
+    #[test]
+    fn test_release_branch_pattern_no_placeholder() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init", "--author", "Test <test@test.com>"])
+            .current_dir(tmp.path())
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+
+        // Pattern without {version} should just use the literal string
+        let branch_name = create_release_branch(tmp.path(), "release-branch", "1.0.0").unwrap();
+        assert_eq!(branch_name, "release-branch");
     }
 }

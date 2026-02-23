@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use serde::Deserialize;
 
 /// Represents a Dart/Flutter package found in the workspace
@@ -177,36 +178,43 @@ fn extract_version_constraint(value: &yaml_serde::Value) -> Option<String> {
     }
 }
 
-/// Discover all packages in the workspace matching the given glob patterns
+/// Discover all packages in the workspace matching the given glob patterns.
+///
+/// Glob iteration is sequential (cheap directory matching), but pubspec parsing
+/// is parallelized across cores via rayon for faster discovery in large workspaces.
 pub fn discover_packages(root: &Path, patterns: &[String]) -> Result<Vec<Package>> {
-    let mut packages = Vec::new();
+    // Phase 1: collect candidate directories sequentially (glob is fast)
+    let mut candidate_dirs: Vec<PathBuf> = Vec::new();
 
     for pattern in patterns {
         let full_pattern = root.join(pattern).display().to_string();
 
-        // Glob matches directories; each should contain a pubspec.yaml
         for entry in glob::glob(&full_pattern)
             .with_context(|| format!("Invalid glob pattern: {}", pattern))?
         {
             let entry_path = entry.with_context(|| "Failed to read glob entry")?;
 
-            if entry_path.is_dir() {
-                let pubspec = entry_path.join("pubspec.yaml");
-                if pubspec.exists() {
-                    match Package::from_path(&entry_path) {
-                        Ok(pkg) => packages.push(pkg),
-                        Err(e) => {
-                            eprintln!(
-                                "Warning: Failed to parse package at {}: {}",
-                                entry_path.display(),
-                                e
-                            );
-                        }
-                    }
-                }
+            if entry_path.is_dir() && entry_path.join("pubspec.yaml").exists() {
+                candidate_dirs.push(entry_path);
             }
         }
     }
+
+    // Phase 2: parse pubspec.yaml files in parallel
+    let mut packages: Vec<Package> = candidate_dirs
+        .par_iter()
+        .filter_map(|dir| match Package::from_path(dir) {
+            Ok(pkg) => Some(pkg),
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to parse package at {}: {}",
+                    dir.display(),
+                    e
+                );
+                None
+            }
+        })
+        .collect();
 
     // Sort by name for deterministic ordering
     packages.sort_by(|a, b| a.name.cmp(&b.name));

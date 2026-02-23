@@ -427,3 +427,28 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - `test_build_pub_add_command_regular`, `test_build_pub_add_command_dev`, `test_build_pub_add_command_with_version`, `test_build_pub_remove_command`
   - `test_build_extra_flags_update_goldens_only`, `test_build_test_command_with_update_goldens`
   - `test_parse_test_config_with_hooks`, `test_parse_test_config_pre_only`, `test_parse_test_config_absent`
+
+### Batch 24: Performance & Release Management
+- [x] Theme A: Parallel package discovery with rayon
+  - Added `rayon` dependency to `Cargo.toml`
+  - Refactored `discover_packages()` in `package/mod.rs` to two phases:
+    1. Sequential glob iteration to collect candidate directories (fast)
+    2. Parallel `Package::from_path()` via `rayon::par_iter()` for pubspec parsing
+  - Deterministic output preserved via post-discovery sort by name
+- [x] Theme B: Release branch management in version command
+  - Added `releaseBranch` config field to `VersionCommandConfig` (pattern string with `{version}` placeholder)
+  - Added `release_branch_pattern()` accessor method
+  - Added `--release-branch <pattern>` CLI flag to `VersionArgs` (overrides config)
+  - Added `--no-release-branch` CLI flag (disables even if configured)
+  - Added helper functions: `create_release_branch()`, `push_release_branch()`, `git_checkout()`, `git_current_branch()`
+  - Wired into `run()`: after push, creates release branch from HEAD, pushes if push is enabled, switches back to original branch
+- [x] Theme C: Release URL support in publish command
+  - Added `--release-url` / `-r` flag to `PublishArgs`
+  - After successful publish (non-dry-run), prints prefilled GitHub release creation page links
+  - Reuses `RepositoryConfig::release_url()` from config module
+  - Warns when `--release-url` is used without `repository` in config
+- [x] Tests: 9 new tests (356 total: 336 unit + 20 integration)
+  - `test_parse_release_branch_config`, `test_parse_release_branch_default_none`, `test_parse_release_branch_custom_pattern`
+  - `test_create_release_branch_in_git_repo`, `test_create_release_branch_custom_pattern`
+  - `test_git_checkout_back_to_original`, `test_release_branch_pattern_no_placeholder`
+  - `test_release_url_format_matches_tag`, `test_release_url_prerelease_tag`
