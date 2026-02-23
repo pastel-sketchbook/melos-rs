@@ -273,12 +273,10 @@ fn list_scripts(
             } else {
                 String::new()
             };
-            let mode = if entry.steps().is_some() {
-                format!(" {}", "(steps)".dimmed())
-            } else if entry.has_exec_config() {
-                format!(" {}", "(exec)".dimmed())
-            } else {
-                String::new()
+            let mode = match (entry.steps().is_some(), entry.has_exec_config()) {
+                (true, _) => format!(" {}", "(steps)".dimmed()),
+                (_, true) => format!(" {}", "(exec)".dimmed()),
+                _ => String::new(),
             };
             println!(
                 "  {} {}{}{}{}",

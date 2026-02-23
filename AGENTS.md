@@ -18,7 +18,7 @@ You are a senior Rust engineer building a high-performance CLI tool. You impleme
 You are a senior engineer who evaluates changes for quality, correctness, and adherence to Rust best practices.
 
 **Responsibilities:**
-- Verify error handling is comprehensive (no unwrap in non-test code)
+- Verify error handling is comprehensive (no `unwrap()` in non-test code; `.expect()` only with safety comment)
 - Check that async code doesn't have subtle race conditions
 - Ensure CLI UX is consistent and helpful
 - Validate YAML config parsing handles edge cases
@@ -91,7 +91,7 @@ melos-rs/
 
 # CORE DEVELOPMENT PRINCIPLES
 
-- **No Panics**: Never use `unwrap()` or `expect()` in non-test code. Use `?` with `anyhow::Context`.
+- **No Panics**: Never use `unwrap()` in non-test code. Use `?` with `anyhow::Context`. `.expect()` is permitted only when the invariant is logically guaranteed, with a safety comment explaining why (e.g., `// safety: regex group 0 always exists`).
 - **Error Messages**: Provide actionable error messages with context about what went wrong.
 - **Concurrency Safety**: Use `Arc<Semaphore>` for concurrency limits, `AtomicBool` for fail-fast.
 - **Config Compatibility**: Parse the same `melos.yaml` format that Melos uses.

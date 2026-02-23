@@ -1103,18 +1103,16 @@ pub fn parse_config(source: &ConfigSource) -> Result<MelosConfig> {
             // Dart workspace paths are explicit directory paths (e.g. "packages/core"),
             // but discover_packages expects glob patterns. We append "/**" if the path
             // doesn't already contain a glob character.
-            let packages = if let Some(pkgs) = wrapper.melos.packages {
-                pkgs
-            } else if let Some(ws_paths) = wrapper.workspace {
+            let packages = match (wrapper.melos.packages, wrapper.workspace) {
+                (Some(pkgs), _) => pkgs,
                 // Dart workspace lists explicit package paths, not globs.
                 // Keep them as-is — discover_packages will match the directory.
-                ws_paths
-            } else {
-                anyhow::bail!(
+                (None, Some(ws_paths)) => ws_paths,
+                (None, None) => anyhow::bail!(
                     "No package paths found in pubspec.yaml: neither `melos.packages` nor `workspace:` is set.\n\
                      \n\
                      Hint: Add a `workspace:` field listing your package paths, or add `packages:` under `melos:`."
-                );
+                ),
             };
 
             Ok(MelosConfig {
