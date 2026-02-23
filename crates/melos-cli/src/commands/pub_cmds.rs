@@ -4,6 +4,7 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
+use melos_core::commands::pub_cmds::{build_pub_add_command, build_pub_remove_command, pub_cmd};
 use melos_core::package::Package;
 use melos_core::package::filter::apply_filters_with_categories;
 use melos_core::runner::ProcessRunner;
@@ -130,11 +131,6 @@ pub async fn run(workspace: &Workspace, args: PubArgs) -> Result<()> {
     }
 }
 
-/// Build the appropriate `pub` command prefix for a package (flutter vs dart)
-fn pub_cmd(pkg: &Package) -> &'static str {
-    if pkg.is_flutter { "flutter" } else { "dart" }
-}
-
 /// Common logic for all pub subcommands: filter packages, print header, and run.
 ///
 /// `show_sdk` controls whether the SDK (flutter/dart) is shown next to each
@@ -239,20 +235,6 @@ async fn run_pub_remove(workspace: &Workspace, args: PubRemoveArgs) -> Result<()
     run_pub_subcommand(workspace, &args.filters, &subcmd, args.concurrency, true).await
 }
 
-/// Build the `pub add` subcommand string.
-fn build_pub_add_command(package: &str, dev: bool) -> String {
-    if dev {
-        format!("pub add --dev {}", package)
-    } else {
-        format!("pub add {}", package)
-    }
-}
-
-/// Build the `pub remove` subcommand string.
-fn build_pub_remove_command(package: &str) -> String {
-    format!("pub remove {}", package)
-}
-
 /// Run a `pub` subcommand in each package, using the appropriate SDK (flutter vs dart).
 ///
 /// Because each package may use a different command prefix (flutter vs dart), we run
@@ -320,62 +302,6 @@ async fn run_pub_in_packages(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn test_pub_cmd_flutter() {
-        let pkg = Package {
-            name: "app".to_string(),
-            version: Some("1.0.0".to_string()),
-            path: std::path::PathBuf::from("/pkg/app"),
-            is_flutter: true,
-            dependencies: vec![],
-            dev_dependencies: vec![],
-            dependency_versions: HashMap::new(),
-            publish_to: None,
-            resolution: None,
-        };
-        assert_eq!(pub_cmd(&pkg), "flutter");
-    }
-
-    #[test]
-    fn test_pub_cmd_dart() {
-        let pkg = Package {
-            name: "core".to_string(),
-            version: Some("1.0.0".to_string()),
-            path: std::path::PathBuf::from("/pkg/core"),
-            is_flutter: false,
-            dependencies: vec![],
-            dev_dependencies: vec![],
-            dependency_versions: HashMap::new(),
-            publish_to: None,
-            resolution: None,
-        };
-        assert_eq!(pub_cmd(&pkg), "dart");
-    }
-
-    #[test]
-    fn test_build_pub_add_command_regular() {
-        let cmd = build_pub_add_command("http", false);
-        assert_eq!(cmd, "pub add http");
-    }
-
-    #[test]
-    fn test_build_pub_add_command_dev() {
-        let cmd = build_pub_add_command("mockito", true);
-        assert_eq!(cmd, "pub add --dev mockito");
-    }
-
-    #[test]
-    fn test_build_pub_add_command_with_version() {
-        let cmd = build_pub_add_command("http:^1.0.0", false);
-        assert_eq!(cmd, "pub add http:^1.0.0");
-    }
-
-    #[test]
-    fn test_build_pub_remove_command() {
-        let cmd = build_pub_remove_command("http");
-        assert_eq!(cmd, "pub remove http");
-    }
+    // Unit tests for pub_cmd, build_pub_add_command, and build_pub_remove_command
+    // are in melos_core::commands::pub_cmds::tests.
 }

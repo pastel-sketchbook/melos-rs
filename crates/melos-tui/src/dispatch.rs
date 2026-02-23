@@ -7,6 +7,7 @@ use melos_core::commands::bootstrap::BootstrapOpts;
 use melos_core::commands::clean::CleanOpts;
 use melos_core::commands::format::FormatOpts;
 use melos_core::commands::health::{HealthOpts, HealthReport};
+use melos_core::commands::pub_cmds::{PubOpts, PubSubcommand};
 use melos_core::commands::publish::PublishOpts;
 use melos_core::commands::test::TestOpts;
 use melos_core::events::Event;
@@ -60,8 +61,12 @@ pub async fn dispatch_command(
                     no_fatal: false,
                 },
             };
-            let r = melos_core::commands::analyze::run(packages, workspace, &core_opts, Some(&tx)).await?;
-            Ok(DispatchResult { package_results: r, health_report: None })
+            let r = melos_core::commands::analyze::run(packages, workspace, &core_opts, Some(&tx))
+                .await?;
+            Ok(DispatchResult {
+                package_results: r,
+                health_report: None,
+            })
         }
         "bootstrap" => {
             let core_opts = match opts {
@@ -83,16 +88,25 @@ pub async fn dispatch_command(
                     offline: false,
                 },
             };
-            let r = melos_core::commands::bootstrap::run(packages, workspace, &core_opts, Some(&tx)).await?;
-            Ok(DispatchResult { package_results: r, health_report: None })
+            let r =
+                melos_core::commands::bootstrap::run(packages, workspace, &core_opts, Some(&tx))
+                    .await?;
+            Ok(DispatchResult {
+                package_results: r,
+                health_report: None,
+            })
         }
         "clean" => {
             let core_opts = match opts {
                 Some(CommandOpts::Clean { concurrency }) => CleanOpts { concurrency },
                 _ => CleanOpts { concurrency: 1 },
             };
-            let r = melos_core::commands::clean::run(packages, workspace, &core_opts, Some(&tx)).await?;
-            Ok(DispatchResult { package_results: r, health_report: None })
+            let r = melos_core::commands::clean::run(packages, workspace, &core_opts, Some(&tx))
+                .await?;
+            Ok(DispatchResult {
+                package_results: r,
+                health_report: None,
+            })
         }
         "format" => {
             let core_opts = match opts {
@@ -113,8 +127,12 @@ pub async fn dispatch_command(
                     line_length: None,
                 },
             };
-            let r = melos_core::commands::format::run(packages, workspace, &core_opts, Some(&tx)).await?;
-            Ok(DispatchResult { package_results: r, health_report: None })
+            let r = melos_core::commands::format::run(packages, workspace, &core_opts, Some(&tx))
+                .await?;
+            Ok(DispatchResult {
+                package_results: r,
+                health_report: None,
+            })
         }
         "test" => {
             let core_opts = match opts {
@@ -143,8 +161,12 @@ pub async fn dispatch_command(
                     extra_args: vec![],
                 },
             };
-            let r = melos_core::commands::test::run(packages, workspace, &core_opts, Some(&tx)).await?;
-            Ok(DispatchResult { package_results: r, health_report: None })
+            let r =
+                melos_core::commands::test::run(packages, workspace, &core_opts, Some(&tx)).await?;
+            Ok(DispatchResult {
+                package_results: r,
+                health_report: None,
+            })
         }
         "publish" => {
             let core_opts = match opts {
@@ -160,8 +182,12 @@ pub async fn dispatch_command(
                     concurrency: 1,
                 },
             };
-            let r = melos_core::commands::publish::run(packages, workspace, &core_opts, Some(&tx)).await?;
-            Ok(DispatchResult { package_results: r, health_report: None })
+            let r = melos_core::commands::publish::run(packages, workspace, &core_opts, Some(&tx))
+                .await?;
+            Ok(DispatchResult {
+                package_results: r,
+                health_report: None,
+            })
         }
         "health" => {
             let health_opts = match opts {
@@ -185,6 +211,39 @@ pub async fn dispatch_command(
                 },
             };
             dispatch_health(packages, &health_opts, &tx)
+        }
+        "pub" => {
+            let core_opts = match opts {
+                Some(CommandOpts::Pub {
+                    subcommand,
+                    concurrency,
+                    major_versions,
+                }) => {
+                    let subcmd = match subcommand {
+                        2 => PubSubcommand::Outdated,
+                        3 => PubSubcommand::Upgrade,
+                        4 => PubSubcommand::Downgrade,
+                        _ => PubSubcommand::Get,
+                    };
+                    PubOpts {
+                        subcommand: subcmd,
+                        concurrency,
+                        major_versions,
+                    }
+                }
+                _ => PubOpts {
+                    subcommand: PubSubcommand::Get,
+                    concurrency: 1,
+                    major_versions: false,
+                },
+            };
+            let r =
+                melos_core::commands::pub_cmds::run(packages, workspace, &core_opts, Some(&tx))
+                    .await?;
+            Ok(DispatchResult {
+                package_results: r,
+                health_report: None,
+            })
         }
         "exec" => {
             bail!("exec requires a command argument (not yet supported in TUI)")

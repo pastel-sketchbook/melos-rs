@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::app::App;
@@ -157,7 +157,7 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use std::time::Duration;
 
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::app::{App, AppState};

@@ -7,6 +7,7 @@ pub mod format;
 pub mod health;
 pub mod init;
 pub mod list;
+pub mod pub_cmds;
 pub mod publish;
 pub mod run;
 pub mod test;

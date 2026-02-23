@@ -81,6 +81,7 @@ const BUILTIN_COMMANDS: &[&str] = &[
     "format",
     "health",
     "list",
+    "pub",
     "publish",
     "run",
     "test",
@@ -94,6 +95,7 @@ const SUPPORTED_COMMANDS: &[&str] = &[
     "clean",
     "format",
     "health",
+    "pub",
     "publish",
     "test",
 ];
@@ -137,6 +139,11 @@ pub enum CommandOpts {
         missing_fields: bool,
         sdk_consistency: bool,
     },
+    Pub {
+        subcommand: usize,
+        concurrency: usize,
+        major_versions: bool,
+    },
 }
 
 impl CommandOpts {
@@ -178,6 +185,11 @@ impl CommandOpts {
                 version_drift: true,
                 missing_fields: true,
                 sdk_consistency: true,
+            }),
+            "pub" => Some(Self::Pub {
+                subcommand: 1,
+                concurrency: 1,
+                major_versions: false,
             }),
             _ => None,
         }
@@ -248,6 +260,15 @@ impl CommandOpts {
                 OptionRow::Bool("version-drift", *version_drift),
                 OptionRow::Bool("missing-fields", *missing_fields),
                 OptionRow::Bool("sdk-consistency", *sdk_consistency),
+            ],
+            Self::Pub {
+                subcommand,
+                concurrency,
+                major_versions,
+            } => vec![
+                OptionRow::Number("sub-cmd (1=get 2=outdated 3=upgrade 4=downgrade)", *subcommand),
+                OptionRow::Number("concurrency", *concurrency),
+                OptionRow::Bool("major-versions (upgrade only)", *major_versions),
             ],
         }
     }
@@ -338,6 +359,7 @@ impl CommandOpts {
                 missing_fields,
                 sdk_consistency,
             } => vec![version_drift, missing_fields, sdk_consistency],
+            Self::Pub { major_versions, .. } => vec![major_versions],
         }
     }
 
@@ -350,6 +372,11 @@ impl CommandOpts {
             | Self::Format { concurrency, .. }
             | Self::Test { concurrency, .. }
             | Self::Publish { concurrency, .. } => vec![concurrency],
+            Self::Pub {
+                subcommand,
+                concurrency,
+                ..
+            } => vec![subcommand, concurrency],
             Self::Health { .. } => vec![],
         }
     }
@@ -2236,6 +2263,52 @@ mod tests {
             }
         ));
         assert_eq!(opts.option_count(), 3);
+    }
+
+    #[test]
+    fn test_build_default_pub() {
+        let opts = CommandOpts::build_default("pub").unwrap();
+        assert!(matches!(
+            opts,
+            CommandOpts::Pub {
+                subcommand: 1,
+                concurrency: 1,
+                major_versions: false,
+            }
+        ));
+        assert_eq!(opts.option_count(), 3);
+    }
+
+    #[test]
+    fn test_pub_option_rows() {
+        let opts = CommandOpts::build_default("pub").unwrap();
+        let rows = opts.option_rows();
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(rows[0], OptionRow::Number(_, 1)));
+        assert!(matches!(rows[1], OptionRow::Number(_, 1)));
+        assert!(matches!(rows[2], OptionRow::Bool(_, false)));
+    }
+
+    #[test]
+    fn test_pub_toggle_major_versions() {
+        let mut opts = CommandOpts::build_default("pub").unwrap();
+        // Index 2 is major-versions (Bool).
+        opts.toggle_bool(2);
+        match &opts {
+            CommandOpts::Pub { major_versions, .. } => assert!(*major_versions),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_pub_increment_subcommand() {
+        let mut opts = CommandOpts::build_default("pub").unwrap();
+        // Index 0 is sub-cmd (Number), default is 1.
+        opts.increment_at(0);
+        match &opts {
+            CommandOpts::Pub { subcommand, .. } => assert_eq!(*subcommand, 2),
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]

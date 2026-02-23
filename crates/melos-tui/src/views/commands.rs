@@ -184,13 +184,13 @@ mod tests {
         let buf = render_commands(&app, 80, 22);
         // After builtins: "-- Scripts --" header, then script row.
         // y=0: border, y=1: column header, y=2: "-- Built-in --",
-        // y=3..14: 12 builtins, y=15: "-- Scripts --", y=16: script
-        let scripts_header = buffer_line(&buf, 15, 80);
+        // y=3..15: 13 builtins, y=16: "-- Scripts --", y=17: script
+        let scripts_header = buffer_line(&buf, 16, 80);
         assert!(
             scripts_header.contains("Scripts"),
             "Expected 'Scripts' section header, got: {scripts_header}"
         );
-        let script_row = buffer_line(&buf, 16, 80);
+        let script_row = buffer_line(&buf, 17, 80);
         assert!(
             script_row.contains("custom_script"),
             "Expected 'custom_script' in row, got: {script_row}"

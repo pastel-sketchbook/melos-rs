@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 use melos_core::commands::health::HealthReport;
@@ -264,7 +264,7 @@ mod tests {
     use melos_core::commands::health::{
         ConstraintUsage, MissingFieldsIssue, SdkConsistencyResult, VersionDriftIssue,
     };
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::app::{App, AppState};
