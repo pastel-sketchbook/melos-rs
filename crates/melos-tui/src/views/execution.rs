@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use ratatui::{
-    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, Paragraph, Wrap},
+    Frame,
 };
 
 use crate::app::App;
@@ -72,6 +72,18 @@ fn render_output_lines<'a>(
         .collect()
 }
 
+/// Format a duration as `MM:SS` or `H:MM:SS` for display.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    let mins = secs / 60;
+    let hours = mins / 60;
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, mins % 60, secs % 60)
+    } else {
+        format!("{}:{:02}", mins, secs % 60)
+    }
+}
+
 /// Draw the Running state: command title + progress bar + live output.
 pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     let cmd_name = app.running_command.as_deref().unwrap_or("command");
@@ -85,7 +97,14 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .areas(area);
 
-    // Command title.
+    // Command title with elapsed time.
+    let elapsed_span = match app.elapsed() {
+        Some(d) => Span::styled(
+            format!("  {}", format_elapsed(d)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        None => Span::raw(""),
+    };
     let title = Line::from(vec![
         Span::styled("Running ", Style::default().fg(Color::DarkGray)),
         Span::styled(
@@ -94,6 +113,7 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
+        elapsed_span,
     ]);
     frame.render_widget(Paragraph::new(title), title_area);
 
@@ -120,11 +140,15 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
         .label(label);
     frame.render_widget(gauge, gauge_area);
 
-    // Live output log: always auto-scroll to the bottom.
+    // Live output log: use auto_scroll or manual scroll offset.
     let visible_height = output_area.height as usize;
-    let auto_scroll = app.output_log.len().saturating_sub(visible_height);
+    let scroll = if app.auto_scroll {
+        app.output_log.len().saturating_sub(visible_height)
+    } else {
+        app.output_scroll
+    };
     let color_map = build_color_map(&app.output_log);
-    let lines = render_output_lines(&app.output_log, &color_map, auto_scroll, visible_height);
+    let lines = render_output_lines(&app.output_log, &color_map, scroll, visible_height);
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, output_area);
 }
@@ -200,7 +224,7 @@ pub fn draw_done(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use std::time::Duration;
 
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{backend::TestBackend, Terminal};
 
     use super::*;
     use crate::app::{App, AppState};
@@ -380,5 +404,93 @@ mod tests {
         assert_eq!(map.len(), 15);
         // Colors wrap after PKG_COLORS.len() (10), so pkg_0 and pkg_10 share a color.
         assert_eq!(map["pkg_0"], map["pkg_10"]);
+    }
+
+    // --- format_elapsed tests ---
+
+    #[test]
+    fn test_format_elapsed_seconds() {
+        assert_eq!(format_elapsed(Duration::from_secs(5)), "0:05");
+    }
+
+    #[test]
+    fn test_format_elapsed_minutes() {
+        assert_eq!(format_elapsed(Duration::from_secs(125)), "2:05");
+    }
+
+    #[test]
+    fn test_format_elapsed_hours() {
+        assert_eq!(format_elapsed(Duration::from_secs(3661)), "1:01:01");
+    }
+
+    #[test]
+    fn test_format_elapsed_zero() {
+        assert_eq!(format_elapsed(Duration::from_secs(0)), "0:00");
+    }
+
+    #[test]
+    fn test_format_elapsed_exact_minute() {
+        assert_eq!(format_elapsed(Duration::from_secs(60)), "1:00");
+    }
+
+    // --- Running state renders elapsed time ---
+
+    #[test]
+    fn test_running_shows_elapsed_time() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.running_command = Some("analyze".to_string());
+        // Set command_start to a known instant in the past.
+        app.command_start = Some(std::time::Instant::now() - Duration::from_secs(65));
+        let buf = render_frame(draw_running, &app, 60, 10);
+        let content = buffer_text(&buf, 60, 10);
+        // Should contain "1:05" (65 seconds = 1 min 5 sec).
+        assert!(
+            content.contains("1:0"),
+            "expected elapsed time in output, got: {content}"
+        );
+    }
+
+    // --- Running state uses auto_scroll vs manual scroll ---
+
+    #[test]
+    fn test_running_auto_scroll_shows_tail() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.running_command = Some("test".to_string());
+        app.auto_scroll = true;
+        // Add 50 lines.
+        for i in 0..50 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        // With auto-scroll, the visible area (height ~6 for output) shows the tail.
+        let buf = render_frame(draw_running, &app, 40, 10);
+        let content = buffer_text(&buf, 40, 10);
+        assert!(
+            content.contains("line 49"),
+            "expected last line visible with auto-scroll, got: {content}"
+        );
+    }
+
+    #[test]
+    fn test_running_manual_scroll_shows_offset() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.running_command = Some("test".to_string());
+        app.auto_scroll = false;
+        app.output_scroll = 0;
+        // Add 50 lines.
+        for i in 0..50 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        // With manual scroll at 0, the first lines should be visible.
+        let buf = render_frame(draw_running, &app, 40, 10);
+        let content = buffer_text(&buf, 40, 10);
+        assert!(
+            content.contains("line 0"),
+            "expected first line visible with manual scroll, got: {content}"
+        );
     }
 }

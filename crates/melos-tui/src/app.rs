@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use melos_core::config::ScriptEntry;
@@ -411,6 +411,10 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
+/// Maximum number of output lines retained in the scrollback buffer.
+/// Oldest lines are dropped when this limit is exceeded.
+pub const MAX_SCROLLBACK: usize = 10_000;
+
 /// Top-level application state.
 pub struct App {
     /// Current state machine phase.
@@ -459,6 +463,11 @@ pub struct App {
     pub command_error: Option<String>,
     /// Scroll offset into output_log for Done state viewing.
     pub output_scroll: usize,
+    /// Whether auto-scroll is active (tracks tail of output during Running).
+    /// Set to `false` when the user manually scrolls up; re-engaged on scroll-to-end.
+    pub auto_scroll: bool,
+    /// Timestamp when the current command started (for elapsed time display).
+    pub command_start: Option<Instant>,
 
     // --- Options overlay state (Batch 51.5) ---
     /// Whether the options overlay is currently visible.
@@ -506,6 +515,8 @@ impl App {
             exec_messages: Vec::new(),
             command_error: None,
             output_scroll: 0,
+            auto_scroll: true,
+            command_start: None,
             show_options: false,
             command_opts: None,
             selected_option: 0,
@@ -595,11 +606,46 @@ impl App {
             return;
         }
 
-        // During Running, only Esc (cancel) and Ctrl+C (quit) are active.
+        // During Running, Esc (cancel), Ctrl+C (quit), and scroll keys are active.
         if self.state == AppState::Running {
-            match (code, modifiers.contains(KeyModifiers::CONTROL)) {
+            let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+            let half_page = (self.page_size / 2).max(1);
+            match (code, ctrl) {
                 (KeyCode::Esc, _) => self.pending_cancel = true,
                 (KeyCode::Char('c'), true) => self.quit = true,
+                // Scroll navigation in output log (disables auto-scroll).
+                (KeyCode::Up | KeyCode::Char('k'), false) => {
+                    self.output_scroll = self.output_scroll.saturating_sub(1);
+                    self.auto_scroll = false;
+                }
+                (KeyCode::Down | KeyCode::Char('j'), false) => {
+                    self.scroll_output_down(1);
+                    self.update_auto_scroll();
+                }
+                (KeyCode::Home | KeyCode::Char('g'), false) => {
+                    self.output_scroll = 0;
+                    self.auto_scroll = false;
+                }
+                (KeyCode::End | KeyCode::Char('G'), false) => {
+                    self.scroll_output_end();
+                    self.auto_scroll = true;
+                }
+                (KeyCode::Char('d'), true) => {
+                    self.scroll_output_down(half_page);
+                    self.update_auto_scroll();
+                }
+                (KeyCode::Char('u'), true) => {
+                    self.output_scroll = self.output_scroll.saturating_sub(half_page);
+                    self.auto_scroll = false;
+                }
+                (KeyCode::PageDown, _) | (KeyCode::Char('f'), false) => {
+                    self.scroll_output_down(self.page_size);
+                    self.update_auto_scroll();
+                }
+                (KeyCode::PageUp, _) | (KeyCode::Char('b'), false) => {
+                    self.output_scroll = self.output_scroll.saturating_sub(self.page_size);
+                    self.auto_scroll = false;
+                }
                 _ => {}
             }
             return;
@@ -704,6 +750,19 @@ impl App {
     /// Scroll output log to the very end.
     fn scroll_output_end(&mut self) {
         self.output_scroll = self.output_log.len().saturating_sub(1);
+    }
+
+    /// Re-engage auto-scroll if the user has scrolled to the tail of output.
+    fn update_auto_scroll(&mut self) {
+        let max_scroll = self.output_log.len().saturating_sub(1);
+        if self.output_scroll >= max_scroll {
+            self.auto_scroll = true;
+        }
+    }
+
+    /// Return the elapsed time since the command started, if running.
+    pub fn elapsed(&self) -> Option<Duration> {
+        self.command_start.map(|start| start.elapsed())
     }
 
     /// Request execution of the currently selected command.
@@ -812,6 +871,8 @@ impl App {
         self.exec_messages.clear();
         self.command_error = None;
         self.output_scroll = 0;
+        self.auto_scroll = true;
+        self.command_start = Some(Instant::now());
     }
 
     /// Process a core event received from the running command.
@@ -843,6 +904,13 @@ impl App {
                 is_stderr,
             } => {
                 self.output_log.push((name, strip_ansi(&line), is_stderr));
+                // Truncate scrollback buffer from the front when over the limit.
+                if self.output_log.len() > MAX_SCROLLBACK {
+                    let excess = self.output_log.len() - MAX_SCROLLBACK;
+                    self.output_log.drain(..excess);
+                    // Adjust scroll offset so it still points at the same content.
+                    self.output_scroll = self.output_scroll.saturating_sub(excess);
+                }
             }
             CoreEvent::Progress {
                 completed,
@@ -874,6 +942,7 @@ impl App {
         self.state = AppState::Done;
         self.running_command = None;
         self.running_packages.clear();
+        self.command_start = None;
 
         match result {
             Ok(Ok(())) => {}
@@ -894,6 +963,7 @@ impl App {
         self.state = AppState::Idle;
         self.running_command = None;
         self.running_packages.clear();
+        self.command_start = None;
     }
 
     /// Toggle between Packages and Commands panels.
@@ -2327,5 +2397,310 @@ mod tests {
                 "build_default returned None for supported command '{name}'"
             );
         }
+    }
+
+    // --- Scrollback truncation tests ---
+
+    #[test]
+    fn test_scrollback_truncation_at_limit() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        // Push exactly MAX_SCROLLBACK + 50 lines.
+        for i in 0..MAX_SCROLLBACK + 50 {
+            app.handle_core_event(CoreEvent::PackageOutput {
+                name: "pkg".to_string(),
+                line: format!("line {i}"),
+                is_stderr: false,
+            });
+        }
+        assert_eq!(app.output_log.len(), MAX_SCROLLBACK);
+        // First retained line should be line 50 (oldest 50 were dropped).
+        assert_eq!(app.output_log[0].1, "line 50");
+    }
+
+    #[test]
+    fn test_scrollback_below_limit_no_truncation() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..100 {
+            app.handle_core_event(CoreEvent::PackageOutput {
+                name: "pkg".to_string(),
+                line: format!("line {i}"),
+                is_stderr: false,
+            });
+        }
+        assert_eq!(app.output_log.len(), 100);
+        assert_eq!(app.output_log[0].1, "line 0");
+    }
+
+    #[test]
+    fn test_scrollback_truncation_adjusts_scroll_offset() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        // Push MAX_SCROLLBACK lines.
+        for i in 0..MAX_SCROLLBACK {
+            app.handle_core_event(CoreEvent::PackageOutput {
+                name: "pkg".to_string(),
+                line: format!("line {i}"),
+                is_stderr: false,
+            });
+        }
+        // Set scroll to line 100.
+        app.output_scroll = 100;
+        // Push 200 more lines to trigger truncation.
+        for i in 0..200 {
+            app.handle_core_event(CoreEvent::PackageOutput {
+                name: "pkg".to_string(),
+                line: format!("extra {i}"),
+                is_stderr: false,
+            });
+        }
+        assert_eq!(app.output_log.len(), MAX_SCROLLBACK);
+        // Scroll offset should have been reduced by the 200 drained lines.
+        assert_eq!(app.output_scroll, 0);
+    }
+
+    // --- Auto-scroll tests ---
+
+    #[test]
+    fn test_auto_scroll_default_true() {
+        let app = App::new();
+        assert!(app.auto_scroll);
+    }
+
+    #[test]
+    fn test_auto_scroll_reset_on_start_command() {
+        let mut app = App::new();
+        app.auto_scroll = false;
+        app.start_command("test");
+        assert!(app.auto_scroll);
+    }
+
+    #[test]
+    fn test_scroll_up_disables_auto_scroll_in_running() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        // Add some output so scroll has room.
+        for i in 0..50 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app.output_scroll = 30;
+        assert!(app.auto_scroll);
+        press(&mut app, KeyCode::Up);
+        assert!(!app.auto_scroll);
+        assert_eq!(app.output_scroll, 29);
+    }
+
+    #[test]
+    fn test_scroll_down_at_end_reengages_auto_scroll() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..10 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app.output_scroll = 8;
+        app.auto_scroll = false;
+        // Scroll down past end (max is 9).
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.output_scroll, 9);
+        assert!(app.auto_scroll);
+    }
+
+    #[test]
+    fn test_scroll_end_reengages_auto_scroll() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..20 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app.auto_scroll = false;
+        press(&mut app, KeyCode::End);
+        assert!(app.auto_scroll);
+        assert_eq!(app.output_scroll, 19);
+    }
+
+    #[test]
+    fn test_home_disables_auto_scroll() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..20 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        press(&mut app, KeyCode::Home);
+        assert!(!app.auto_scroll);
+        assert_eq!(app.output_scroll, 0);
+    }
+
+    // --- Running scroll key tests ---
+
+    #[test]
+    fn test_running_j_scrolls_down() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..30 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        assert_eq!(app.output_scroll, 0);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.output_scroll, 1);
+    }
+
+    #[test]
+    fn test_running_k_scrolls_up() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..30 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app.output_scroll = 10;
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.output_scroll, 9);
+    }
+
+    #[test]
+    fn test_running_g_jumps_to_start() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..30 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app.output_scroll = 20;
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.output_scroll, 0);
+    }
+
+    #[test]
+    fn test_running_shift_g_jumps_to_end() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        for i in 0..30 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.output_scroll, 29);
+    }
+
+    #[test]
+    fn test_running_page_down() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.page_size = 10;
+        for i in 0..50 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(app.output_scroll, 10);
+    }
+
+    #[test]
+    fn test_running_page_up() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.page_size = 10;
+        for i in 0..50 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app.output_scroll = 25;
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.output_scroll, 15);
+    }
+
+    #[test]
+    fn test_running_ctrl_d_half_page() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.page_size = 10;
+        for i in 0..50 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        ctrl(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.output_scroll, 5);
+    }
+
+    #[test]
+    fn test_running_ctrl_u_half_page_up() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.page_size = 10;
+        for i in 0..50 {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app.output_scroll = 20;
+        ctrl(&mut app, KeyCode::Char('u'));
+        assert_eq!(app.output_scroll, 15);
+    }
+
+    #[test]
+    fn test_running_q_does_not_quit() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        press(&mut app, KeyCode::Char('q'));
+        assert!(!app.should_quit());
+    }
+
+    #[test]
+    fn test_running_tab_does_not_switch_panel() {
+        let mut app = App::new();
+        app.state = AppState::Running;
+        app.active_panel = ActivePanel::Packages;
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.active_panel, ActivePanel::Packages);
+    }
+
+    // --- Elapsed time lifecycle tests ---
+
+    #[test]
+    fn test_command_start_none_initially() {
+        let app = App::new();
+        assert!(app.command_start.is_none());
+        assert!(app.elapsed().is_none());
+    }
+
+    #[test]
+    fn test_start_command_sets_command_start() {
+        let mut app = App::new();
+        app.start_command("analyze");
+        assert!(app.command_start.is_some());
+        assert!(app.elapsed().is_some());
+    }
+
+    #[test]
+    fn test_on_command_finished_clears_command_start() {
+        let mut app = App::new();
+        app.start_command("analyze");
+        assert!(app.command_start.is_some());
+        app.on_command_finished(Ok(Ok(())));
+        assert!(app.command_start.is_none());
+    }
+
+    #[test]
+    fn test_on_command_cancelled_clears_command_start() {
+        let mut app = App::new();
+        app.start_command("analyze");
+        assert!(app.command_start.is_some());
+        app.on_command_cancelled();
+        assert!(app.command_start.is_none());
+    }
+
+    #[test]
+    fn test_elapsed_returns_positive_duration() {
+        let mut app = App::new();
+        app.start_command("test");
+        // Sleep briefly to ensure elapsed > 0.
+        std::thread::sleep(Duration::from_millis(5));
+        let elapsed = app.elapsed().unwrap();
+        assert!(elapsed >= Duration::from_millis(1));
     }
 }

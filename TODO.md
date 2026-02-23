@@ -983,26 +983,26 @@ before running. Unimplemented commands appear in muted/dimmed text.
 
 Render real-time per-package output and progress during command execution.
 
-- [ ] Create `crates/melos-tui/src/views/execution.rs`:
+- [x] Create `crates/melos-tui/src/views/execution.rs`:
   - Scrollback buffer: `Vec<(String, String, bool)>` (package_name, line, is_stderr)
   - Max buffer size: 10,000 lines (configurable)
   - Auto-scroll when at tail, manual scroll when user has scrolled up
   - Per-package color assignment (same 10-color rotation as CLI render.rs)
   - `Paragraph` widget with `Line` spans for colored output
-- [ ] Add `Gauge` widget for progress bar:
+- [x] Add `Gauge` widget for progress bar:
   - Maps core `Progress { completed, total, message }` to gauge percentage
   - Shows message text alongside gauge
   - Visible only during `Running` state
-- [ ] Update right panel layout during `Running`:
+- [x] Update right panel layout during `Running`:
   - Top: progress gauge (1 line)
   - Middle: output stream (fills remaining space)
   - Bottom: running package names (1-2 lines)
-- [ ] Wire scroll keys during `Running`/`Done`:
+- [x] Wire scroll keys during `Running`/`Done`:
   - Up/Down: scroll output line by line
   - Page Up/Down: scroll by panel height
   - Home/End: jump to start/end
-- [ ] Show elapsed time in header during `Running` state
-- [ ] Tests: scrollback buffer append + truncation, auto-scroll logic, progress percentage calc
+- [x] Show elapsed time in header during `Running` state
+- [x] Tests: scrollback buffer append + truncation, auto-scroll logic, progress percentage calc
 
 #### Batch 53 -- Results panel + health dashboard
 
