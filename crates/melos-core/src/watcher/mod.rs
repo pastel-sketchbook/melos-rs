@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use colored::Colorize;
 use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 use tokio::sync::mpsc;
 
@@ -86,13 +85,6 @@ pub fn start_watching(
         let _ = tx.send(());
     }
 
-    println!(
-        "\n{} Watching {} package(s) for changes... (press {} to stop)\n",
-        "👀".cyan(),
-        packages.len().to_string().cyan(),
-        "Ctrl+C".bold(),
-    );
-
     // Process events in a loop until shutdown
     loop {
         // Check for shutdown signal (non-blocking)
@@ -142,7 +134,7 @@ pub fn start_watching(
                 }
             }
             Ok(Err(error)) => {
-                eprintln!("{} Watch error: {}", "WARN".yellow(), error);
+                eprintln!("WARN: Watch error: {}", error);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 // No events, continue loop

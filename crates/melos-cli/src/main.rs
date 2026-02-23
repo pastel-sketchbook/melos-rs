@@ -1,15 +1,13 @@
 mod cli;
 mod commands;
-mod config;
-mod package;
+mod filter_ext;
 mod runner;
-mod watcher;
-mod workspace;
 
 use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands, Verbosity};
 use colored::Colorize;
+use melos_core::workspace;
 
 /// Built-in command names that can be overridden by scripts with the same name.
 /// Note: `run`, `init`, and `completion` are excluded because they are never overridden.
@@ -68,6 +66,11 @@ async fn main() -> Result<()> {
             std::process::exit(1);
         }
     };
+
+    // Print any warnings collected during workspace loading
+    for warning in &workspace.warnings {
+        eprintln!("{} {}", "WARNING:".yellow().bold(), warning);
+    }
 
     if verbosity != Verbosity::Quiet {
         let config_mode = if workspace.config_source.is_legacy() {

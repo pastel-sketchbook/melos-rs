@@ -2,34 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use colored::Colorize;
 
-use crate::config::{self, MelosConfig};
+use crate::config::{self, ConfigSource, MelosConfig};
 use crate::package::{self, Package};
-
-/// How the workspace configuration was found
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigSource {
-    /// Melos 3.x-6.x: configuration lives in a standalone `melos.yaml`
-    MelosYaml(PathBuf),
-
-    /// Melos 7.x: configuration lives under the `melos:` key in root `pubspec.yaml`
-    PubspecYaml(PathBuf),
-}
-
-impl ConfigSource {
-    /// The path to the config file
-    pub fn path(&self) -> &Path {
-        match self {
-            ConfigSource::MelosYaml(p) | ConfigSource::PubspecYaml(p) => p,
-        }
-    }
-
-    /// Whether this is the legacy 6.x format (melos.yaml)
-    pub fn is_legacy(&self) -> bool {
-        matches!(self, ConfigSource::MelosYaml(_))
-    }
-}
 
 /// Represents a Melos workspace with its config and discovered packages
 pub struct Workspace {
@@ -47,6 +22,11 @@ pub struct Workspace {
 
     /// Effective SDK path (resolved from CLI > env var > config, if any)
     pub sdk_path: Option<String>,
+
+    /// Warnings collected during workspace loading (config validation, nested
+    /// workspace discovery, useRootAsPackage issues). The caller is responsible
+    /// for presenting these to the user.
+    pub warnings: Vec<String>,
 }
 
 impl Workspace {
@@ -67,17 +47,14 @@ impl Workspace {
 
         let config = config::parse_config(&config_source)?;
 
-        // Run post-parse validation and print warnings
-        let warnings = config.validate();
-        for warning in &warnings {
-            eprintln!("{} {}", "WARNING:".yellow().bold(), warning);
-        }
+        // Run post-parse validation and collect warnings
+        let mut warnings = config.validate();
 
         let mut packages = package::discover_packages(&root_path, &config.packages)?;
 
         // Discover packages from nested workspaces if enabled
         if config.discover_nested_workspaces == Some(true) {
-            let nested = discover_nested_workspace_packages(&root_path, &packages)?;
+            let nested = discover_nested_workspace_packages(&root_path, &packages, &mut warnings)?;
             if !nested.is_empty() {
                 let new_count = nested.len();
                 for pkg in nested {
@@ -87,11 +64,10 @@ impl Workspace {
                 }
                 // Re-sort after adding nested packages
                 packages.sort_by(|a, b| a.name.cmp(&b.name));
-                eprintln!(
-                    "{} Discovered {} package(s) from nested workspaces",
-                    "i".blue(),
+                warnings.push(format!(
+                    "Discovered {} package(s) from nested workspaces",
                     new_count
-                );
+                ));
             }
         }
 
@@ -107,17 +83,16 @@ impl Workspace {
                         }
                     }
                     Err(e) => {
-                        eprintln!(
-                            "{} useRootAsPackage is enabled but root pubspec.yaml could not be parsed: {}",
-                            "WARNING:".yellow().bold(),
+                        warnings.push(format!(
+                            "useRootAsPackage is enabled but root pubspec.yaml could not be parsed: {}",
                             e
-                        );
+                        ));
                     }
                 }
             } else {
-                eprintln!(
-                    "{} useRootAsPackage is enabled but no pubspec.yaml found at workspace root",
-                    "WARNING:".yellow().bold(),
+                warnings.push(
+                    "useRootAsPackage is enabled but no pubspec.yaml found at workspace root"
+                        .to_string(),
                 );
             }
         }
@@ -145,6 +120,7 @@ impl Workspace {
             config,
             packages,
             sdk_path,
+            warnings,
         })
     }
 
@@ -308,6 +284,7 @@ fn pubspec_has_melos_key(path: &Path) -> bool {
 fn discover_nested_workspace_packages(
     _root_path: &Path,
     existing_packages: &[Package],
+    warnings: &mut Vec<String>,
 ) -> Result<Vec<Package>> {
     let mut nested_packages = Vec::new();
     let mut visited_roots = std::collections::HashSet::new();
@@ -363,12 +340,11 @@ fn discover_nested_workspace_packages(
                         nested_packages.push(pkg);
                     }
                     Err(e) => {
-                        eprintln!(
-                            "  {} Failed to parse nested workspace package at {}: {}",
-                            "WARN".yellow(),
+                        warnings.push(format!(
+                            "Failed to parse nested workspace package at {}: {}",
                             nested_dir.display(),
                             e
-                        );
+                        ));
                     }
                 }
             }
@@ -409,6 +385,7 @@ mod tests {
             },
             packages: vec![],
             sdk_path: None,
+            warnings: vec![],
         }
     }
 
@@ -470,7 +447,9 @@ mod tests {
         fs::write(sub_b.join("pubspec.yaml"), "name: sub_b\nversion: 0.2.0\n").unwrap();
 
         let host_pkg = Package::from_path(&host_dir).unwrap();
-        let nested = discover_nested_workspace_packages(dir.path(), &[host_pkg]).unwrap();
+        let mut warnings = vec![];
+        let nested =
+            discover_nested_workspace_packages(dir.path(), &[host_pkg], &mut warnings).unwrap();
 
         assert_eq!(nested.len(), 2);
         let names: Vec<&str> = nested.iter().map(|p| p.name.as_str()).collect();
@@ -492,7 +471,8 @@ mod tests {
         .unwrap();
 
         let pkg = Package::from_path(&pkg_dir).unwrap();
-        let nested = discover_nested_workspace_packages(dir.path(), &[pkg]).unwrap();
+        let mut warnings = vec![];
+        let nested = discover_nested_workspace_packages(dir.path(), &[pkg], &mut warnings).unwrap();
         assert!(nested.is_empty());
     }
 
@@ -510,7 +490,8 @@ mod tests {
         .unwrap();
 
         let pkg = Package::from_path(&pkg_dir).unwrap();
-        let nested = discover_nested_workspace_packages(dir.path(), &[pkg]).unwrap();
+        let mut warnings = vec![];
+        let nested = discover_nested_workspace_packages(dir.path(), &[pkg], &mut warnings).unwrap();
         assert!(nested.is_empty());
     }
 
@@ -663,8 +644,8 @@ mod tests {
         let ws = make_workspace_with_commands(None);
         let env = ws.env_vars();
         assert_eq!(env.get("MELOS_ROOT_PATH").unwrap(), "/workspace");
-        assert!(env.get("MELOS_SDK_PATH").is_none());
-        assert!(env.get("PATH").is_none());
+        assert!(!env.contains_key("MELOS_SDK_PATH"));
+        assert!(!env.contains_key("PATH"));
     }
 
     #[test]

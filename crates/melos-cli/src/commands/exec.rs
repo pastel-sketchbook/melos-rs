@@ -5,12 +5,12 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::Package;
-use crate::package::filter::{apply_filters_with_categories, topological_sort};
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::{ProcessRunner, create_progress_bar};
-use crate::watcher;
-use crate::workspace::Workspace;
+use melos_core::package::Package;
+use melos_core::package::filter::{apply_filters_with_categories, topological_sort};
+use melos_core::watcher;
+use melos_core::workspace::Workspace;
 
 /// Arguments for the `exec` command
 #[derive(Args, Debug)]
@@ -52,7 +52,7 @@ pub async fn run(workspace: &Workspace, args: ExecArgs) -> Result<()> {
     let cmd_str = args.command.join(" ");
     let watch_mode = args.watch;
 
-    let filters: PackageFilters = (&args.filters).into();
+    let filters = package_filters_from_args(&args.filters);
     let mut packages = apply_filters_with_categories(
         &workspace.packages,
         &filters,
@@ -181,6 +181,12 @@ async fn run_watch_loop(
 ) -> Result<()> {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    println!(
+        "\n{} Watching {} package(s) for changes...",
+        "i".blue(),
+        packages.len()
+    );
 
     // Clone packages for the watcher thread
     let watch_packages: Vec<Package> = packages.to_vec();

@@ -7,11 +7,11 @@ use clap::Args;
 use colored::Colorize;
 use semver::{Prerelease, Version};
 
-use crate::config::RepositoryConfig;
-use crate::config::filter::PackageFilters;
-use crate::package::Package;
-use crate::package::filter::apply_filters_with_categories;
-use crate::workspace::Workspace;
+use crate::filter_ext::package_filters_from_args;
+use melos_core::config::RepositoryConfig;
+use melos_core::package::Package;
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Arguments for the `version` command
 #[derive(Args, Debug)]
@@ -983,7 +983,7 @@ fn update_dependency_constraint(
 /// evaluates `scope` and `ignore` glob patterns against the package name.
 fn package_matches_filters(
     pkg_name: &str,
-    filters: &crate::config::filter::PackageFilters,
+    filters: &melos_core::config::filter::PackageFilters,
     _packages: &[Package],
 ) -> bool {
     // Scope filter: if set, package name must match at least one scope glob
@@ -1095,7 +1095,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
     // Apply global filters to narrow down which packages are eligible for versioning.
     // This allows `melos-rs version --scope core_* --all patch` to bump only matching packages.
-    let filters: PackageFilters = (&args.filters).into();
+    let filters = package_filters_from_args(&args.filters);
     let eligible_packages = if filters.is_empty() {
         workspace.packages.clone()
     } else {
@@ -1869,15 +1869,15 @@ mod tests {
 
         // Year should be reasonable (2020-2099)
         let year: u32 = date[..4].parse().unwrap();
-        assert!(year >= 2020 && year <= 2099, "Year {} out of range", year);
+        assert!((2020..=2099).contains(&year), "Year {} out of range", year);
 
         // Month should be 01-12
         let month: u32 = date[5..7].parse().unwrap();
-        assert!(month >= 1 && month <= 12, "Month {} out of range", month);
+        assert!((1..=12).contains(&month), "Month {} out of range", month);
 
         // Day should be 01-31
         let day: u32 = date[8..10].parse().unwrap();
-        assert!(day >= 1 && day <= 31, "Day {} out of range", day);
+        assert!((1..=31).contains(&day), "Day {} out of range", day);
     }
 
     #[test]
@@ -1916,7 +1916,7 @@ mod tests {
     #[test]
     fn test_coordinated_picks_highest_version() {
         // Simulate the coordinated logic: find max version, bump once
-        let versions = vec!["1.0.0", "2.3.1", "1.5.0", "0.9.0"];
+        let versions = ["1.0.0", "2.3.1", "1.5.0", "0.9.0"];
         let highest = versions
             .iter()
             .filter_map(|v| Version::parse(v).ok())
@@ -1931,7 +1931,7 @@ mod tests {
 
     #[test]
     fn test_coordinated_minor_bump() {
-        let versions = vec!["1.0.0", "3.1.0", "2.0.0"];
+        let versions = ["1.0.0", "3.1.0", "2.0.0"];
         let highest = versions
             .iter()
             .filter_map(|v| Version::parse(v).ok())
@@ -1945,7 +1945,7 @@ mod tests {
 
     #[test]
     fn test_coordinated_major_bump() {
-        let versions = vec!["1.0.0", "1.2.0", "1.2.3"];
+        let versions = ["1.0.0", "1.2.0", "1.2.3"];
         let highest = versions
             .iter()
             .filter_map(|v| Version::parse(v).ok())
@@ -1967,7 +1967,7 @@ mod tests {
     #[test]
     fn test_coordinated_all_same_version() {
         // All packages already at the same version
-        let versions = vec!["2.0.0", "2.0.0", "2.0.0"];
+        let versions = ["2.0.0", "2.0.0", "2.0.0"];
         let highest = versions
             .iter()
             .filter_map(|v| Version::parse(v).ok())
@@ -1985,7 +1985,7 @@ mod tests {
         // Build metadata is ignored in ordering so 2.0.0+5 == 2.0.0 for max().
         // The coordinated logic strips build metadata via to_string() on the
         // base version before bumping, so the result is a clean semver.
-        let versions = vec!["1.0.0", "2.0.0+5"];
+        let versions = ["1.0.0", "2.0.0+5"];
         let highest = versions
             .iter()
             .filter_map(|v| {
@@ -2153,7 +2153,7 @@ mod tests {
     #[test]
     fn test_message_placeholder_replacement() {
         let template = "chore(release): publish\n\n{new_package_versions}";
-        let versions = vec![
+        let versions = [
             ("pkg_a".to_string(), "1.2.0".to_string()),
             ("pkg_b".to_string(), "3.0.0".to_string()),
         ];
@@ -2275,7 +2275,7 @@ command:
         - chore
         - ci
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let changelog_config = version_config.changelog_config.unwrap();
         assert_eq!(
@@ -2298,7 +2298,7 @@ command:
   version:
     fetchTags: true
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_fetch_tags());
     }
@@ -2313,7 +2313,7 @@ command:
   version:
     branch: main
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_fetch_tags());
     }
@@ -2335,7 +2335,7 @@ command:
       pre: echo pre-bootstrap
       post: echo post-bootstrap
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let bootstrap_config = config.command.unwrap().bootstrap.unwrap();
         assert_eq!(bootstrap_config.enforce_lockfile, Some(true));
         let hooks = bootstrap_config.hooks.unwrap();
@@ -2355,7 +2355,7 @@ command:
       pre: echo pre-clean
       post: echo post-clean
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let clean_config = config.command.unwrap().clean.unwrap();
         let hooks = clean_config.hooks.unwrap();
         assert_eq!(hooks.pre.as_deref(), Some("echo pre-clean"));
@@ -2374,7 +2374,7 @@ command:
       pre: echo pre-test
       post: echo post-test
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let test_config = config.command.unwrap().test.unwrap();
         let hooks = test_config.hooks.unwrap();
         assert_eq!(hooks.pre.as_deref(), Some("echo pre-test"));
@@ -2392,7 +2392,7 @@ command:
     hooks:
       pre: dart run build_runner build
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let test_config = config.command.unwrap().test.unwrap();
         let hooks = test_config.hooks.unwrap();
         assert_eq!(hooks.pre.as_deref(), Some("dart run build_runner build"));
@@ -2409,7 +2409,7 @@ command:
   version:
     branch: main
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.command.unwrap().test.is_none());
     }
 
@@ -2427,7 +2427,7 @@ command:
   version:
     releaseUrl: true
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_release_url());
     }
@@ -2442,7 +2442,7 @@ command:
   version:
     branch: main
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_release_url());
     }
@@ -2492,7 +2492,7 @@ command:
           scope:
             - "core_*"
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let changelogs = version_config.changelogs.unwrap();
         assert_eq!(changelogs.len(), 2);
@@ -2517,14 +2517,14 @@ command:
   version:
     branch: main
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.changelogs.is_none());
     }
 
     #[test]
     fn test_package_matches_filters_scope() {
-        let filters = crate::config::filter::PackageFilters {
+        let filters = melos_core::config::filter::PackageFilters {
             scope: Some(vec!["app_*".to_string()]),
             ..Default::default()
         };
@@ -2535,7 +2535,7 @@ command:
 
     #[test]
     fn test_package_matches_filters_ignore() {
-        let filters = crate::config::filter::PackageFilters {
+        let filters = melos_core::config::filter::PackageFilters {
             ignore: Some(vec!["*_example".to_string()]),
             ..Default::default()
         };
@@ -2545,7 +2545,7 @@ command:
 
     #[test]
     fn test_package_matches_filters_scope_and_ignore() {
-        let filters = crate::config::filter::PackageFilters {
+        let filters = melos_core::config::filter::PackageFilters {
             scope: Some(vec!["app_*".to_string()]),
             ignore: Some(vec!["app_example".to_string()]),
             ..Default::default()
@@ -2557,7 +2557,7 @@ command:
 
     #[test]
     fn test_package_matches_filters_no_filters() {
-        let filters = crate::config::filter::PackageFilters::default();
+        let filters = melos_core::config::filter::PackageFilters::default();
         assert!(package_matches_filters("anything", &filters, &[]));
     }
 
@@ -2577,7 +2577,7 @@ command:
       include: true
       onlyBreaking: true
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let bodies = version_config.changelog_commit_bodies.unwrap();
         assert!(bodies.include);
@@ -2595,7 +2595,7 @@ command:
     changelogCommitBodies:
       include: true
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let bodies = version_config.changelog_commit_bodies.unwrap();
         assert!(bodies.include);
@@ -2614,7 +2614,7 @@ command:
       include: true
       onlyBreaking: false
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let bodies = version_config.changelog_commit_bodies.unwrap();
         assert!(bodies.include);
@@ -2703,7 +2703,7 @@ command:
     changelogFormat:
       includeDate: true
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_include_date());
     }
@@ -2718,7 +2718,7 @@ command:
   version:
     branch: main
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_include_date());
     }
@@ -2776,7 +2776,7 @@ command:
   version:
     updateGitTagRefs: true
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_update_git_tag_refs());
     }
@@ -2791,7 +2791,7 @@ command:
   version:
     branch: main
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_update_git_tag_refs());
     }
@@ -2877,10 +2877,16 @@ dependencies:
 
     #[test]
     fn test_url_encode_basic() {
-        assert_eq!(crate::config::url_encode("hello"), "hello");
-        assert_eq!(crate::config::url_encode("hello world"), "hello%20world");
-        assert_eq!(crate::config::url_encode("a+b"), "a%2Bb");
-        assert_eq!(crate::config::url_encode("v1.0.0-beta.1"), "v1.0.0-beta.1");
+        assert_eq!(melos_core::config::url_encode("hello"), "hello");
+        assert_eq!(
+            melos_core::config::url_encode("hello world"),
+            "hello%20world"
+        );
+        assert_eq!(melos_core::config::url_encode("a+b"), "a%2Bb");
+        assert_eq!(
+            melos_core::config::url_encode("v1.0.0-beta.1"),
+            "v1.0.0-beta.1"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2910,7 +2916,7 @@ command:
             - "mobile_*"
         description: "Mobile changes"
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_release_url());
         assert!(version_config.should_update_git_tag_refs());
@@ -3006,7 +3012,7 @@ command:
   version:
     releaseBranch: "release/{version}"
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert_eq!(
             version_config.release_branch_pattern(),
@@ -3024,7 +3030,7 @@ command:
   version:
     branch: main
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.release_branch_pattern().is_none());
     }
@@ -3039,7 +3045,7 @@ command:
   version:
     releaseBranch: "releases/v{version}"
 "#;
-        let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let config: melos_core::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert_eq!(
             version_config.release_branch_pattern(),

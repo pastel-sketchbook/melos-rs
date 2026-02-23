@@ -1,0 +1,24 @@
+[package]
+name = "melos-core"
+description = "Core library for melos-rs: config parsing, package discovery, workspace management"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+yaml_serde = { workspace = true }
+glob = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+regex = { workspace = true }
+semver = { workspace = true }
+pathdiff = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -8,10 +8,10 @@ use regex::Regex;
 use tokio::sync::Semaphore;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters_with_categories;
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::{ProcessRunner, create_progress_bar, shell_command};
-use crate::workspace::Workspace;
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Arguments for the `analyze` command
 #[derive(Args, Debug)]
@@ -55,7 +55,7 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
         anyhow::bail!("--code requires --fix or --dry-run");
     }
 
-    let filters: PackageFilters = (&args.filters).into();
+    let filters = package_filters_from_args(&args.filters);
     let packages = apply_filters_with_categories(
         &workspace.packages,
         &filters,
@@ -320,7 +320,7 @@ struct DryRunScan {
 /// Returns consolidated file entries, unique diagnostic codes, and any
 /// conflicting lint rule pairs detected via the equal-count heuristic.
 async fn scan_dry_run(
-    packages: &[crate::package::Package],
+    packages: &[melos_core::package::Package],
     workspace: &Workspace,
     concurrency: usize,
     codes: &[String],
@@ -1165,7 +1165,7 @@ lib/foo.dart
             },
         ];
         let conflicts = detect_conflicting_diagnostics(&entries, 2);
-        let code_filter = vec!["omit_local_variable_types".to_string()];
+        let code_filter = ["omit_local_variable_types".to_string()];
 
         // Decision: do NOT skip because user specified --code
         let skip_fix = !conflicts.is_empty() && code_filter.is_empty();

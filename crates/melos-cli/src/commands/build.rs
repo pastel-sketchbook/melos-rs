@@ -6,11 +6,11 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::config::{BuildMode, FlavorConfig, SimulatorConfig};
-use crate::package::filter::apply_filters_with_categories;
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::{ProcessRunner, run_lifecycle_hook};
-use crate::workspace::Workspace;
+use melos_core::config::{BuildMode, FlavorConfig, SimulatorConfig};
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Valid values for the --version-bump flag
 const VALID_VERSION_BUMPS: &[&str] = &["patch", "minor", "major"];
@@ -339,7 +339,7 @@ fn resolve_android_build_type(args: &BuildArgs, workspace: &Workspace) -> String
 fn resolve_simulator_command(
     simulator_requested: bool,
     platform: Platform,
-    build_config: &crate::config::BuildCommandConfig,
+    build_config: &melos_core::config::BuildCommandConfig,
     flavor_name: &str,
     mode: &BuildMode,
 ) -> Result<Option<String>> {
@@ -531,7 +531,7 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
     )?;
 
     // Merge config-level packageFilters with CLI filters
-    let cli_filters: PackageFilters = (&args.filters).into();
+    let cli_filters = package_filters_from_args(&args.filters);
     let base_filters = if let Some(ref config_filters) = build_config.package_filters {
         config_filters.merge(&cli_filters)
     } else {
@@ -839,7 +839,7 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::BuildMode;
+    use melos_core::config::BuildMode;
 
     /// Strip ANSI escape codes so assertions work regardless of terminal env.
     fn strip_ansi(s: &str) -> String {
@@ -1080,7 +1080,7 @@ mod tests {
               pre: echo starting
               post: echo done
         "#;
-        let config: crate::config::BuildCommandConfig =
+        let config: melos_core::config::BuildCommandConfig =
             yaml_serde::from_str(yaml).expect("should parse full build config");
         assert_eq!(config.flavors.len(), 2);
         assert_eq!(config.default_flavor, Some("prod".to_string()));
@@ -1111,7 +1111,7 @@ mod tests {
               prod:
                 target: lib/main.dart
         "#;
-        let config: crate::config::BuildCommandConfig =
+        let config: melos_core::config::BuildCommandConfig =
             yaml_serde::from_str(yaml).expect("should parse minimal build config");
         assert_eq!(config.flavors.len(), 1);
         assert!(config.default_flavor.is_none());
@@ -1126,7 +1126,7 @@ mod tests {
     #[test]
     fn test_parse_android_config_defaults() {
         let yaml = "{}";
-        let config: crate::config::AndroidBuildConfig =
+        let config: melos_core::config::AndroidBuildConfig =
             yaml_serde::from_str(yaml).expect("should parse empty android config");
         assert_eq!(config.types, vec!["appbundle"]);
         assert_eq!(config.default_type, "appbundle");
@@ -1140,7 +1140,7 @@ mod tests {
             enabled: true
             command: "bundletool build-apks --mode=universal --bundle={aab_path}"
         "#;
-        let config: crate::config::SimulatorConfig =
+        let config: melos_core::config::SimulatorConfig =
             yaml_serde::from_str(yaml).expect("should parse simulator config");
         assert!(config.enabled);
         assert_eq!(
@@ -1154,7 +1154,7 @@ mod tests {
         let yaml = r#"
             target: lib/main.dart
         "#;
-        let config: crate::config::FlavorConfig =
+        let config: melos_core::config::FlavorConfig =
             yaml_serde::from_str(yaml).expect("should parse flavor with default mode");
         assert_eq!(config.mode, BuildMode::Release);
     }
@@ -1168,7 +1168,7 @@ mod tests {
             packageFilters:
               flutter: true
         "#;
-        let config: crate::config::BuildCommandConfig =
+        let config: melos_core::config::BuildCommandConfig =
             yaml_serde::from_str(yaml).expect("should parse build config with filters");
         let filters = config.package_filters.expect("package_filters");
         assert_eq!(filters.flutter, Some(true));
@@ -1359,7 +1359,7 @@ mod tests {
     fn make_build_config_with_simulator(
         android_sim: Option<SimulatorConfig>,
         ios_sim: Option<SimulatorConfig>,
-    ) -> crate::config::BuildCommandConfig {
+    ) -> melos_core::config::BuildCommandConfig {
         use std::collections::HashMap;
         let mut flavors = HashMap::new();
         flavors.insert(
@@ -1369,16 +1369,16 @@ mod tests {
                 mode: BuildMode::Release,
             },
         );
-        crate::config::BuildCommandConfig {
+        melos_core::config::BuildCommandConfig {
             flavors,
             default_flavor: Some("prod".to_string()),
-            android: Some(crate::config::AndroidBuildConfig {
+            android: Some(melos_core::config::AndroidBuildConfig {
                 types: vec!["appbundle".to_string()],
                 default_type: "appbundle".to_string(),
                 extra_args: vec![],
                 simulator: android_sim,
             }),
-            ios: Some(crate::config::IosBuildConfig {
+            ios: Some(melos_core::config::IosBuildConfig {
                 extra_args: vec![],
                 simulator: ios_sim,
             }),
@@ -1545,7 +1545,7 @@ mod tests {
         let pubspec = dir.path().join("pubspec.yaml");
         std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3\n").expect("write pubspec");
 
-        let pkg = crate::package::Package {
+        let pkg = melos_core::package::Package {
             name: "test_app".to_string(),
             path: dir.path().to_path_buf(),
             version: Some("1.2.3".to_string()),
@@ -1570,7 +1570,7 @@ mod tests {
         let pubspec = dir.path().join("pubspec.yaml");
         std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3\n").expect("write pubspec");
 
-        let pkg = crate::package::Package {
+        let pkg = melos_core::package::Package {
             name: "test_app".to_string(),
             path: dir.path().to_path_buf(),
             version: Some("1.2.3".to_string()),
@@ -1592,7 +1592,7 @@ mod tests {
         let pubspec = dir.path().join("pubspec.yaml");
         std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3\n").expect("write pubspec");
 
-        let pkg = crate::package::Package {
+        let pkg = melos_core::package::Package {
             name: "test_app".to_string(),
             path: dir.path().to_path_buf(),
             version: Some("1.2.3".to_string()),
@@ -1614,7 +1614,7 @@ mod tests {
         let pubspec = dir.path().join("pubspec.yaml");
         std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3+5\n").expect("write pubspec");
 
-        let pkg = crate::package::Package {
+        let pkg = melos_core::package::Package {
             name: "test_app".to_string(),
             path: dir.path().to_path_buf(),
             version: Some("1.2.3+5".to_string()),
@@ -1639,7 +1639,7 @@ mod tests {
         let pubspec = dir.path().join("pubspec.yaml");
         std::fs::write(&pubspec, "name: test_app\nversion: 1.0.0\n").expect("write pubspec");
 
-        let pkg = crate::package::Package {
+        let pkg = melos_core::package::Package {
             name: "test_app".to_string(),
             path: dir.path().to_path_buf(),
             version: Some("1.0.0".to_string()),
@@ -1661,7 +1661,7 @@ mod tests {
         let pubspec = dir.path().join("pubspec.yaml");
         std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3+42\n").expect("write pubspec");
 
-        let pkg = crate::package::Package {
+        let pkg = melos_core::package::Package {
             name: "test_app".to_string(),
             path: dir.path().to_path_buf(),
             version: Some("1.2.3+42".to_string()),

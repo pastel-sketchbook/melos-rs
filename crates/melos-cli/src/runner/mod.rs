@@ -7,7 +7,7 @@ use colored::{Color, Colorize};
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio::sync::Semaphore;
 
-use crate::package::Package;
+use melos_core::package::Package;
 
 /// Return the platform-appropriate shell executable and flag for running commands.
 ///
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(env.get("MELOS_PACKAGE_VERSION").unwrap(), "1.0.0");
         assert_eq!(env.get("MELOS_ROOT_PATH").unwrap(), "/workspace");
         // No parent env vars
-        assert!(env.get("MELOS_PARENT_PACKAGE_NAME").is_none());
+        assert!(!env.contains_key("MELOS_PARENT_PACKAGE_NAME"));
     }
 
     #[test]
@@ -488,7 +488,7 @@ mod tests {
         let all = vec![pkg.clone()];
 
         let env = build_package_env(&ws_env, &pkg, &all);
-        assert!(env.get("MELOS_PARENT_PACKAGE_NAME").is_none());
+        assert!(!env.contains_key("MELOS_PARENT_PACKAGE_NAME"));
     }
 
     #[test]
@@ -498,6 +498,6 @@ mod tests {
         pkg.version = None;
 
         let env = build_package_env(&ws_env, &pkg, &[]);
-        assert!(env.get("MELOS_PACKAGE_VERSION").is_none());
+        assert!(!env.contains_key("MELOS_PACKAGE_VERSION"));
     }
 }

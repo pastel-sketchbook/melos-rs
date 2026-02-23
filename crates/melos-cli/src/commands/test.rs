@@ -3,10 +3,10 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters_with_categories;
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::{ProcessRunner, create_progress_bar};
-use crate::workspace::Workspace;
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Arguments for the `test` command
 #[derive(Args, Debug)]
@@ -45,7 +45,7 @@ pub struct TestArgs {
 
 /// Run `dart test` / `flutter test` across all matching packages
 pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
+    let filters = package_filters_from_args(&args.filters);
     let packages = apply_filters_with_categories(
         &workspace.packages,
         &filters,

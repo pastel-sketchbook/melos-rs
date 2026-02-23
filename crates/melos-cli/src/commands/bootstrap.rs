@@ -5,15 +5,15 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 
 use crate::cli::BootstrapArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::Package;
-use crate::package::filter::{apply_filters_with_categories, topological_sort};
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::{ProcessRunner, create_progress_bar};
-use crate::workspace::Workspace;
+use melos_core::package::Package;
+use melos_core::package::filter::{apply_filters_with_categories, topological_sort};
+use melos_core::workspace::Workspace;
 
 /// Bootstrap the workspace: link local packages and run `pub get` in each package
 pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
+    let filters = package_filters_from_args(&args.filters);
     let filtered = apply_filters_with_categories(
         &workspace.packages,
         &filters,
@@ -171,7 +171,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 }
 
 /// Extract the bootstrap command config from the workspace, if present.
-fn bootstrap_config(workspace: &Workspace) -> Option<&crate::config::BootstrapCommandConfig> {
+fn bootstrap_config(workspace: &Workspace) -> Option<&melos_core::config::BootstrapCommandConfig> {
     workspace
         .config
         .command
@@ -638,8 +638,8 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use crate::config::{BootstrapCommandConfig, CommandConfig, MelosConfig};
-    use crate::workspace::{ConfigSource, Workspace};
+    use melos_core::config::{BootstrapCommandConfig, CommandConfig, ConfigSource, MelosConfig};
+    use melos_core::workspace::Workspace;
 
     fn make_package(name: &str, path: &str, deps: Vec<&str>) -> Package {
         Package {
@@ -680,6 +680,7 @@ mod tests {
             },
             packages: vec![],
             sdk_path: None,
+            warnings: vec![],
         }
     }
 
@@ -1269,6 +1270,7 @@ mod tests {
             },
             packages: vec![app.clone()],
             sdk_path: None,
+            warnings: vec![],
         };
 
         let result = sync_shared_dependencies(&[app], &ws);

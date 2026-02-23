@@ -454,7 +454,7 @@ mod tests {
             Some("^1.0.0")
         );
         // flutter SDK dep should have no version constraint
-        assert!(pkg.dependency_versions.get("flutter").is_none());
+        assert!(!pkg.dependency_versions.contains_key("flutter"));
     }
 
     #[test]
@@ -782,7 +782,7 @@ mod tests {
             fs::create_dir_all(&artifact).unwrap();
             fs::write(
                 artifact.join("pubspec.yaml"),
-                &format!(
+                format!(
                     "name: fake_{}\nversion: 0.0.1\n",
                     excluded.replace(['.', '-'], "_")
                 ),

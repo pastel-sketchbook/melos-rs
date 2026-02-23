@@ -3,10 +3,10 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::filter::apply_filters_with_categories;
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::{ProcessRunner, create_progress_bar};
-use crate::workspace::Workspace;
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Arguments for the `publish` command
 #[derive(Args, Debug)]
@@ -39,7 +39,7 @@ pub struct PublishArgs {
 /// Publish packages to pub.dev
 pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     // Start with global filters, then also exclude private packages by default
-    let mut filters: PackageFilters = (&args.filters).into();
+    let mut filters = package_filters_from_args(&args.filters);
     // Publishing only makes sense for non-private packages
     filters.no_private = true;
 
@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_release_url_format_matches_tag() {
-        use crate::config::RepositoryConfig;
+        use melos_core::config::RepositoryConfig;
 
         let repo = RepositoryConfig {
             url: "https://github.com/org/repo".to_string(),
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_release_url_prerelease_tag() {
-        use crate::config::RepositoryConfig;
+        use melos_core::config::RepositoryConfig;
 
         let repo = RepositoryConfig {
             url: "https://github.com/org/repo".to_string(),

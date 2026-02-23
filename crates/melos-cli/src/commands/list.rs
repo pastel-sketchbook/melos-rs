@@ -6,10 +6,10 @@ use colored::Colorize;
 use serde::Serialize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::Package;
-use crate::package::filter::apply_filters_with_categories;
-use crate::workspace::Workspace;
+use crate::filter_ext::package_filters_from_args;
+use melos_core::package::Package;
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Output format for the list command
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
@@ -74,7 +74,7 @@ pub struct ListArgs {
 
 /// List packages in the workspace
 pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
+    let filters = package_filters_from_args(&args.filters);
     let packages = apply_filters_with_categories(
         &workspace.packages,
         &filters,
@@ -375,12 +375,12 @@ mod tests {
         // Just verify it doesn't panic; output goes to stdout
         print_parsable(
             &packages,
-            &crate::workspace::Workspace {
+            &melos_core::workspace::Workspace {
                 root_path: PathBuf::from("/workspace"),
-                config_source: crate::workspace::ConfigSource::MelosYaml(PathBuf::from(
+                config_source: melos_core::config::ConfigSource::MelosYaml(PathBuf::from(
                     "/workspace/melos.yaml",
                 )),
-                config: crate::config::MelosConfig {
+                config: melos_core::config::MelosConfig {
                     name: "test".to_string(),
                     packages: vec![],
                     repository: None,
@@ -394,6 +394,7 @@ mod tests {
                 },
                 packages: packages.clone(),
                 sdk_path: None,
+                warnings: vec![],
             },
             false,
         );

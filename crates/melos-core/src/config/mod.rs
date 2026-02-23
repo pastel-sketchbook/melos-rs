@@ -3,12 +3,36 @@ pub mod script;
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use self::script::{ExecEntry, ScriptConfig};
-use crate::workspace::ConfigSource;
+
+/// How the workspace configuration was found
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// Melos 3.x-6.x: configuration lives in a standalone `melos.yaml`
+    MelosYaml(PathBuf),
+
+    /// Melos 7.x: configuration lives under the `melos:` key in root `pubspec.yaml`
+    PubspecYaml(PathBuf),
+}
+
+impl ConfigSource {
+    /// The path to the config file
+    pub fn path(&self) -> &Path {
+        match self {
+            ConfigSource::MelosYaml(p) | ConfigSource::PubspecYaml(p) => p,
+        }
+    }
+
+    /// Whether this is the legacy 6.x format (melos.yaml)
+    pub fn is_legacy(&self) -> bool {
+        matches!(self, ConfigSource::MelosYaml(_))
+    }
+}
 
 /// Top-level melos.yaml configuration
 #[derive(Debug, Deserialize)]
@@ -295,7 +319,7 @@ impl ScriptEntry {
 /// Encodes characters that are not unreserved per RFC 3986 (letters, digits,
 /// `-`, `.`, `_`, `~`). This is sufficient for tag names and titles in release
 /// URLs without adding a dependency on a URL-encoding crate.
-pub(crate) fn url_encode(s: &str) -> String {
+pub fn url_encode(s: &str) -> String {
     let mut encoded = String::with_capacity(s.len());
     for byte in s.bytes() {
         match byte {

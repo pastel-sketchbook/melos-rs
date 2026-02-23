@@ -680,7 +680,108 @@ Stretch goals and out-of-scope items. None of these are required for Melos 7.4.0
 
 - [ ] Plugin system for custom commands
 - [ ] GitHub Actions integration helpers
-- [ ] IDE integration (IntelliJ, VS Code) — out of scope for CLI tool
+- [ ] IDE integration (IntelliJ, VS Code) -- out of scope for CLI tool
+
+---
+
+## Core Library Extraction -- `melos-core` + `melos-tui` (Beyond Melos Parity)
+
+Extract business logic into a reusable library crate (`melos-core`) with an event-based
+architecture. The current CLI becomes a thin rendering layer. A new TUI frontend (`melos-tui`)
+consumes the same core. See `docs/rationale/0006_core_lib_extraction.md` for full rationale.
+
+### Phase 1 -- Cargo workspace + mechanical extraction
+
+Convert the single binary crate into a Cargo workspace. Move pure logic modules into
+`melos-core` with zero behavior change.
+
+- [x] Create `Cargo.toml` workspace root with `[workspace]` and `[workspace.dependencies]`
+- [x] Create `crates/melos-core/Cargo.toml` with shared deps (tokio, serde, serde_yaml/yaml_serde, anyhow, regex, glob, notify)
+- [x] Create `crates/melos-cli/Cargo.toml` with CLI deps (clap, colored, indicatif) + `melos-core` dep
+- [x] Move `src/config/` to `crates/melos-core/src/config/` (as-is, pure logic)
+- [x] Move `src/package/` to `crates/melos-core/src/package/` (as-is, pure logic)
+- [x] Move `src/workspace.rs` to `crates/melos-core/src/workspace.rs` (warnings vec instead of eprintln)
+- [x] Move `src/watcher/` to `crates/melos-core/src/watcher/` (removed colored/emoji, plain text)
+- [ ] Extract pure logic functions from each command file into `crates/melos-core/src/commands/` -- **deferred to Phase 3**
+- [ ] Move `src/runner/mod.rs` core logic to `crates/melos-core/src/runner.rs` -- **deferred to Phase 3**
+- [x] Keep CLI `run()` wrappers in `crates/melos-cli/src/commands/` -- commands + runner stay in CLI for now
+- [x] Move `src/cli.rs` and `src/main.rs` to `crates/melos-cli/src/`
+- [x] Create `crates/melos-core/src/lib.rs` with public module exports
+- [x] Create `crates/melos-cli/src/filter_ext.rs` -- `package_filters_from_args()` free function (orphan rule workaround)
+- [x] Verify `task check:all` passes -- 533 tests (353 CLI unit + 26 integration + 154 core unit), zero clippy warnings
+- [x] Verify binary name is still `melos-rs`
+- [x] Remove empty `src/` and `tests/` directories from workspace root
+- [x] Update `Taskfile.yml` for workspace structure (--workspace flags, install path)
+
+### Phase 2 -- Event enum + ProcessRunner refactor
+
+Define the core Event type and refactor ProcessRunner to emit events instead of
+driving progress bars directly.
+
+- [ ] Create `crates/melos-core/src/events.rs` with `Event` enum:
+  - `CommandStarted { command, package_count }`
+  - `CommandFinished { command, duration }`
+  - `PackageStarted { name }`
+  - `PackageFinished { name, success, duration }`
+  - `PackageOutput { name, line }`
+  - `Progress { completed, total, message }`
+  - `Warning(String)`, `Info(String)`
+- [ ] Refactor `ProcessRunner::run_in_packages_with_progress` to accept `UnboundedSender<Event>` instead of `Option<&ProgressBar>`
+- [ ] Create CLI render module `crates/melos-cli/src/render.rs`:
+  - Subscribe to event channel
+  - `Event::Progress` drives indicatif progress bar
+  - `Event::PackageFinished` prints per-package status line
+  - `Event::Warning` prints colored warning
+- [ ] Update all CLI command wrappers to spawn render task + pass event sender to core
+- [ ] Verify `task check:all` passes -- identical behavior, identical test count
+- [ ] Remove `indicatif` and `colored` from `melos-core` dependencies
+
+### Phase 3 -- Migrate command run() functions to core
+
+Move command orchestration logic from CLI wrappers into core, one command at a time.
+Each core command accepts `UnboundedSender<Event>` and returns a typed result summary.
+
+- [ ] **Simple commands (batch A):**
+  - `list` -- core returns `Vec<PackageInfo>`, emits `ListPackage` events
+  - `clean` -- core emits per-package events, returns pass/fail count
+  - `format` -- core emits per-package events, returns pass/fail count
+  - `test` -- core emits per-package events, returns pass/fail count
+  - `init` -- core returns created file paths, emits `Info` events
+  - `health` -- core returns `HealthReport`, emits diagnostic events
+- [ ] **Medium commands (batch B):**
+  - `exec` -- core handles package iteration + watch loop, emits events
+  - `bootstrap` -- core handles pub get + overrides + enforce, emits events
+  - `publish` -- core handles dry-run/publish + git tag, emits events
+  - `analyze` -- core handles fix/dry-run/analyze phases, emits `AnalyzeDryRun`/`ConflictDetected` events
+- [ ] **Complex commands (batch C):**
+  - `run` -- core handles script resolution, step execution, watch loop, emits events
+  - `build` -- core handles platform/flavor iteration, simulator post-build, emits `BuildStepResult` events
+  - `version` -- core handles conventional commits, changelog, git ops, emits `VersionBumped` events
+- [ ] Define typed opts structs in core (decoupled from clap): `AnalyzeOpts`, `BootstrapOpts`, `ExecOpts`, etc.
+- [ ] CLI maps `clap` args to core opts structs in each wrapper
+- [ ] Verify `task check:all` passes after each batch
+
+### Phase 4 -- TUI frontend with ratatui
+
+Build `melos-tui` binary consuming `melos-core`.
+
+- [ ] Create `crates/melos-tui/Cargo.toml` with deps: `melos-core`, `ratatui`, `crossterm`
+- [ ] Implement terminal setup/teardown (alternate screen, raw mode)
+- [ ] Implement `App` state machine:
+  - `Idle` -- workspace loaded, package list displayed
+  - `Running` -- command executing, live progress
+  - `Done` -- results displayed, scrollable
+- [ ] Implement core event loop: poll crossterm events + core events, render on each frame
+- [ ] **Views:**
+  - Package list (table with name, version, path, flutter/dart)
+  - Command picker (list of available commands + scripts)
+  - Execution panel (live per-package progress, output streaming)
+  - Results panel (pass/fail summary, scrollable output)
+  - Health dashboard (version drift, missing fields, SDK consistency)
+- [ ] Keyboard navigation: arrow keys, enter to run, q to quit, tab to switch panels
+- [ ] Wire workspace loading on startup (show loading spinner)
+- [ ] Wire command execution: user picks command, TUI spawns core task, renders events
+- [ ] Verify `melos-tui` builds and runs against test workspace
 
 ---
 
@@ -946,3 +1047,17 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 3 new `build_analyze_command` tests for Flutter SDK (default, no_fatal, fatal_warnings)
 - [x] Updated README test count to 533
 - Total: 507 unit tests + 26 integration tests = 533 tests
+
+#### Batch 44 — Core library extraction: workspace split (done, v0.5.0)
+- [x] Converted root `Cargo.toml` to workspace manifest with `[workspace]`, `[workspace.package]`, `[workspace.dependencies]`
+- [x] Created `crates/melos-core/` library crate — config/, package/, workspace.rs, watcher/ modules; zero terminal deps (no clap, colored, indicatif)
+- [x] Created `crates/melos-cli/` binary crate — main.rs, cli.rs, commands/, runner/, filter_ext.rs
+- [x] Moved `ConfigSource` enum from workspace.rs into config/mod.rs to break circular dependency
+- [x] Created `filter_ext.rs` with `package_filters_from_args()` free function — orphan rule workaround for `From<&GlobalFilterArgs> for PackageFilters`; updated all 13 command call sites
+- [x] Replaced `eprintln!` in workspace `find_and_load()` with `warnings: Vec<String>` field — CLI main.rs prints warnings with colored formatting
+- [x] Removed `colored::Colorize` import and emoji from watcher/mod.rs — CLI callers print watch message
+- [x] Removed `#![feature(let_chains)]` from both crate roots (stable since Rust 1.88, running 1.93.1)
+- [x] Fixed 17 clippy lints in test code: `unnecessary_get_then_check` (5), `needless_borrows_for_generic_args` (1), `manual_range_contains` (3), `useless_vec` (8)
+- [x] Updated Taskfile.yml for workspace structure (--workspace flags, install path, version extraction)
+- [x] Removed empty src/ and tests/ directories from workspace root
+- Total: 507 unit tests + 26 integration tests = 533 tests (353 CLI unit + 154 core unit + 26 integration); 5 new filter_ext tests

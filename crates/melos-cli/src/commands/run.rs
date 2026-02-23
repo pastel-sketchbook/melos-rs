@@ -7,13 +7,14 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::ScriptEntry;
-use crate::config::filter::PackageFilters;
-use crate::package::Package;
-use crate::package::filter::{apply_filters_with_categories, topological_sort};
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::ProcessRunner;
-use crate::watcher;
-use crate::workspace::Workspace;
+use melos_core::config::ScriptEntry;
+use melos_core::config::filter::PackageFilters;
+use melos_core::package::Package;
+use melos_core::package::filter::{apply_filters_with_categories, topological_sort};
+use melos_core::watcher;
+use melos_core::workspace::Workspace;
 
 /// Maximum recursion depth for nested script references
 const MAX_SCRIPT_DEPTH: usize = 16;
@@ -68,7 +69,7 @@ pub async fn run(workspace: &Workspace, args: RunArgs) -> Result<()> {
     };
 
     let watch_mode = args.watch;
-    let cli_filters: PackageFilters = (&args.filters).into();
+    let cli_filters = package_filters_from_args(&args.filters);
 
     // Initial run
     let mut visited = HashSet::new();
@@ -138,6 +139,12 @@ async fn run_watch_loop(
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+    println!(
+        "\n{} Watching {} package(s) for changes...",
+        "i".blue(),
+        watch_packages.len()
+    );
 
     let watch_pkgs_clone: Vec<Package> = watch_packages.to_vec();
 

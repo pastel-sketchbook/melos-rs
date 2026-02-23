@@ -1,0 +1,31 @@
+[package]
+name = "melos-cli"
+description = "A Rust CLI replacement for Melos - Flutter/Dart monorepo management tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "melos-rs"
+path = "src/main.rs"
+
+[dependencies]
+melos-core = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+colored = { workspace = true }
+indicatif = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+yaml_serde = { workspace = true }
+semver = { workspace = true }
+glob = { workspace = true }
+regex = { workspace = true }
+pathdiff = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }

@@ -5,36 +5,36 @@ tasks:
   fmt:
     desc: "Format all Rust code"
     cmds:
-      - cargo fmt
+      - cargo fmt --all
 
   build:
     desc: "Build in debug mode"
     deps: [fmt]
     cmds:
-      - cargo build
+      - cargo build --workspace
 
   build:release:
     desc: "Build optimized release binary"
     deps: [check:all]
     cmds:
-      - cargo build --release
+      - cargo build --workspace --release
 
   check:
     desc: "Run fmt, cargo check, and clippy"
     deps: [fmt]
     cmds:
-      - cargo check
-      - cargo clippy -- -D warnings
+      - cargo check --workspace --all-targets
+      - cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     desc: "Run all tests"
     cmds:
-      - cargo test
+      - cargo test --workspace
 
   test:verbose:
     desc: "Run tests with output visible (--nocapture)"
     cmds:
-      - cargo test -- --nocapture
+      - cargo test --workspace -- --nocapture
 
   check:all:
     desc: "Run fmt, clippy, and tests"
@@ -48,52 +48,52 @@ tasks:
     desc: "Run melos-rs (pass args after --)"
     deps: [build]
     cmds:
-      - cargo run -- {{.CLI_ARGS}}
+      - cargo run -p melos-cli -- {{.CLI_ARGS}}
 
   run:list:
     desc: "List all packages in the workspace"
     cmds:
-      - cargo run -- list
+      - cargo run -p melos-cli -- list
 
   run:list:long:
     desc: "List packages with full details"
     cmds:
-      - cargo run -- list --long
+      - cargo run -p melos-cli -- list --long
 
   run:bootstrap:
     desc: "Bootstrap all packages (pub get)"
     cmds:
-      - cargo run -- bootstrap
+      - cargo run -p melos-cli -- bootstrap
 
   run:clean:
     desc: "Clean all Flutter packages"
     cmds:
-      - cargo run -- clean
+      - cargo run -p melos-cli -- clean
 
   run:exec:
     desc: "Exec a command in packages (pass args after --)"
     cmds:
-      - cargo run -- exec {{.CLI_ARGS}}
+      - cargo run -p melos-cli -- exec {{.CLI_ARGS}}
 
   run:version:
     desc: "Run version command (pass args after --)"
     cmds:
-      - cargo run -- version {{.CLI_ARGS}}
+      - cargo run -p melos-cli -- version {{.CLI_ARGS}}
 
   # --- Install ---
   install:
     desc: "Install melos-rs binary to ~/.cargo/bin"
     deps: [check:all]
     cmds:
-      - cargo install --path .
+      - cargo install --path crates/melos-cli
 
   # --- Versioning ---
   version:patch:
-    desc: "Bump patch version (0.4.2 -> 0.4.3)"
+    desc: "Bump patch version (0.5.0 -> 0.5.1)"
     cmds:
       - |
         set -e
-        CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        CURRENT=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
         sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
@@ -101,11 +101,11 @@ tasks:
         echo "Bumped $CURRENT -> $NEXT"
 
   version:minor:
-    desc: "Bump minor version (0.4.2 -> 0.5.0)"
+    desc: "Bump minor version (0.5.0 -> 0.6.0)"
     cmds:
       - |
         set -e
-        CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        CURRENT=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$MAJOR.$((MINOR + 1)).0"
         sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
@@ -113,11 +113,11 @@ tasks:
         echo "Bumped $CURRENT -> $NEXT"
 
   version:major:
-    desc: "Bump major version (0.4.2 -> 1.0.0)"
+    desc: "Bump major version (0.5.0 -> 1.0.0)"
     cmds:
       - |
         set -e
-        CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        CURRENT=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$((MAJOR + 1)).0.0"
         sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
@@ -129,7 +129,7 @@ tasks:
     cmds:
       - |
         set -e
-        VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        VERSION=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
         git tag "v$VERSION"
         echo "Tagged v$VERSION"
 

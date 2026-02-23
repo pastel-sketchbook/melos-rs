@@ -3,11 +3,11 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::Package;
-use crate::package::filter::apply_filters_with_categories;
+use crate::filter_ext::package_filters_from_args;
 use crate::runner::{ProcessRunner, create_progress_bar};
-use crate::workspace::Workspace;
+use melos_core::package::Package;
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Arguments for the `pub` command
 #[derive(Args, Debug)]
@@ -146,7 +146,7 @@ async fn run_pub_subcommand(
     concurrency: usize,
     show_sdk: bool,
 ) -> Result<()> {
-    let pf: PackageFilters = filters.into();
+    let pf = package_filters_from_args(filters);
     let packages = apply_filters_with_categories(
         &workspace.packages,
         &pf,

@@ -5,10 +5,10 @@ use clap::Args;
 use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
-use crate::config::filter::PackageFilters;
-use crate::package::Package;
-use crate::package::filter::apply_filters_with_categories;
-use crate::workspace::Workspace;
+use crate::filter_ext::package_filters_from_args;
+use melos_core::package::Package;
+use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::workspace::Workspace;
 
 /// Arguments for the `health` command
 #[derive(Args, Debug)]
@@ -87,7 +87,7 @@ pub struct HealthReport {
 
 /// Run health checks on the workspace
 pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
-    let filters: PackageFilters = (&args.filters).into();
+    let filters = package_filters_from_args(&args.filters);
     let packages = apply_filters_with_categories(
         &workspace.packages,
         &filters,
