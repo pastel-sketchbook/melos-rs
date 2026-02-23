@@ -1,12 +1,14 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashSet;
 
 use anyhow::Result;
 use clap::Args;
 use colored::Colorize;
-use serde::Serialize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
+use melos_core::commands::list::{
+    build_packages_json, detect_cycles, generate_gviz, generate_mermaid,
+};
 use melos_core::package::Package;
 use melos_core::package::filter::apply_filters_with_categories;
 use melos_core::workspace::Workspace;
@@ -119,8 +121,8 @@ pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
         ListFormat::Parsable => print_parsable(&packages, workspace, args.relative),
         ListFormat::Json => print_json(&packages),
         ListFormat::Graph => print_graph(&packages),
-        ListFormat::Gviz => print_gviz(&packages),
-        ListFormat::Mermaid => print_mermaid(&packages),
+        ListFormat::Gviz => println!("{}", generate_gviz(&packages)),
+        ListFormat::Mermaid => println!("{}", generate_mermaid(&packages)),
     }
 
     Ok(())
@@ -180,29 +182,8 @@ fn print_parsable(packages: &[Package], workspace: &Workspace, relative: bool) {
     }
 }
 
-/// Serializable representation of a package for JSON output
-#[derive(Serialize)]
-struct PackageJson<'a> {
-    name: &'a str,
-    version: &'a str,
-    path: String,
-    flutter: bool,
-    private: bool,
-    dependencies: &'a Vec<String>,
-}
-
 fn print_json(packages: &[Package]) {
-    let entries: Vec<PackageJson> = packages
-        .iter()
-        .map(|p| PackageJson {
-            name: &p.name,
-            version: p.version.as_deref().unwrap_or("unknown"),
-            path: p.path.display().to_string(),
-            flutter: p.is_flutter,
-            private: p.is_private(),
-            dependencies: &p.dependencies,
-        })
-        .collect();
+    let entries = build_packages_json(packages);
 
     // serde_json handles all escaping correctly
     match serde_json::to_string_pretty(&entries) {
@@ -233,116 +214,24 @@ fn print_graph(packages: &[Package]) {
     println!();
 }
 
-fn print_gviz(packages: &[Package]) {
-    let known: HashSet<&str> = packages.iter().map(|p| p.name.as_str()).collect();
-
-    println!("digraph packages {{");
-    println!("  rankdir=LR;");
-    println!("  node [shape=box];");
-
-    for pkg in packages {
-        // Sanitize name for DOT (replace hyphens with underscores for node IDs)
-        let node_id = pkg.name.replace('-', "_");
-        println!("  {} [label=\"{}\"];", node_id, pkg.name);
-
-        for dep in &pkg.dependencies {
-            if known.contains(dep.as_str()) {
-                let dep_id = dep.replace('-', "_");
-                println!("  {} -> {};", node_id, dep_id);
-            }
-        }
-    }
-
-    println!("}}");
-}
-
-fn print_mermaid(packages: &[Package]) {
-    let known: HashSet<&str> = packages.iter().map(|p| p.name.as_str()).collect();
-
-    println!("graph LR");
-
-    for pkg in packages {
-        let node_id = pkg.name.replace('-', "_");
-        println!("  {}[{}]", node_id, pkg.name);
-
-        for dep in &pkg.dependencies {
-            if known.contains(dep.as_str()) {
-                let dep_id = dep.replace('-', "_");
-                println!("  {} --> {}", node_id, dep_id);
-            }
-        }
-    }
-}
-
-/// Detect circular dependencies among workspace packages using Kahn's algorithm.
+/// Detect cycles using core logic and report with colored output.
 fn detect_and_report_cycles(packages: &[Package]) -> Result<()> {
-    let known: HashSet<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+    let result = detect_cycles(packages);
 
-    // Build adjacency list and in-degree map
-    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-
-    for pkg in packages {
-        adj.entry(pkg.name.as_str()).or_default();
-        in_degree.entry(pkg.name.as_str()).or_insert(0);
-
-        for dep in &pkg.dependencies {
-            if known.contains(dep.as_str()) {
-                adj.entry(pkg.name.as_str()).or_default().push(dep.as_str());
-                *in_degree.entry(dep.as_str()).or_insert(0) += 1;
-            }
-        }
-    }
-
-    // Kahn's algorithm: topological sort
-    let mut queue: VecDeque<&str> = in_degree
-        .iter()
-        .filter(|&(_, &deg)| deg == 0)
-        .map(|(&name, _)| name)
-        .collect();
-    let mut visited = 0usize;
-
-    while let Some(node) = queue.pop_front() {
-        visited += 1;
-        if let Some(neighbors) = adj.get(node) {
-            for &neighbor in neighbors {
-                if let Some(deg) = in_degree.get_mut(neighbor) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(neighbor);
-                    }
-                }
-            }
-        }
-    }
-
-    let total = packages.len();
-    if visited == total {
+    if !result.has_cycles() {
         println!(
             "\n  {} No dependency cycles detected ({} packages).\n",
             "OK".green(),
-            total
+            result.total
         );
     } else {
-        // Packages remaining in the graph (in_degree > 0) are part of cycles
-        let cycle_packages: Vec<&str> = in_degree
-            .iter()
-            .filter(|&(_, &deg)| deg > 0)
-            .map(|(&name, _)| name)
-            .collect();
-
         println!(
             "\n  {} Dependency cycle(s) detected involving {} package(s):\n",
             "WARNING".yellow().bold(),
-            cycle_packages.len()
+            result.cycle_packages.len()
         );
-        for name in &cycle_packages {
-            let deps: Vec<&&str> = adj
-                .get(name)
-                .map(|d| d.iter().filter(|dd| cycle_packages.contains(dd)).collect())
-                .unwrap_or_default();
-            let dep_names: Vec<&str> = deps.into_iter().copied().collect();
-            println!("    {} -> {}", name.bold(), dep_names.join(", "));
+        for (name, deps) in &result.cycle_packages {
+            println!("    {} -> {}", name.bold(), deps.join(", "));
         }
         println!();
     }
@@ -353,6 +242,7 @@ fn detect_and_report_cycles(packages: &[Package]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     fn make_pkg(name: &str, deps: Vec<&str>) -> Package {
@@ -398,28 +288,5 @@ mod tests {
             },
             false,
         );
-    }
-
-    #[test]
-    fn test_cycle_detection_no_cycles() {
-        let packages = vec![
-            make_pkg("core", vec![]),
-            make_pkg("utils", vec!["core"]),
-            make_pkg("app", vec!["core", "utils"]),
-        ];
-        // Should not error
-        let result = detect_and_report_cycles(&packages);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_cycle_detection_with_cycles() {
-        let packages = vec![
-            make_pkg("a", vec!["b"]),
-            make_pkg("b", vec!["a"]),
-            make_pkg("c", vec![]),
-        ];
-        let result = detect_and_report_cycles(&packages);
-        assert!(result.is_ok()); // Reports cycles but doesn't error
     }
 }

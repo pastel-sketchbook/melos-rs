@@ -702,8 +702,8 @@ Convert the single binary crate into a Cargo workspace. Move pure logic modules 
 - [x] Move `src/package/` to `crates/melos-core/src/package/` (as-is, pure logic)
 - [x] Move `src/workspace.rs` to `crates/melos-core/src/workspace.rs` (warnings vec instead of eprintln)
 - [x] Move `src/watcher/` to `crates/melos-core/src/watcher/` (removed colored/emoji, plain text)
-- [ ] Extract pure logic functions from each command file into `crates/melos-core/src/commands/` -- **deferred to Phase 3**
-- [ ] Move `src/runner/mod.rs` core logic to `crates/melos-core/src/runner.rs` -- **deferred to Phase 3**
+- [x] Extract pure logic functions from each command file into `crates/melos-core/src/commands/` -- done, Phase 3 Batch A (Batch 45)
+- [x] Move `src/runner/mod.rs` core logic to `crates/melos-core/src/runner.rs` -- done, Phase 2 (Batch 44b)
 - [x] Keep CLI `run()` wrappers in `crates/melos-cli/src/commands/` -- commands + runner stay in CLI for now
 - [x] Move `src/cli.rs` and `src/main.rs` to `crates/melos-cli/src/`
 - [x] Create `crates/melos-core/src/lib.rs` with public module exports
@@ -755,13 +755,13 @@ driving progress bars directly.
 Move command orchestration logic from CLI wrappers into core, one command at a time.
 Each core command accepts `UnboundedSender<Event>` and returns a typed result summary.
 
-- [ ] **Simple commands (batch A):**
-  - `list` -- core returns `Vec<PackageInfo>`, emits `ListPackage` events
-  - `clean` -- core emits per-package events, returns pass/fail count
-  - `format` -- core emits per-package events, returns pass/fail count
-  - `test` -- core emits per-package events, returns pass/fail count
-  - `init` -- core returns created file paths, emits `Info` events
-  - `health` -- core returns `HealthReport`, emits diagnostic events
+- [x] **Simple commands (batch A):** done, Batch 45
+  - `list` -- core: `detect_cycles()`, `generate_gviz()`, `generate_mermaid()`, `build_packages_json()`
+  - `clean` -- core: `DEEP_CLEAN_DIRS/FILES`, `OverrideRemoval` enum, `remove_pubspec_overrides()`
+  - `format` -- core: `FormatOpts`, `build_format_command()`, `run()` returns `PackageResults`
+  - `test` -- core: `TestOpts`, `build_extra_flags()`, `build_test_command()`, `run()` returns `PackageResults`
+  - `init` -- core: `write_7x_config()`, `write_legacy_config()`, `create_dir_if_missing()`
+  - `health` -- core: `HealthOpts`, all data types, all `collect_*` functions, `run()` returns `HealthReport`
 - [ ] **Medium commands (batch B):**
   - `exec` -- core handles package iteration + watch loop, emits events
   - `bootstrap` -- core handles pub get + overrides + enforce, emits events
@@ -1075,3 +1075,16 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Updated Taskfile.yml for workspace structure (--workspace flags, install path, version extraction)
 - [x] Removed empty src/ and tests/ directories from workspace root
 - Total: 507 unit tests + 26 integration tests = 533 tests (353 CLI unit + 154 core unit + 26 integration); 5 new filter_ext tests
+
+#### Batch 45 — Phase 3 Batch A: migrate simple command logic to core (done, v0.5.2)
+- [x] Created `crates/melos-core/src/commands/mod.rs` — `PackageResults` shared type with `passed()`/`failed()` helpers + 3 tests
+- [x] Created `crates/melos-core/src/commands/format.rs` — `FormatOpts`, `build_format_command()`, `run()` returns `PackageResults` + 7 tests
+- [x] Created `crates/melos-core/src/commands/test.rs` — `TestOpts`, `build_extra_flags()`, `build_test_command()`, `run()` returns `PackageResults` + 7 tests
+- [x] Created `crates/melos-core/src/commands/clean.rs` — `DEEP_CLEAN_DIRS/FILES` constants, `OverrideRemoval` enum, `remove_pubspec_overrides()` + 6 tests
+- [x] Created `crates/melos-core/src/commands/list.rs` — `PackageJson`, `CycleResult`, `detect_cycles()`, `generate_gviz()`, `generate_mermaid()`, `build_packages_json()` + 5 tests
+- [x] Created `crates/melos-core/src/commands/health.rs` — `HealthOpts`, all 5 data types, all `collect_*` functions, `run()` returns `HealthReport` + 11 tests
+- [x] Created `crates/melos-core/src/commands/init.rs` — `write_7x_config()`, `write_legacy_config()`, `create_dir_if_missing()` + 6 tests
+- [x] Updated 6 CLI command files to import from core, removed duplicated logic and tests
+- [x] Architecture: core gets opts structs (no clap), pure logic, orchestration; CLI retains clap args, colored output, renderer, lifecycle hooks
+- [x] Updated Phase 3 checklist and deferred items
+- Total: 513 unit tests + 26 integration tests = 539 tests (303 CLI unit + 210 core unit + 26 integration); 45 net new core tests

@@ -4,8 +4,8 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
+use melos_core::commands::format::FormatOpts;
 use melos_core::package::filter::apply_filters_with_categories;
-use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Arguments for the `format` command
@@ -57,25 +57,20 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
     }
     println!();
 
-    let cmd_str = build_format_command(args.set_exit_if_changed, &args.output, args.line_length);
+    let opts = FormatOpts {
+        concurrency: args.concurrency,
+        set_exit_if_changed: args.set_exit_if_changed,
+        output: args.output.clone(),
+        line_length: args.line_length,
+    };
 
     let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), "formatting");
-    let runner = ProcessRunner::new(args.concurrency, false);
-    let results = runner
-        .run_in_packages_with_events(
-            &packages,
-            &cmd_str,
-            &workspace.env_vars(),
-            None,
-            Some(&tx),
-            &workspace.packages,
-        )
-        .await?;
+    let results = melos_core::commands::format::run(&packages, workspace, &opts, Some(&tx)).await?;
     drop(tx);
     render_handle.await??;
 
-    let failed = results.iter().filter(|(_, success)| !success).count();
-    let passed = results.len() - failed;
+    let failed = results.failed();
+    let passed = results.passed();
 
     if failed > 0 {
         if args.set_exit_if_changed {
@@ -97,81 +92,4 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
         format!("All {} package(s) passed formatting.", passed).green()
     );
     Ok(())
-}
-
-/// Build the `dart format` command string from flags.
-fn build_format_command(
-    set_exit_if_changed: bool,
-    output: &str,
-    line_length: Option<u32>,
-) -> String {
-    let mut cmd_parts = vec!["dart".to_string(), "format".to_string()];
-
-    if set_exit_if_changed {
-        cmd_parts.push("--set-exit-if-changed".to_string());
-    }
-
-    if output != "write" {
-        cmd_parts.push(format!("--output={}", output));
-    }
-
-    if let Some(line_length) = line_length {
-        cmd_parts.push(format!("--line-length={}", line_length));
-    }
-
-    // Format the current directory (package root)
-    cmd_parts.push(".".to_string());
-
-    cmd_parts.join(" ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_format_command_default() {
-        let cmd = build_format_command(false, "write", None);
-        assert_eq!(cmd, "dart format .");
-    }
-
-    #[test]
-    fn test_build_format_command_set_exit_if_changed() {
-        let cmd = build_format_command(true, "write", None);
-        assert_eq!(cmd, "dart format --set-exit-if-changed .");
-    }
-
-    #[test]
-    fn test_build_format_command_json_output() {
-        let cmd = build_format_command(false, "json", None);
-        assert_eq!(cmd, "dart format --output=json .");
-    }
-
-    #[test]
-    fn test_build_format_command_none_output() {
-        let cmd = build_format_command(false, "none", None);
-        assert_eq!(cmd, "dart format --output=none .");
-    }
-
-    #[test]
-    fn test_build_format_command_line_length() {
-        let cmd = build_format_command(false, "write", Some(120));
-        assert_eq!(cmd, "dart format --line-length=120 .");
-    }
-
-    #[test]
-    fn test_build_format_command_all_flags() {
-        let cmd = build_format_command(true, "json", Some(80));
-        assert_eq!(
-            cmd,
-            "dart format --set-exit-if-changed --output=json --line-length=80 ."
-        );
-    }
-
-    #[test]
-    fn test_build_format_command_write_output_not_added() {
-        // "write" is the default and should not be added to the command
-        let cmd = build_format_command(false, "write", None);
-        assert!(!cmd.contains("--output"));
-    }
 }
