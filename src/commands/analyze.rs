@@ -84,7 +84,8 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
     );
 
     for pkg in &packages {
-        println!("  {} {}", "->".cyan(), pkg.name);
+        let sdk = if pkg.is_flutter { "flutter" } else { "dart" };
+        println!("  {} {} ({})", "->".cyan(), pkg.name, sdk);
     }
     println!();
 
@@ -131,7 +132,7 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
         }
 
         println!("\n{}", "Dry run complete. No changes were applied.".green());
-        return Ok(());
+        println!();
     }
 
     // --fix: apply fixes before analysis (with conflict pre-scan)
@@ -200,24 +201,52 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
         }
     }
 
-    let cmd_str = build_analyze_command(args.fatal_warnings, args.fatal_infos, args.no_fatal);
+    // Split packages by SDK so Flutter packages use `flutter analyze`
+    // (which defaults to --fatal-infos) and Dart packages use `dart analyze`.
+    let flutter_pkgs: Vec<_> = packages.iter().filter(|p| p.is_flutter).cloned().collect();
+    let dart_pkgs: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
 
     let pb = create_progress_bar(packages.len() as u64, "analyzing");
     let runner = ProcessRunner::new(args.concurrency, false);
-    let results = runner
-        .run_in_packages_with_progress(
-            &packages,
-            &cmd_str,
-            &workspace.env_vars(),
-            None,
-            Some(&pb),
-            &workspace.packages,
-        )
-        .await?;
+    let mut all_results = Vec::new();
+
+    if !flutter_pkgs.is_empty() {
+        let cmd = build_analyze_command(true, args.fatal_warnings, args.fatal_infos, args.no_fatal);
+        pb.set_message("flutter analyze...");
+        let results = runner
+            .run_in_packages_with_progress(
+                &flutter_pkgs,
+                &cmd,
+                &workspace.env_vars(),
+                None,
+                Some(&pb),
+                &workspace.packages,
+            )
+            .await?;
+        all_results.extend(results);
+    }
+
+    if !dart_pkgs.is_empty() {
+        let cmd =
+            build_analyze_command(false, args.fatal_warnings, args.fatal_infos, args.no_fatal);
+        pb.set_message("dart analyze...");
+        let results = runner
+            .run_in_packages_with_progress(
+                &dart_pkgs,
+                &cmd,
+                &workspace.env_vars(),
+                None,
+                Some(&pb),
+                &workspace.packages,
+            )
+            .await?;
+        all_results.extend(results);
+    }
+
     pb.finish_and_clear();
 
-    let failed = results.iter().filter(|(_, success)| !success).count();
-    let passed = results.len() - failed;
+    let failed = all_results.iter().filter(|(_, success)| !success).count();
+    let passed = all_results.len() - failed;
 
     if failed > 0 {
         anyhow::bail!("{} package(s) failed analysis ({} passed)", failed, passed);
@@ -247,9 +276,19 @@ fn build_fix_command(apply: bool, codes: &[String]) -> String {
     parts.join(" ")
 }
 
-/// Build the `dart analyze` command string from flags.
-fn build_analyze_command(fatal_warnings: bool, fatal_infos: bool, no_fatal: bool) -> String {
-    let mut cmd_parts = vec!["dart".to_string(), "analyze".to_string()];
+/// Build the analyze command string from flags.
+///
+/// Uses `flutter analyze` for Flutter packages and `dart analyze` for
+/// Dart-only packages. This matters because `flutter analyze` defaults to
+/// `--fatal-infos` while `dart analyze` does not.
+fn build_analyze_command(
+    is_flutter: bool,
+    fatal_warnings: bool,
+    fatal_infos: bool,
+    no_fatal: bool,
+) -> String {
+    let sdk = if is_flutter { "flutter" } else { "dart" };
+    let mut cmd_parts = vec![sdk.to_string(), "analyze".to_string()];
 
     if !no_fatal {
         if fatal_warnings {
@@ -550,39 +589,60 @@ mod tests {
 
     #[test]
     fn test_build_analyze_command_default() {
-        let cmd = build_analyze_command(false, false, false);
+        let cmd = build_analyze_command(false, false, false, false);
         assert_eq!(cmd, "dart analyze .");
     }
 
     #[test]
     fn test_build_analyze_command_fatal_warnings() {
-        let cmd = build_analyze_command(true, false, false);
+        let cmd = build_analyze_command(false, true, false, false);
         assert_eq!(cmd, "dart analyze --fatal-warnings .");
     }
 
     #[test]
     fn test_build_analyze_command_fatal_infos() {
-        let cmd = build_analyze_command(false, true, false);
+        let cmd = build_analyze_command(false, false, true, false);
         assert_eq!(cmd, "dart analyze --fatal-infos .");
     }
 
     #[test]
     fn test_build_analyze_command_both_fatal() {
-        let cmd = build_analyze_command(true, true, false);
+        let cmd = build_analyze_command(false, true, true, false);
         assert_eq!(cmd, "dart analyze --fatal-warnings --fatal-infos .");
     }
 
     #[test]
     fn test_build_analyze_command_no_fatal_overrides() {
         // --no-fatal overrides both --fatal-warnings and --fatal-infos
-        let cmd = build_analyze_command(true, true, true);
+        let cmd = build_analyze_command(false, true, true, true);
         assert_eq!(cmd, "dart analyze --no-fatal-warnings --no-fatal-infos .");
     }
 
     #[test]
     fn test_build_analyze_command_no_fatal_alone() {
-        let cmd = build_analyze_command(false, false, true);
+        let cmd = build_analyze_command(false, false, false, true);
         assert_eq!(cmd, "dart analyze --no-fatal-warnings --no-fatal-infos .");
+    }
+
+    #[test]
+    fn test_build_analyze_command_flutter_default() {
+        let cmd = build_analyze_command(true, false, false, false);
+        assert_eq!(cmd, "flutter analyze .");
+    }
+
+    #[test]
+    fn test_build_analyze_command_flutter_no_fatal() {
+        let cmd = build_analyze_command(true, false, false, true);
+        assert_eq!(
+            cmd,
+            "flutter analyze --no-fatal-warnings --no-fatal-infos ."
+        );
+    }
+
+    #[test]
+    fn test_build_analyze_command_flutter_fatal_warnings() {
+        let cmd = build_analyze_command(true, true, false, false);
+        assert_eq!(cmd, "flutter analyze --fatal-warnings .");
     }
 
     #[test]

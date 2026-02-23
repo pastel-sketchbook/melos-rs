@@ -936,3 +936,13 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Confirmed all 7 `.expect()` calls in production code have safety justification comments
 - [x] Updated AGENTS.md to document `.expect()` with safety comment convention (was previously "never use expect")
 - Total: 457 unit tests + 26 integration tests = 483 tests (no test changes, refactoring only)
+
+#### Batch 43 — Analyze consistency: Flutter/Dart SDK split and dry-run analysis (done)
+- [x] `build_analyze_command()` now takes `is_flutter: bool` — uses `flutter analyze` for Flutter packages and `dart analyze` for Dart packages, matching SDK default behavior (`flutter analyze` defaults to `--fatal-infos`, `dart analyze` does not)
+- [x] Analysis phase splits packages into Flutter/Dart groups using the same pattern as `test.rs` and `bootstrap.rs`
+- [x] Package listing now shows SDK type: `-> pkg_name (flutter)` / `-> pkg_name (dart)`
+- [x] `--dry-run` now falls through to analysis phase after previewing fixes — previously returned early, causing inconsistent SUCCESS/FAILED results between `analyze`, `analyze --fix`, and `analyze --dry-run`
+- [x] All three analyze modes now produce consistent results on real workspace (fl_template)
+- [x] Tests: 3 new `build_analyze_command` tests for Flutter SDK (default, no_fatal, fatal_warnings)
+- [x] Updated README test count to 533
+- Total: 507 unit tests + 26 integration tests = 533 tests

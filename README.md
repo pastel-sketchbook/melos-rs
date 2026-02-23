@@ -191,7 +191,7 @@ src/
 
 ### Test suite
 
-530 tests (504 unit + 26 integration). Run with:
+533 tests (507 unit + 26 integration). Run with:
 
 ```sh
 cargo test
