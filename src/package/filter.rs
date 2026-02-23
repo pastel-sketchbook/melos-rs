@@ -432,6 +432,7 @@ mod tests {
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         }
     }
 
@@ -445,6 +446,7 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         }
     }
 
@@ -609,6 +611,7 @@ mod tests {
                 dependencies: vec!["core".to_string()],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
             Package {
                 name: "core".to_string(),
@@ -619,6 +622,7 @@ mod tests {
                 dependencies: vec!["utils".to_string()],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
             Package {
                 name: "utils".to_string(),
@@ -629,6 +633,7 @@ mod tests {
                 dependencies: vec![],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
             Package {
                 name: "unrelated".to_string(),
@@ -639,6 +644,7 @@ mod tests {
                 dependencies: vec![],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
         ];
 
@@ -670,6 +676,7 @@ mod tests {
                 dependencies: vec!["core".to_string()],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
             Package {
                 name: "core".to_string(),
@@ -680,6 +687,7 @@ mod tests {
                 dependencies: vec!["utils".to_string()],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
             Package {
                 name: "utils".to_string(),
@@ -690,6 +698,7 @@ mod tests {
                 dependencies: vec![],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
             Package {
                 name: "unrelated".to_string(),
@@ -700,6 +709,7 @@ mod tests {
                 dependencies: vec![],
                 dev_dependencies: vec![],
                 dependency_versions: HashMap::new(),
+                resolution: None,
             },
         ];
 

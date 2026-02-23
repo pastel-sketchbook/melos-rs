@@ -365,6 +365,7 @@ mod tests {
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         }
     }
 

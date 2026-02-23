@@ -37,6 +37,13 @@ pub struct Package {
     /// mapping with a `version` key). SDK deps, path-only deps, and git-only deps
     /// are excluded.
     pub dependency_versions: HashMap<String, String>,
+
+    /// The `resolution` field from pubspec.yaml (e.g. "workspace").
+    ///
+    /// Dart 3.5+ workspaces require each member package to declare
+    /// `resolution: workspace`. When set, `pubspec_overrides.yaml` must NOT
+    /// be generated because it conflicts with workspace resolution.
+    pub resolution: Option<String>,
 }
 
 /// Minimal pubspec.yaml structure for parsing
@@ -55,6 +62,9 @@ pub struct PubspecYaml {
 
     #[serde(default)]
     pub dev_dependencies: Option<HashMap<String, yaml_serde::Value>>,
+
+    #[serde(default)]
+    pub resolution: Option<String>,
 
     #[serde(default)]
     pub flutter: Option<yaml_serde::Value>,
@@ -120,7 +130,18 @@ impl Package {
             dependencies,
             dev_dependencies,
             dependency_versions,
+            resolution: pubspec.resolution,
         })
+    }
+
+    /// Whether this package uses Dart workspace resolution (`resolution: workspace`).
+    ///
+    /// When `true`, `pubspec_overrides.yaml` must NOT be generated because the
+    /// Dart workspace resolver handles dependency linking and rejects overrides.
+    pub fn uses_workspace_resolution(&self) -> bool {
+        self.resolution
+            .as_ref()
+            .is_some_and(|r| r.eq_ignore_ascii_case("workspace"))
     }
 
     /// Whether this package is private (publish_to: none)
@@ -290,6 +311,7 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
         assert!(pkg.is_private());
     }
@@ -305,6 +327,7 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
         assert!(!pkg.is_private());
     }
@@ -320,6 +343,7 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
         assert!(!pkg.is_private());
     }
@@ -335,6 +359,7 @@ mod tests {
             dependencies: vec!["http".to_string()],
             dev_dependencies: vec!["test".to_string()],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
         assert!(pkg.has_dependency("http"));
         assert!(pkg.has_dependency("test"));
@@ -430,5 +455,85 @@ mod tests {
         );
         let val = yaml_serde::Value::Mapping(map);
         assert_eq!(extract_version_constraint(&val), None);
+    }
+
+    #[test]
+    fn test_from_path_with_workspace_resolution() {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("ws_pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(
+            pkg_dir.join("pubspec.yaml"),
+            "name: ws_pkg\nversion: 1.0.0\nresolution: workspace\n",
+        )
+        .unwrap();
+
+        let pkg = Package::from_path(&pkg_dir).unwrap();
+        assert_eq!(pkg.resolution, Some("workspace".to_string()));
+        assert!(pkg.uses_workspace_resolution());
+    }
+
+    #[test]
+    fn test_uses_workspace_resolution_true() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: Some("workspace".to_string()),
+        };
+        assert!(pkg.uses_workspace_resolution());
+    }
+
+    #[test]
+    fn test_uses_workspace_resolution_case_insensitive() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: Some("Workspace".to_string()),
+        };
+        assert!(pkg.uses_workspace_resolution());
+    }
+
+    #[test]
+    fn test_uses_workspace_resolution_false_other() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: Some("local".to_string()),
+        };
+        assert!(!pkg.uses_workspace_resolution());
+    }
+
+    #[test]
+    fn test_uses_workspace_resolution_none() {
+        let pkg = Package {
+            name: "test".to_string(),
+            path: PathBuf::from("/test"),
+            version: None,
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: None,
+        };
+        assert!(!pkg.uses_workspace_resolution());
     }
 }

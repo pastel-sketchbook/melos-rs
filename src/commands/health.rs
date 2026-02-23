@@ -418,6 +418,7 @@ mod tests {
             dependencies: dep_versions.keys().cloned().collect(),
             dev_dependencies: vec![],
             dependency_versions: dep_versions,
+            resolution: None,
         }
     }
 

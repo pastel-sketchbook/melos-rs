@@ -380,6 +380,7 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -429,6 +430,7 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();

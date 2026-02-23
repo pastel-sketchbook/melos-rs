@@ -65,15 +65,26 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
             .await?;
     }
 
-    // In 6.x mode, generate pubspec_overrides.yaml for local package linking
+    // In 6.x mode, generate pubspec_overrides.yaml for local package linking.
+    // Skip entirely if ALL packages use workspace resolution (Dart 3.5+ workspaces
+    // handle linking natively and reject pubspec_overrides.yaml).
     if workspace.config_source.is_legacy() {
-        let override_paths = config_dependency_override_paths(workspace);
-        generate_pubspec_overrides(
-            &packages,
-            &workspace.packages,
-            &override_paths,
-            &workspace.root_path,
-        )?;
+        let all_workspace_resolution = packages.iter().all(|p| p.uses_workspace_resolution());
+
+        if all_workspace_resolution && !packages.is_empty() {
+            println!(
+                "  {} All packages use workspace resolution — skipping pubspec_overrides.yaml generation\n",
+                "i".blue()
+            );
+        } else {
+            let override_paths = config_dependency_override_paths(workspace);
+            generate_pubspec_overrides(
+                &packages,
+                &workspace.packages,
+                &override_paths,
+                &workspace.root_path,
+            )?;
+        }
     }
 
     // Validate version constraints if configured
@@ -518,6 +529,13 @@ fn generate_pubspec_overrides(
     let mut generated = 0u32;
 
     for pkg in packages {
+        // Skip packages that use Dart workspace resolution — generating
+        // pubspec_overrides.yaml would cause `pub get` to fail with:
+        // "Cannot override workspace packages."
+        if pkg.uses_workspace_resolution() {
+            continue;
+        }
+
         // Find all dependencies (regular + dev) that match override sources
         let local_deps: Vec<&Package> = pkg
             .dependencies
@@ -627,6 +645,7 @@ mod tests {
             dependencies: deps.into_iter().map(String::from).collect(),
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         }
     }
 
@@ -847,6 +866,7 @@ mod tests {
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            resolution: None,
         }
     }
 
@@ -1003,6 +1023,7 @@ mod tests {
             dependencies: vec!["core".to_string(), "external_lib".to_string()],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
 
         let core = make_package(
@@ -1046,6 +1067,7 @@ mod tests {
             dependencies: vec!["core".to_string()],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
 
         let core_dir = dir.path().join("packages").join("core");
@@ -1188,6 +1210,7 @@ mod tests {
             dependencies: vec!["http".to_string(), "intl".to_string()],
             dev_dependencies: vec!["test".to_string()],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
 
         let mut shared_deps = HashMap::new();
@@ -1287,6 +1310,7 @@ mod tests {
             dependencies: vec!["http".to_string()],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         };
 
         let ws = make_workspace(None);
@@ -1296,5 +1320,102 @@ mod tests {
         // File should be unchanged
         let content = std::fs::read_to_string(pkg_dir.join("pubspec.yaml")).unwrap();
         assert!(content.contains("http: ^0.13.0"));
+    }
+
+    // -----------------------------------------------------------------------
+    // workspace resolution tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_generate_pubspec_overrides_skips_workspace_resolution() {
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // app uses workspace resolution — should NOT get pubspec_overrides.yaml
+        let app_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+
+        let app = Package {
+            name: "app".to_string(),
+            path: app_dir.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["core".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: Some("workspace".to_string()),
+        };
+
+        let core_dir = dir.path().join("packages").join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+        let core = make_package("core", &core_dir.to_string_lossy(), vec![]);
+
+        let result = generate_pubspec_overrides(&[app], &[core], &[], dir.path());
+        assert!(result.is_ok());
+
+        // No pubspec_overrides.yaml should be generated for workspace-resolved package
+        let overrides_path = app_dir.join("pubspec_overrides.yaml");
+        assert!(
+            !overrides_path.exists(),
+            "pubspec_overrides.yaml should NOT be generated for workspace-resolved packages"
+        );
+    }
+
+    #[test]
+    fn test_generate_pubspec_overrides_mixed_resolution() {
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // app uses workspace resolution — skipped
+        let app_dir = dir.path().join("packages").join("app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+
+        let app = Package {
+            name: "app".to_string(),
+            path: app_dir.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["core".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: Some("workspace".to_string()),
+        };
+
+        // legacy_app does NOT use workspace resolution — should get overrides
+        let legacy_dir = dir.path().join("packages").join("legacy_app");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+
+        let legacy_app = Package {
+            name: "legacy_app".to_string(),
+            path: legacy_dir.clone(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["core".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: None,
+        };
+
+        let core_dir = dir.path().join("packages").join("core");
+        std::fs::create_dir_all(&core_dir).unwrap();
+        let core = make_package("core", &core_dir.to_string_lossy(), vec![]);
+
+        let result = generate_pubspec_overrides(&[app, legacy_app], &[core], &[], dir.path());
+        assert!(result.is_ok());
+
+        // workspace-resolved app: no overrides
+        assert!(
+            !app_dir.join("pubspec_overrides.yaml").exists(),
+            "workspace-resolved app should not get pubspec_overrides.yaml"
+        );
+
+        // legacy app: should get overrides
+        assert!(
+            legacy_dir.join("pubspec_overrides.yaml").exists(),
+            "legacy app should get pubspec_overrides.yaml"
+        );
+        let content = std::fs::read_to_string(legacy_dir.join("pubspec_overrides.yaml")).unwrap();
+        assert!(content.contains("core:"));
     }
 }

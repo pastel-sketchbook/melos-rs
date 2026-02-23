@@ -318,6 +318,7 @@ mod tests {
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
             publish_to: None,
+            resolution: None,
         };
         assert_eq!(pub_cmd(&pkg), "flutter");
     }
@@ -333,6 +334,7 @@ mod tests {
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
             publish_to: None,
+            resolution: None,
         };
         assert_eq!(pub_cmd(&pkg), "dart");
     }

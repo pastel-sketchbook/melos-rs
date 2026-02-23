@@ -2815,6 +2815,7 @@ dependencies:
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
             publish_to: None,
+            resolution: None,
         }];
         let versioned = vec![("core_lib".to_string(), "2.0.0".to_string())];
 
@@ -2854,6 +2855,7 @@ dependencies:
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
             publish_to: None,
+            resolution: None,
         }];
         let versioned = vec![("core_lib".to_string(), "2.0.0".to_string())];
 

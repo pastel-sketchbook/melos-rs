@@ -2,6 +2,33 @@
 
 A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart monorepo management tool.
 
+## Parity Target
+
+Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22).
+
+| Area | Melos 7.4.0 | melos-rs | Notes |
+|------|-------------|----------|-------|
+| Config: `melos.yaml` (6.x) | Yes | Yes | Full support |
+| Config: `pubspec.yaml` (7.x) | Yes | Yes | `melos:` section parsing |
+| `bootstrap` | Yes | Partial | `resolution: workspace` override skip in progress |
+| `clean` | Yes | Yes | Deep clean + hooks |
+| `exec` | Yes | Yes | Concurrency, fail-fast, watch, timeout, dry-run |
+| `run` | Yes | Yes | Steps, exec config, watch, groups, private |
+| `list` | Yes | Yes | All formats: long, json, parsable, graph, gviz, mermaid |
+| `version` | Yes | Yes | Conventional commits, changelogs, git tags, release branches |
+| `publish` | Yes | Yes | Dry-run, git tags, release URLs |
+| `format` | Yes | Yes | All flags |
+| `analyze` | Yes | Yes | Fatal warnings/infos |
+| `test` | Yes | Yes | Coverage, goldens, hooks |
+| `pub get/upgrade/downgrade/add/remove` | Yes | Yes | All subcommands |
+| `init` | Yes | Yes | 6.x and 7.x scaffolding |
+| `completion` | Yes | Yes | bash/zsh/fish |
+| `health` | N/A | Yes | melos-rs exclusive: version drift, missing fields, SDK consistency |
+| `resolution: workspace` | Yes | Yes | Skip `pubspec_overrides.yaml` for workspace-resolved packages |
+| IDE integration | Yes (IntelliJ, VS Code) | No | Out of scope for CLI tool |
+| `build:android/ios` | Partial | No | Low priority |
+| Migration guide | Yes | No | Planned |
+
 ## Phase 1: Core Infrastructure (MVP)
 
 - [x] Project scaffolding (Cargo.toml, module structure)
@@ -452,3 +479,23 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
   - `test_create_release_branch_in_git_repo`, `test_create_release_branch_custom_pattern`
   - `test_git_checkout_back_to_original`, `test_release_branch_pattern_no_placeholder`
   - `test_release_url_format_matches_tag`, `test_release_url_prerelease_tag`
+
+### Batch 25: Workspace Resolution Support (Dart 3.5+)
+- [x] Theme A: `resolution: workspace` support in Package model
+  - Added `resolution: Option<String>` field to `PubspecYaml` (serde deserialization)
+  - Added `resolution: Option<String>` field to `Package` struct
+  - Wired `resolution` from `pubspec.resolution` into `Package::from_path()`
+  - Added `Package::uses_workspace_resolution()` method (case-insensitive check for "workspace")
+- [x] Theme B: Bootstrap compatibility with workspace-resolved packages
+  - Updated `generate_pubspec_overrides()` to skip packages with `resolution: workspace`
+  - Updated bootstrap `run()` to skip override generation entirely when ALL packages use workspace resolution, with info message
+  - Fixes `pubspec_overrides.yaml` conflict: Dart 3.5+ rejects overrides for workspace-resolved packages
+- [x] Theme C: Melos 7.4.0 parity tracking
+  - Added feature-by-feature parity comparison table to TODO.md
+  - Tracks coverage status for all Melos 7.4.0 features (commands, config, IDE integration, etc.)
+- [x] Housekeeping: Updated 20 Package constructor sites across 8 test files to include `resolution: None`
+  - `bootstrap.rs` (6 sites), `filter.rs` (10 sites), `clean.rs`, `health.rs`, `list.rs`, `pub_cmds.rs` (2), `version.rs` (2), `runner/mod.rs`, `watcher/mod.rs` (2)
+- [x] Tests: 7 new tests (363 total: 343 unit + 20 integration)
+  - `test_pubspec_resolution_field_parsed`, `test_pubspec_resolution_field_absent`, `test_pubspec_resolution_case_insensitive`
+  - `test_uses_workspace_resolution_true`, `test_uses_workspace_resolution_false`
+  - `test_generate_overrides_skips_workspace_resolution`, `test_bootstrap_skips_overrides_when_all_workspace_resolution`

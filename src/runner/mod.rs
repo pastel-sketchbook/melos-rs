@@ -361,6 +361,7 @@ mod tests {
             dependencies: vec![],
             dev_dependencies: vec![],
             dependency_versions: HashMap::new(),
+            resolution: None,
         }
     }
 
