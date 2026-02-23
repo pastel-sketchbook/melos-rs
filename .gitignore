@@ -18,3 +18,7 @@ debug/
 .env
 .env.*
 /melos.yaml
+
+# Benchmark test repo
+/test-flutter-repo/
+bench-*.md

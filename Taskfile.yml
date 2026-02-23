@@ -96,3 +96,204 @@ tasks:
     desc: "Remove build artifacts"
     cmds:
       - cargo clean
+
+  # --- Benchmark: melos vs melos-rs ---
+  bench:setup:
+    desc: "Generate test Flutter monorepo for benchmarks (15 packages)"
+    status:
+      - test -f test-flutter-repo/melos.yaml
+    cmds:
+      - |
+        set -e
+        ROOT="test-flutter-repo"
+        rm -rf "$ROOT"
+        mkdir -p "$ROOT/packages"
+
+        # --- Root melos.yaml (for melos-rs 6.x compat) ---
+        cat > "$ROOT/melos.yaml" <<'YAML'
+        name: bench_workspace
+        packages:
+          - packages/**
+        YAML
+
+        # --- Root pubspec.yaml (for melos 7.x) ---
+        cat > "$ROOT/pubspec.yaml" <<'YAML'
+        name: bench_workspace
+        publish_to: none
+        environment:
+          sdk: ^3.11.0
+        workspace:
+          - packages/analytics
+          - packages/api
+          - packages/app
+          - packages/auth
+          - packages/config
+          - packages/core
+          - packages/dashboard
+          - packages/features
+          - packages/logger
+          - packages/navigation
+          - packages/testing
+          - packages/theme
+          - packages/ui
+          - packages/utils
+          - packages/widgets
+        dev_dependencies:
+          melos: ^7.0.0
+        melos:
+          name: bench_workspace
+        YAML
+
+        # Helper: create a Dart package
+        # Usage: mk_dart <name> <version> [deps...]
+        mk_dart() {
+          local name="$1" version="$2"; shift 2
+          local dir="$ROOT/packages/$name"
+          mkdir -p "$dir/lib/src"
+          echo "// $name library" > "$dir/lib/$name.dart"
+          echo "// internal" > "$dir/lib/src/impl.dart"
+          {
+            echo "name: $name"
+            echo "version: $version"
+            echo "resolution: workspace"
+            echo "environment:"
+            echo "  sdk: ^3.5.0"
+            if [ $# -gt 0 ]; then
+              echo "dependencies:"
+              for dep in "$@"; do
+                echo "  $dep: any"
+              done
+            fi
+          } > "$dir/pubspec.yaml"
+        }
+
+        # Helper: create a Flutter package
+        # Usage: mk_flutter <name> <version> [deps...]
+        mk_flutter() {
+          local name="$1" version="$2"; shift 2
+          local dir="$ROOT/packages/$name"
+          mkdir -p "$dir/lib/src"
+          echo "// $name Flutter library" > "$dir/lib/$name.dart"
+          echo "// internal" > "$dir/lib/src/impl.dart"
+          {
+            echo "name: $name"
+            echo "version: $version"
+            echo "resolution: workspace"
+            echo "environment:"
+            echo "  sdk: ^3.5.0"
+            echo "dependencies:"
+            echo "  flutter:"
+            echo "    sdk: flutter"
+            for dep in "$@"; do
+              echo "  $dep: any"
+            done
+            echo "flutter:"
+            echo "  uses-material-design: true"
+          } > "$dir/pubspec.yaml"
+        }
+
+        # --- 5 pure Dart packages ---
+        mk_dart  core       "1.0.0"
+        mk_dart  utils      "1.2.0"   core
+        mk_dart  logger     "0.5.0"   core
+        mk_dart  config     "2.0.0"   core utils
+        mk_dart  auth       "1.1.0"   core logger config
+
+        # --- 5 Flutter packages ---
+        mk_flutter app        "3.0.0"  core auth
+        mk_flutter ui         "1.0.0"
+        mk_flutter widgets    "1.3.0"  ui
+        mk_flutter navigation "0.8.0"  ui widgets
+        mk_flutter theme      "1.0.0"  ui
+
+        # --- 5 mixed packages with interdependencies ---
+        mk_dart    api        "2.0.0"  core config auth
+        mk_flutter features   "1.5.0"  ui widgets api
+        mk_dart    analytics  "0.3.0"  core logger
+        mk_flutter dashboard  "1.0.0"  features analytics theme
+        mk_dart    testing    "0.1.0"  core utils
+
+        # --- Install melos as dev dependency for 7.x ---
+        cd "$ROOT" && dart pub get && cd ..
+
+        echo ""
+        echo "Created 15 packages in $ROOT/packages/"
+        ls "$ROOT/packages/"
+
+  bench:list:
+    desc: "Benchmark: melos list vs melos-rs list"
+    dir: test-flutter-repo
+    deps: [bench:setup, build:release]
+    cmds:
+      - |
+        hyperfine \
+          --warmup 3 \
+          --min-runs 20 \
+          --export-markdown ../bench-list.md \
+          --command-name 'melos list' \
+          'melos list' \
+          --command-name 'melos-rs list' \
+          '../target/release/melos-rs list'
+
+  bench:list:json:
+    desc: "Benchmark: melos list --json vs melos-rs list --json"
+    dir: test-flutter-repo
+    deps: [bench:setup, build:release]
+    cmds:
+      - |
+        hyperfine \
+          --warmup 3 \
+          --min-runs 20 \
+          --export-markdown ../bench-list-json.md \
+          --command-name 'melos list --json' \
+          'melos list --json' \
+          --command-name 'melos-rs list --json' \
+          '../target/release/melos-rs list --json'
+
+  bench:exec:
+    desc: "Benchmark: melos exec -- echo hi vs melos-rs exec -- echo hi"
+    dir: test-flutter-repo
+    deps: [bench:setup, build:release]
+    cmds:
+      - |
+        hyperfine \
+          --warmup 3 \
+          --min-runs 10 \
+          --export-markdown ../bench-exec.md \
+          --command-name 'melos exec -- echo hi' \
+          'melos exec -- echo hi' \
+          --command-name 'melos-rs exec -- echo hi' \
+          '../target/release/melos-rs exec -- echo hi'
+
+  bench:bootstrap:
+    desc: "Benchmark: melos bootstrap vs melos-rs bootstrap (network-bound)"
+    dir: test-flutter-repo
+    deps: [bench:setup, build:release]
+    cmds:
+      - |
+        hyperfine \
+          --warmup 1 \
+          --min-runs 3 \
+          --export-markdown ../bench-bootstrap.md \
+          --command-name 'melos bootstrap' \
+          'melos bootstrap' \
+          --command-name 'melos-rs bootstrap' \
+          '../target/release/melos-rs bootstrap'
+
+  bench:all:
+    desc: "Run all benchmarks (list, list --json, exec)"
+    cmds:
+      - task: bench:list
+      - task: bench:list:json
+      - task: bench:exec
+      # NOTE: bench:bootstrap skipped — melos-rs generates pubspec_overrides.yaml
+      # which conflicts with Dart 3.11 workspace resolution: workspace.
+      # Run bench:bootstrap separately on a non-workspace test repo if needed.
+      - echo ""
+      - echo "=== Benchmark results saved to bench-*.md ==="
+
+  bench:clean:
+    desc: "Remove test Flutter repo and benchmark results"
+    cmds:
+      - rm -rf test-flutter-repo
+      - rm -f bench-list.md bench-list-json.md bench-exec.md bench-bootstrap.md
