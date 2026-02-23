@@ -44,11 +44,14 @@ pub struct PackageChangeEvent {
 /// * `debounce_ms` - Debounce duration in milliseconds (0 uses the default 500ms)
 /// * `event_tx` - Channel sender for emitting change events
 /// * `shutdown_rx` - Receiver that signals the watcher to stop
+/// * `ready_tx` - Optional oneshot sender signaled after all watchers are registered.
+///   Used by tests to avoid race conditions between watcher setup and file writes.
 pub fn start_watching(
     packages: &[Package],
     debounce_ms: u64,
     event_tx: mpsc::UnboundedSender<PackageChangeEvent>,
     mut shutdown_rx: mpsc::Receiver<()>,
+    ready_tx: Option<std::sync::mpsc::Sender<()>>,
 ) -> Result<()> {
     let debounce_duration = if debounce_ms == 0 {
         Duration::from_millis(DEFAULT_DEBOUNCE_MS)
@@ -76,6 +79,11 @@ pub fn start_watching(
             .watcher()
             .watch(&pkg.path, notify::RecursiveMode::Recursive)
             .with_context(|| format!("Failed to watch directory: {}", pkg.path.display()))?;
+    }
+
+    // Signal that all watchers are registered (used by tests to avoid race conditions)
+    if let Some(tx) = ready_tx {
+        let _ = tx.send(());
     }
 
     println!(
@@ -385,16 +393,23 @@ mod tests {
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
 
         let packages = vec![package];
         let packages_clone = packages.clone();
 
         let watcher_handle = tokio::task::spawn_blocking(move || {
-            start_watching(&packages_clone, 100, event_tx, shutdown_rx)
+            start_watching(&packages_clone, 100, event_tx, shutdown_rx, Some(ready_tx))
         });
 
-        // Give the watcher a moment to initialize
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Wait until watchers are fully registered before writing
+        tokio::task::spawn_blocking(move || {
+            ready_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("Watcher should signal ready within 5 seconds");
+        })
+        .await
+        .unwrap();
 
         // Write a new file to trigger a change
         fs::write(lib_dir.join("widget.dart"), "class MyWidget {}").unwrap();
@@ -435,15 +450,23 @@ mod tests {
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
 
         let packages = vec![package];
         let packages_clone = packages.clone();
 
         let watcher_handle = tokio::task::spawn_blocking(move || {
-            start_watching(&packages_clone, 100, event_tx, shutdown_rx)
+            start_watching(&packages_clone, 100, event_tx, shutdown_rx, Some(ready_tx))
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Wait until watchers are fully registered before writing
+        tokio::task::spawn_blocking(move || {
+            ready_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("Watcher should signal ready within 5 seconds");
+        })
+        .await
+        .unwrap();
 
         // Write a non-watched file (markdown)
         fs::write(pkg_dir.join("README.md"), "# My Package").unwrap();

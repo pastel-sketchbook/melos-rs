@@ -187,7 +187,7 @@ async fn run_watch_loop(
 
     // Spawn the file watcher on a blocking thread (it uses std::sync channels)
     let watcher_handle = tokio::task::spawn_blocking(move || {
-        watcher::start_watching(&watch_packages, 0, event_tx, shutdown_rx)
+        watcher::start_watching(&watch_packages, 0, event_tx, shutdown_rx, None)
     });
 
     let shutdown_tx_ctrlc = shutdown_tx.clone();
