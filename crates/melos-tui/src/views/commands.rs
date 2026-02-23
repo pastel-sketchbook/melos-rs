@@ -1,8 +1,8 @@
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table, TableState},
-    Frame,
 };
 
 use crate::app::App;
@@ -101,7 +101,7 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::app::CommandRow;

@@ -213,9 +213,10 @@ async fn run(
                 let opts = app.command_opts.take();
                 let (tx, rx) = mpsc::unbounded_channel();
 
-                let handle = tokio::spawn(
-                    async move { dispatch::dispatch_command(&name, &ws, tx, opts).await },
-                );
+                let handle =
+                    tokio::spawn(
+                        async move { dispatch::dispatch_command(&name, &ws, tx, opts).await },
+                    );
 
                 core_rx = Some(rx);
                 task_handle = Some(handle);
