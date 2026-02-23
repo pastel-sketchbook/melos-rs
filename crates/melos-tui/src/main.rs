@@ -24,7 +24,7 @@ mod ui;
 mod views;
 
 use app::App;
-use event::recv_core_event;
+use event::{poll_task_handle, recv_core_event};
 
 /// Interactive terminal UI for melos-rs workspace management.
 #[derive(Parser)]
@@ -195,43 +195,45 @@ async fn run(
                         app.handle_core_event(core_event);
                     }
                     None => {
-                        // Channel closed: command task finished. Join the handle.
-                        debug!("core event channel closed, joining task handle");
+                        // Channel closed: sender dropped. Mark channel as done
+                        // but do NOT await the task handle here -- that would
+                        // block the entire event loop. The separate
+                        // `poll_task_handle` branch will pick it up.
+                        debug!("core event channel closed");
                         core_rx = None;
-                        if let Some(handle) = task_handle.take() {
-                            let join_result = handle.await;
-                            // Map Result<Result<DispatchResult>> to Result<Result<()>>
-                            // extracting health report and discarding PackageResults
-                            // (already tracked via events).
-                            let mapped = match join_result {
-                                Ok(Ok(dr)) => {
-                                    info!(
-                                        results = dr.package_results.results.len(),
-                                        has_health = dr.health_report.is_some(),
-                                        "command task completed successfully"
-                                    );
-                                    if let Some(report) = dr.health_report {
-                                        app.set_health_report(report);
-                                    }
-                                    Ok(Ok(()))
-                                }
-                                Ok(Err(e)) => {
-                                    error!("command task returned error: {e}");
-                                    Ok(Err(e))
-                                }
-                                Err(e) => {
-                                    if e.is_cancelled() {
-                                        debug!("command task was cancelled");
-                                    } else {
-                                        error!("command task panicked: {e}");
-                                    }
-                                    Err(e)
-                                }
-                            };
-                            app.on_command_finished(mapped);
-                        }
                     }
                 }
+            }
+
+            join_result = poll_task_handle(&mut task_handle) => {
+                // Task handle resolved. Extract health report and notify app.
+                task_handle = None;
+                let mapped = match join_result {
+                    Ok(Ok(dr)) => {
+                        info!(
+                            results = dr.package_results.results.len(),
+                            has_health = dr.health_report.is_some(),
+                            "command task completed successfully"
+                        );
+                        if let Some(report) = dr.health_report {
+                            app.set_health_report(report);
+                        }
+                        Ok(Ok(()))
+                    }
+                    Ok(Err(e)) => {
+                        error!("command task returned error: {e}");
+                        Ok(Err(e))
+                    }
+                    Err(e) => {
+                        if e.is_cancelled() {
+                            debug!("command task was cancelled");
+                        } else {
+                            error!("command task panicked: {e}");
+                        }
+                        Err(e)
+                    }
+                };
+                app.on_command_finished(mapped);
             }
 
             _ = tick.tick() => {
@@ -240,14 +242,18 @@ async fn run(
         }
 
         // Handle pending cancel request.
+        // Guard: only cancel if the task is still running (handle present).
+        // If poll_task_handle already resolved, on_command_finished was called
+        // and the state transitioned to Done; cancelling would incorrectly
+        // revert to Idle.
         if app.pending_cancel {
-            info!("cancel requested, aborting command task");
             app.pending_cancel = false;
             if let Some(handle) = task_handle.take() {
+                info!("cancel requested, aborting command task");
                 handle.abort();
+                core_rx = None;
+                app.on_command_cancelled();
             }
-            core_rx = None;
-            app.on_command_cancelled();
         }
 
         // Handle pending command execution request.
