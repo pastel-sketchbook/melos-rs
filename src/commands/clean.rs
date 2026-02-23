@@ -32,6 +32,27 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Dry-run mode: show what would be cleaned without running
+    if args.dry_run {
+        for pkg in &all_filtered {
+            let pkg_type = if pkg.is_flutter { "flutter" } else { "dart" };
+            println!("  {} {} ({})", "->".cyan(), pkg.name, pkg_type.dimmed());
+        }
+        if args.deep {
+            println!(
+                "\n  {} Deep clean would also remove: {}, {}",
+                "i".blue(),
+                DEEP_CLEAN_DIRS.join(", "),
+                DEEP_CLEAN_FILES.join(", ")
+            );
+        }
+        println!(
+            "\n{}",
+            "DRY RUN — no packages were cleaned.".yellow().bold()
+        );
+        return Ok(());
+    }
+
     if let Some(pre_hook) = workspace.hook("clean", "pre") {
         crate::runner::run_lifecycle_hook(pre_hook, "pre-clean", &workspace.root_path, &[]).await?;
     }
@@ -157,11 +178,16 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         }
     }
 
+    let total = all_filtered.len();
     if failed > 0 {
-        anyhow::bail!("{} package(s) failed to clean", failed);
+        let passed = total - failed as usize;
+        anyhow::bail!("{} package(s) failed cleaning ({} passed)", failed, passed);
     }
 
-    println!("\n{}", "All packages cleaned.".green());
+    println!(
+        "\n{}",
+        format!("All {} package(s) passed cleaning.", total).green()
+    );
 
     if let Some(post_hook) = workspace.hook("clean", "post") {
         crate::runner::run_lifecycle_hook(post_hook, "post-clean", &workspace.root_path, &[])

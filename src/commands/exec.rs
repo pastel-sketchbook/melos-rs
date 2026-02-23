@@ -149,6 +149,7 @@ async fn run_exec_once(
 
     // Count failures
     let failed = results.iter().filter(|(_, success)| !success).count();
+    let passed = results.len() - failed;
 
     if failed > 0 {
         if args.watch {
@@ -159,8 +160,13 @@ async fn run_exec_once(
                 failed
             );
         } else {
-            anyhow::bail!("{} package(s) failed", failed);
+            anyhow::bail!("{} package(s) failed exec ({} passed)", failed, passed);
         }
+    } else if !args.watch {
+        println!(
+            "\n{}",
+            format!("All {} package(s) passed exec.", passed).green()
+        );
     }
 
     Ok(())

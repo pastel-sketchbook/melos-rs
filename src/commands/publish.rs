@@ -201,7 +201,12 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     }
 
     if failed > 0 {
-        anyhow::bail!("{} package(s) failed to publish", failed);
+        let passed = results.len() - failed;
+        anyhow::bail!(
+            "{} package(s) failed to publish ({} passed)",
+            failed,
+            passed
+        );
     }
 
     let action = if args.dry_run {
@@ -209,7 +214,10 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
     } else {
         "published"
     };
-    println!("\n{}", format!("All packages {}.", action).green());
+    println!(
+        "\n{}",
+        format!("All {} package(s) {}.", results.len(), action).green()
+    );
     Ok(())
 }
 

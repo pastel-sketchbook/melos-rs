@@ -57,6 +57,15 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     }
     println!();
 
+    // Dry-run mode: show what would be bootstrapped without running
+    if args.dry_run {
+        println!(
+            "{}",
+            "DRY RUN — no packages were bootstrapped.".yellow().bold()
+        );
+        return Ok(());
+    }
+
     if let Some(pre_hook) = workspace.hook("bootstrap", "pre") {
         crate::runner::run_lifecycle_hook(pre_hook, "pre-bootstrap", &workspace.root_path, &[])
             .await?;
@@ -154,7 +163,10 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
             .await?;
     }
 
-    println!("\n{}", "All packages bootstrapped.".green());
+    println!(
+        "\n{}",
+        format!("All {} package(s) bootstrapped.", packages.len()).green()
+    );
     Ok(())
 }
 

@@ -10,12 +10,12 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 |------|-------------|----------|-------|
 | Config: `melos.yaml` (6.x) | Yes | Yes | Full support |
 | Config: `pubspec.yaml` (7.x) | Yes | Yes | `melos:` section parsing |
-| `bootstrap` | Yes | Yes | Full support incl. `resolution: workspace` skip |
-| `clean` | Yes | Yes | Deep clean + hooks |
+| `bootstrap` | Yes | Yes | Full support incl. `resolution: workspace` skip, dry-run |
+| `clean` | Yes | Yes | Deep clean + hooks, dry-run |
 | `exec` | Yes | Yes | Concurrency, fail-fast, watch, timeout, dry-run |
 | `run` | Yes | Yes | Steps, exec config, watch, groups, private |
 | `list` | Yes | Yes | All formats: long, json, parsable, graph, gviz, mermaid |
-| `version` | Yes | Yes | Conventional commits, changelogs, git tags, release branches |
+| `version` | Yes | Yes | Conventional commits, changelogs, git tags, release branches, dry-run |
 | `publish` | Yes | Yes | Dry-run, git tags, release URLs |
 | `format` | Yes | Yes | All flags |
 | `analyze` | Yes | Yes | Fatal warnings/infos |
@@ -23,7 +23,7 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 | `pub get/upgrade/downgrade/add/remove` | Yes | Yes | All subcommands |
 | `init` | Yes | Yes | 6.x and 7.x scaffolding |
 | `completion` | Yes | Yes | bash/zsh/fish |
-| `health` | N/A | Yes | melos-rs exclusive: version drift, missing fields, SDK consistency |
+| `health` | N/A | Yes | melos-rs exclusive: version drift, missing fields, SDK consistency, JSON output |
 | `resolution: workspace` | Yes | Yes | Skip `pubspec_overrides.yaml` for workspace-resolved packages |
 | IDE integration | Yes (IntelliJ, VS Code) | No | Out of scope for CLI tool |
 | Migration guide | Yes | No | Planned |
@@ -536,3 +536,36 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
   - CI/CD migration examples
 - [x] README.md created (Batch 26)
 - [x] `task check:all` passes — 371 tests, zero clippy warnings
+
+### Batch 28: CLI UX — dry-run, JSON output, standardized summaries
+- [x] Theme A: `--dry-run` for bootstrap, clean, version commands
+  - Added `dry_run: bool` to `BootstrapArgs` and `CleanArgs` in `cli.rs`
+  - Added `dry_run: bool` to `VersionArgs` in `version.rs`
+  - Bootstrap dry-run: shows package list + "DRY RUN" message, skips hooks/pub get/overrides
+  - Clean dry-run: shows package list + deep clean info + "DRY RUN" message, skips hooks/deletion
+  - Version dry-run: shows version change plan + "DRY RUN" message, skips confirmation/writes/git
+  - Pattern follows exec.rs reference (early return after package listing)
+- [x] Theme B: `--json` on health command
+  - Added `json: bool` flag to `HealthArgs`
+  - Defined serializable result types: `HealthReport`, `VersionDriftIssue`, `MissingFieldsIssue`, `SdkConsistencyResult`, `ConstraintUsage`
+  - Refactored check functions to separate data collection from presentation
+  - `collect_version_drift()`, `collect_missing_fields()`, `collect_sdk_consistency()` return structured data
+  - `print_version_drift()`, `print_missing_fields()`, `print_sdk_consistency()` render human-readable output
+  - JSON mode: serializes `HealthReport` with `serde_json::to_string_pretty()`, skips all println
+  - Null fields omitted via `#[serde(skip_serializing_if = "Option::is_none")]`
+  - Empty arrays omitted via `#[serde(skip_serializing_if = "Vec::is_empty")]`
+- [x] Theme C: Standardized result summaries across all commands
+  - Gold standard: `test.rs` pattern with `passed`/`failed` counts
+  - `analyze.rs`: `"{failed} package(s) failed analysis ({passed} passed)"` / `"All {passed} package(s) passed analysis."`
+  - `format.rs`: `"{failed} package(s) failed/have formatting changes ({passed} passed)"` / `"All {passed} package(s) passed formatting."`
+  - `exec.rs`: `"{failed} package(s) failed exec ({passed} passed)"` / `"All {passed} package(s) passed exec."`
+  - `publish.rs`: `"{failed} package(s) failed to publish ({passed} passed)"` / `"All {n} package(s) {validated/published}."`
+  - `pub_cmds.rs`: `"{failed} package(s) failed ({passed} passed)"` / `"All {passed} package(s) succeeded."`
+  - `bootstrap.rs`: `"All {n} package(s) bootstrapped."` (fail-fast, no aggregate count)
+  - `clean.rs`: `"{failed} package(s) failed cleaning ({passed} passed)"` / `"All {n} package(s) passed cleaning."`
+- [x] Tests: 7 new tests (378 total: 358 unit + 20 integration)
+  - `test_version_drift_json_serializable`, `test_missing_fields_json_serializable`
+  - `test_sdk_consistency_json_serializable`, `test_health_report_json_serializable`
+  - `test_collect_missing_fields_skips_private`, `test_collect_sdk_consistency_missing`
+  - `test_build_sorted_usages_deterministic`
+- [x] `task check:all` passes — 378 tests, zero clippy warnings

@@ -295,9 +295,16 @@ async fn run_pub_in_packages(
     pb.finish_and_clear();
 
     let failed = all_results.iter().filter(|(_, success)| !success).count();
+    let passed = all_results.len() - failed;
+
     if failed > 0 {
-        anyhow::bail!("{} package(s) failed", failed);
+        anyhow::bail!("{} package(s) failed ({} passed)", failed, passed);
     }
+
+    println!(
+        "\n{}",
+        format!("All {} package(s) succeeded.", passed).green()
+    );
 
     Ok(())
 }

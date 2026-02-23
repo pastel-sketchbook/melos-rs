@@ -74,12 +74,16 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
     pb.finish_and_clear();
 
     let failed = results.iter().filter(|(_, success)| !success).count();
+    let passed = results.len() - failed;
 
     if failed > 0 {
-        anyhow::bail!("{} package(s) have analysis issues", failed);
+        anyhow::bail!("{} package(s) failed analysis ({} passed)", failed, passed);
     }
 
-    println!("\n{}", "All packages passed analysis.".green());
+    println!(
+        "\n{}",
+        format!("All {} package(s) passed analysis.", passed).green()
+    );
     Ok(())
 }
 

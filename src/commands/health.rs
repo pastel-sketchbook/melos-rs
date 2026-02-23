@@ -30,8 +30,59 @@ pub struct HealthArgs {
     #[arg(long, short = 'a')]
     pub all: bool,
 
+    /// Output results as JSON instead of human-readable text
+    #[arg(long)]
+    pub json: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
+}
+
+// ---------------------------------------------------------------------------
+// JSON-serializable result types
+// ---------------------------------------------------------------------------
+
+/// A single constraint usage: which constraint string and which packages use it.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+pub struct ConstraintUsage {
+    pub constraint: String,
+    pub packages: Vec<String>,
+}
+
+/// A dependency with version drift: multiple constraints in use.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+pub struct VersionDriftIssue {
+    pub dependency: String,
+    pub constraints: Vec<ConstraintUsage>,
+}
+
+/// A package missing recommended pubspec fields.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+pub struct MissingFieldsIssue {
+    pub package: String,
+    pub missing: Vec<String>,
+}
+
+/// SDK consistency results.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Default)]
+pub struct SdkConsistencyResult {
+    pub missing_sdk: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dart_sdk_drift: Vec<ConstraintUsage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flutter_sdk_drift: Vec<ConstraintUsage>,
+}
+
+/// Full health report for JSON output.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+pub struct HealthReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_drift: Option<Vec<VersionDriftIssue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_fields: Option<Vec<MissingFieldsIssue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdk_consistency: Option<SdkConsistencyResult>,
+    pub total_issues: u32,
 }
 
 /// Run health checks on the workspace
@@ -45,7 +96,21 @@ pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
     )?;
 
     if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
+        if args.json {
+            let report = HealthReport {
+                version_drift: None,
+                missing_fields: None,
+                sdk_consistency: None,
+                total_issues: 0,
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report)
+                    .expect("safety: HealthReport is always serializable")
+            );
+        } else {
+            println!("{}", "No packages matched the given filters.".yellow());
+        }
         return Ok(());
     }
 
@@ -53,29 +118,85 @@ pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
     let run_all =
         args.all || (!args.version_drift && !args.missing_fields && !args.sdk_consistency);
 
-    let mut issues = 0u32;
+    let mut total_issues = 0u32;
 
+    // Collect structured data for each check
+    let drift_data = if run_all || args.version_drift {
+        let data = collect_version_drift(&packages);
+        total_issues += data.len() as u32;
+        Some(data)
+    } else {
+        None
+    };
+
+    let missing_data = if run_all || args.missing_fields {
+        let data = collect_missing_fields(&packages);
+        total_issues += data.len() as u32;
+        Some(data)
+    } else {
+        None
+    };
+
+    let sdk_data = if run_all || args.sdk_consistency {
+        let data = collect_sdk_consistency(&packages);
+        let sdk_issues = if !data.missing_sdk.is_empty() {
+            1u32
+        } else {
+            0
+        } + if data.dart_sdk_drift.len() > 1 { 1 } else { 0 }
+            + if data.flutter_sdk_drift.len() > 1 {
+                1
+            } else {
+                0
+            };
+        total_issues += sdk_issues;
+        Some(data)
+    } else {
+        None
+    };
+
+    if args.json {
+        let report = HealthReport {
+            version_drift: drift_data,
+            missing_fields: missing_data,
+            sdk_consistency: sdk_data,
+            total_issues,
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .expect("safety: HealthReport is always serializable")
+        );
+
+        if total_issues > 0 {
+            // Exit non-zero for CI, but don't duplicate the message
+            anyhow::bail!("{} health issue(s) found", total_issues);
+        }
+        return Ok(());
+    }
+
+    // Human-readable output
     println!(
         "\n{} Running health checks on {} packages...\n",
         "$".cyan(),
         packages.len()
     );
 
-    if run_all || args.version_drift {
-        issues += check_version_drift(&packages);
+    if let Some(ref data) = drift_data {
+        print_version_drift(data);
     }
 
-    if run_all || args.missing_fields {
-        issues += check_missing_fields(&packages);
+    if let Some(ref data) = missing_data {
+        print_missing_fields(data);
     }
 
-    if run_all || args.sdk_consistency {
-        issues += check_sdk_consistency(&packages);
+    if let Some(ref data) = sdk_data {
+        print_sdk_consistency(data);
     }
 
     println!();
-    if issues > 0 {
-        anyhow::bail!("{} health issue(s) found", issues);
+    if total_issues > 0 {
+        anyhow::bail!("{} health issue(s) found", total_issues);
     }
 
     println!("{}", "No health issues found.".green());
@@ -83,14 +204,11 @@ pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Version Drift
+// Version Drift — data collection
 // ---------------------------------------------------------------------------
 
-/// Check for the same external dependency being used at different version
-/// constraints across workspace packages.
-fn check_version_drift(packages: &[Package]) -> u32 {
-    println!("{}", "Version drift check".bold().underline());
-
+/// Collect version drift data without printing.
+fn collect_version_drift(packages: &[Package]) -> Vec<VersionDriftIssue> {
     // Collect: dep_name -> { constraint -> [package_names] }
     let mut dep_map: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
 
@@ -112,56 +230,76 @@ fn check_version_drift(packages: &[Package]) -> u32 {
         }
     }
 
-    let mut issues = 0u32;
-
-    // Sort for deterministic output
     let mut dep_names: Vec<_> = dep_map.keys().cloned().collect();
     dep_names.sort();
 
-    for dep_name in &dep_names {
-        let versions = &dep_map[dep_name];
-        if versions.len() <= 1 {
-            continue; // consistent — only one version constraint used
-        }
+    let mut issues = Vec::new();
 
-        issues += 1;
-        println!(
-            "  {} {} is used with {} different constraints:",
-            "DRIFT".yellow().bold(),
-            dep_name.bold(),
-            versions.len()
-        );
+    for dep_name in dep_names {
+        let versions = dep_map.remove(&dep_name).unwrap_or_default();
+        if versions.len() <= 1 {
+            continue;
+        }
 
         let mut constraints: Vec<_> = versions.keys().cloned().collect();
         constraints.sort();
 
-        for constraint in &constraints {
-            let users = &versions[constraint];
+        let constraint_usages: Vec<ConstraintUsage> = constraints
+            .into_iter()
+            .map(|c| {
+                let pkgs = versions[&c].clone();
+                ConstraintUsage {
+                    constraint: c,
+                    packages: pkgs,
+                }
+            })
+            .collect();
+
+        issues.push(VersionDriftIssue {
+            dependency: dep_name,
+            constraints: constraint_usages,
+        });
+    }
+
+    issues
+}
+
+/// Print version drift results in human-readable format.
+fn print_version_drift(issues: &[VersionDriftIssue]) {
+    println!("{}", "Version drift check".bold().underline());
+
+    for issue in issues {
+        println!(
+            "  {} {} is used with {} different constraints:",
+            "DRIFT".yellow().bold(),
+            issue.dependency.bold(),
+            issue.constraints.len()
+        );
+        for usage in &issue.constraints {
             println!(
                 "    {} {} in: {}",
                 "->".dimmed(),
-                constraint.cyan(),
-                users.join(", ")
+                usage.constraint.cyan(),
+                usage.packages.join(", ")
             );
         }
     }
 
-    if issues == 0 {
+    if issues.is_empty() {
         println!("  {} No version drift detected.", "OK".green());
     } else {
         println!(
             "\n  {} {} dependency(ies) have inconsistent version constraints.",
             "!".yellow(),
-            issues
+            issues.len()
         );
     }
 
     println!();
-    issues
 }
 
 // ---------------------------------------------------------------------------
-// Missing Fields
+// Missing Fields — data collection
 // ---------------------------------------------------------------------------
 
 /// Pubspec fields read for the missing-fields health check.
@@ -204,11 +342,9 @@ fn read_health_fields(pkg: &Package) -> PubspecHealthFields {
     }
 }
 
-/// Check public packages for missing recommended pubspec fields.
-fn check_missing_fields(packages: &[Package]) -> u32 {
-    println!("{}", "Missing fields check".bold().underline());
-
-    let mut issues = 0u32;
+/// Collect missing-fields data without printing.
+fn collect_missing_fields(packages: &[Package]) -> Vec<MissingFieldsIssue> {
+    let mut issues = Vec::new();
 
     for pkg in packages {
         // Only check public (publishable) packages
@@ -217,35 +353,48 @@ fn check_missing_fields(packages: &[Package]) -> u32 {
         }
 
         let fields = read_health_fields(pkg);
-        let mut missing: Vec<&str> = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
 
         if fields.description.as_deref().unwrap_or("").is_empty() {
-            missing.push("description");
+            missing.push("description".to_string());
         }
 
         // homepage OR repository should be present
         let has_homepage = fields.homepage.as_deref().is_some_and(|s| !s.is_empty());
         let has_repository = fields.repository.as_deref().is_some_and(|s| !s.is_empty());
         if !has_homepage && !has_repository {
-            missing.push("homepage/repository");
+            missing.push("homepage/repository".to_string());
         }
 
         if fields.version.as_deref().unwrap_or("").is_empty() {
-            missing.push("version");
+            missing.push("version".to_string());
         }
 
         if !missing.is_empty() {
-            issues += 1;
-            println!(
-                "  {} {} missing: {}",
-                "MISS".yellow().bold(),
-                pkg.name.bold(),
-                missing.join(", ")
-            );
+            issues.push(MissingFieldsIssue {
+                package: pkg.name.clone(),
+                missing,
+            });
         }
     }
 
-    if issues == 0 {
+    issues
+}
+
+/// Print missing-fields results in human-readable format.
+fn print_missing_fields(issues: &[MissingFieldsIssue]) {
+    println!("{}", "Missing fields check".bold().underline());
+
+    for issue in issues {
+        println!(
+            "  {} {} missing: {}",
+            "MISS".yellow().bold(),
+            issue.package.bold(),
+            issue.missing.join(", ")
+        );
+    }
+
+    if issues.is_empty() {
         println!(
             "  {} All public packages have required fields.",
             "OK".green()
@@ -254,16 +403,15 @@ fn check_missing_fields(packages: &[Package]) -> u32 {
         println!(
             "\n  {} {} public package(s) have missing recommended fields.",
             "!".yellow(),
-            issues
+            issues.len()
         );
     }
 
     println!();
-    issues
 }
 
 // ---------------------------------------------------------------------------
-// SDK Consistency
+// SDK Consistency — data collection
 // ---------------------------------------------------------------------------
 
 /// Pubspec environment / SDK constraints.
@@ -306,11 +454,8 @@ fn read_sdk_constraints(pkg: &Package) -> SdkConstraints {
     }
 }
 
-/// Check that SDK constraints are consistent across packages.
-fn check_sdk_consistency(packages: &[Package]) -> u32 {
-    println!("{}", "SDK consistency check".bold().underline());
-
-    // constraint -> [package_names]
+/// Collect SDK consistency data without printing.
+fn collect_sdk_consistency(packages: &[Package]) -> SdkConsistencyResult {
     let mut sdk_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut flutter_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut missing_sdk: Vec<String> = Vec::new();
@@ -336,67 +481,84 @@ fn check_sdk_consistency(packages: &[Package]) -> u32 {
         }
     }
 
-    let mut issues = 0u32;
+    // Build sorted constraint usage lists
+    let dart_sdk_drift = build_sorted_usages(&sdk_map);
+    let flutter_sdk_drift = build_sorted_usages(&flutter_map);
 
-    // Report missing SDK constraints
-    if !missing_sdk.is_empty() {
-        issues += 1;
+    SdkConsistencyResult {
+        missing_sdk,
+        dart_sdk_drift,
+        flutter_sdk_drift,
+    }
+}
+
+/// Convert a constraint map into sorted `ConstraintUsage` entries.
+fn build_sorted_usages(map: &HashMap<String, Vec<String>>) -> Vec<ConstraintUsage> {
+    let mut constraints: Vec<_> = map.keys().cloned().collect();
+    constraints.sort();
+    constraints
+        .into_iter()
+        .map(|c| ConstraintUsage {
+            packages: map[&c].clone(),
+            constraint: c,
+        })
+        .collect()
+}
+
+/// Print SDK consistency results in human-readable format.
+fn print_sdk_consistency(data: &SdkConsistencyResult) {
+    println!("{}", "SDK consistency check".bold().underline());
+
+    if !data.missing_sdk.is_empty() {
         println!(
             "  {} {} package(s) missing SDK constraint: {}",
             "MISS".yellow().bold(),
-            missing_sdk.len(),
-            missing_sdk.join(", ")
+            data.missing_sdk.len(),
+            data.missing_sdk.join(", ")
         );
     }
 
-    // Report SDK drift
-    if sdk_map.len() > 1 {
-        issues += 1;
+    if data.dart_sdk_drift.len() > 1 {
         println!(
             "  {} Dart SDK constraint used with {} different values:",
             "DRIFT".yellow().bold(),
-            sdk_map.len()
+            data.dart_sdk_drift.len()
         );
-        let mut constraints: Vec<_> = sdk_map.keys().cloned().collect();
-        constraints.sort();
-        for constraint in &constraints {
-            let users = &sdk_map[constraint];
+        for usage in &data.dart_sdk_drift {
             println!(
                 "    {} {} in: {}",
                 "->".dimmed(),
-                constraint.cyan(),
-                users.join(", ")
+                usage.constraint.cyan(),
+                usage.packages.join(", ")
             );
         }
     }
 
-    // Report Flutter SDK drift
-    if flutter_map.len() > 1 {
-        issues += 1;
+    if data.flutter_sdk_drift.len() > 1 {
         println!(
             "  {} Flutter SDK constraint used with {} different values:",
             "DRIFT".yellow().bold(),
-            flutter_map.len()
+            data.flutter_sdk_drift.len()
         );
-        let mut constraints: Vec<_> = flutter_map.keys().cloned().collect();
-        constraints.sort();
-        for constraint in &constraints {
-            let users = &flutter_map[constraint];
+        for usage in &data.flutter_sdk_drift {
             println!(
                 "    {} {} in: {}",
                 "->".dimmed(),
-                constraint.cyan(),
-                users.join(", ")
+                usage.constraint.cyan(),
+                usage.packages.join(", ")
             );
         }
     }
 
-    if issues == 0 {
+    let has_issues = !data.missing_sdk.is_empty()
+        || data.dart_sdk_drift.len() > 1
+        || data.flutter_sdk_drift.len() > 1;
+
+    if !has_issues {
         println!("  {} SDK constraints are consistent.", "OK".green());
     }
 
     println!();
-    issues
 }
 
 // ---------------------------------------------------------------------------
@@ -428,8 +590,8 @@ mod tests {
             make_package("a", HashMap::from([("http".into(), "^1.0.0".into())])),
             make_package("b", HashMap::from([("http".into(), "^1.0.0".into())])),
         ];
-        let issues = check_version_drift(&packages);
-        assert_eq!(issues, 0);
+        let issues = collect_version_drift(&packages);
+        assert!(issues.is_empty());
     }
 
     #[test]
@@ -438,8 +600,10 @@ mod tests {
             make_package("a", HashMap::from([("http".into(), "^1.0.0".into())])),
             make_package("b", HashMap::from([("http".into(), "^2.0.0".into())])),
         ];
-        let issues = check_version_drift(&packages);
-        assert_eq!(issues, 1);
+        let issues = collect_version_drift(&packages);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].dependency, "http");
+        assert_eq!(issues[0].constraints.len(), 2);
     }
 
     #[test]
@@ -450,8 +614,8 @@ mod tests {
             make_package("a", HashMap::from([("b".into(), "^1.0.0".into())])),
             make_package("b", HashMap::new()),
         ];
-        let issues = check_version_drift(&packages);
-        assert_eq!(issues, 0);
+        let issues = collect_version_drift(&packages);
+        assert!(issues.is_empty());
     }
 
     #[test]
@@ -472,8 +636,119 @@ mod tests {
                 ]),
             ),
         ];
-        let issues = check_version_drift(&packages);
+        let issues = collect_version_drift(&packages);
         // Only http has drift, path is consistent
-        assert_eq!(issues, 1);
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn test_version_drift_json_serializable() {
+        let issues = vec![VersionDriftIssue {
+            dependency: "http".to_string(),
+            constraints: vec![
+                ConstraintUsage {
+                    constraint: "^1.0.0".to_string(),
+                    packages: vec!["a".to_string()],
+                },
+                ConstraintUsage {
+                    constraint: "^2.0.0".to_string(),
+                    packages: vec!["b".to_string()],
+                },
+            ],
+        }];
+        let json =
+            serde_json::to_string(&issues).expect("safety: VersionDriftIssue should serialize");
+        assert!(json.contains("http"));
+        assert!(json.contains("^1.0.0"));
+    }
+
+    #[test]
+    fn test_missing_fields_json_serializable() {
+        let issues = vec![MissingFieldsIssue {
+            package: "my_pkg".to_string(),
+            missing: vec!["description".to_string(), "version".to_string()],
+        }];
+        let json =
+            serde_json::to_string(&issues).expect("safety: MissingFieldsIssue should serialize");
+        assert!(json.contains("my_pkg"));
+        assert!(json.contains("description"));
+    }
+
+    #[test]
+    fn test_sdk_consistency_json_serializable() {
+        let result = SdkConsistencyResult {
+            missing_sdk: vec!["orphan".to_string()],
+            dart_sdk_drift: vec![
+                ConstraintUsage {
+                    constraint: ">=3.0.0 <4.0.0".to_string(),
+                    packages: vec!["a".to_string()],
+                },
+                ConstraintUsage {
+                    constraint: ">=3.2.0 <4.0.0".to_string(),
+                    packages: vec!["b".to_string()],
+                },
+            ],
+            flutter_sdk_drift: vec![],
+        };
+        let json =
+            serde_json::to_string(&result).expect("safety: SdkConsistencyResult should serialize");
+        assert!(json.contains("orphan"));
+        assert!(json.contains(">=3.0.0 <4.0.0"));
+        // flutter_sdk_drift should be skipped (empty)
+        assert!(!json.contains("flutter_sdk_drift"));
+    }
+
+    #[test]
+    fn test_health_report_json_serializable() {
+        let report = HealthReport {
+            version_drift: Some(vec![]),
+            missing_fields: None,
+            sdk_consistency: None,
+            total_issues: 0,
+        };
+        let json =
+            serde_json::to_string_pretty(&report).expect("safety: HealthReport should serialize");
+        assert!(json.contains("total_issues"));
+        assert!(json.contains("version_drift"));
+        // missing_fields and sdk_consistency are None, should be skipped
+        assert!(!json.contains("missing_fields"));
+        assert!(!json.contains("sdk_consistency"));
+    }
+
+    #[test]
+    fn test_collect_missing_fields_skips_private() {
+        // Private packages (publish_to: "none") should be skipped
+        let private_pkg = Package {
+            name: "private_pkg".to_string(),
+            path: PathBuf::from("/tmp/test/private_pkg"),
+            version: None,
+            is_flutter: false,
+            publish_to: Some("none".to_string()),
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: None,
+        };
+        let issues = collect_missing_fields(&[private_pkg]);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_collect_sdk_consistency_missing() {
+        // Packages without pubspec.yaml on disk will have missing SDK
+        let pkg = make_package("missing_pubspec", HashMap::new());
+        let result = collect_sdk_consistency(&[pkg]);
+        assert_eq!(result.missing_sdk, vec!["missing_pubspec"]);
+    }
+
+    #[test]
+    fn test_build_sorted_usages_deterministic() {
+        let mut map = HashMap::new();
+        map.insert("^2.0.0".to_string(), vec!["b".to_string()]);
+        map.insert("^1.0.0".to_string(), vec!["a".to_string()]);
+
+        let usages = build_sorted_usages(&map);
+        assert_eq!(usages[0].constraint, "^1.0.0");
+        assert_eq!(usages[1].constraint, "^2.0.0");
     }
 }

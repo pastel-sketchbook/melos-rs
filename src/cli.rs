@@ -216,6 +216,10 @@ pub struct BootstrapArgs {
     #[arg(long)]
     pub offline: bool,
 
+    /// Show what would be done without actually running pub get
+    #[arg(long)]
+    pub dry_run: bool,
+
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
 }
@@ -226,6 +230,10 @@ pub struct CleanArgs {
     /// Deep clean: also remove .dart_tool/, build/, and pubspec.lock
     #[arg(long)]
     pub deep: bool,
+
+    /// Show what would be cleaned without actually removing anything
+    #[arg(long)]
+    pub dry_run: bool,
 
     #[command(flatten)]
     pub filters: GlobalFilterArgs,

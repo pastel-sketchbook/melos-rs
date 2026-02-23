@@ -111,6 +111,10 @@ pub struct VersionArgs {
     #[arg(long, conflicts_with = "release_branch")]
     pub no_release_branch: bool,
 
+    /// Show what version bumps would be applied without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+
     #[command(flatten)]
     pub filters: crate::cli::GlobalFilterArgs,
 }
@@ -1347,6 +1351,15 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             next.to_string().green(),
             bump
         );
+    }
+
+    // Dry-run mode: show the plan without applying changes
+    if args.dry_run {
+        println!(
+            "\n{}",
+            "DRY RUN — no version changes were applied.".yellow().bold()
+        );
+        return Ok(());
     }
 
     if !args.yes {

@@ -74,18 +74,27 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
     pb.finish_and_clear();
 
     let failed = results.iter().filter(|(_, success)| !success).count();
+    let passed = results.len() - failed;
 
     if failed > 0 {
         if args.set_exit_if_changed {
             anyhow::bail!(
-                "{} package(s) have formatting changes. Run `melos-rs format` to fix.",
-                failed
+                "{} package(s) have formatting changes ({} passed). Run `melos-rs format` to fix.",
+                failed,
+                passed
             );
         }
-        anyhow::bail!("{} package(s) failed to format", failed);
+        anyhow::bail!(
+            "{} package(s) failed formatting ({} passed)",
+            failed,
+            passed
+        );
     }
 
-    println!("\n{}", "All packages formatted.".green());
+    println!(
+        "\n{}",
+        format!("All {} package(s) passed formatting.", passed).green()
+    );
     Ok(())
 }
 
