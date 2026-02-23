@@ -1,28 +1,37 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::app::App;
 use crate::views::execution::{build_color_map, render_output_lines};
 
 /// Draw the Done state results panel: summary header, per-package result list,
-/// and scrollable output log. Shows red border when an error is present.
+/// and scrollable output log. Wrapped in a bordered block matching the
+/// two-pane idle view style.
 pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
     let passed = app.finished_packages.iter().filter(|(_, s, _)| *s).count();
     let failed = app.finished_packages.iter().filter(|(_, s, _)| !*s).count();
 
+    let cmd_name = app.running_command.as_deref().unwrap_or("command");
+    let has_error = failed > 0 || app.command_error.is_some();
+
+    // Outer border matching the two-pane panels.
+    let border_color = if has_error { Color::Red } else { Color::Green };
+    let outer_title = format!(" Results: {cmd_name} ");
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(outer_title);
+    let inner_area = outer_block.inner(area);
+    frame.render_widget(outer_block, area);
+
     let mut summary_lines: Vec<Line<'_>> = Vec::new();
 
-    let cmd_name = app.running_command.as_deref().unwrap_or("command");
-    let header_color = if failed > 0 || app.command_error.is_some() {
-        Color::Red
-    } else {
-        Color::Green
-    };
+    let header_color = if has_error { Color::Red } else { Color::Green };
 
     summary_lines.push(Line::from(Span::styled(
         format!("{cmd_name}: {passed} passed, {failed} failed"),
@@ -69,9 +78,10 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
 
     let summary_height = summary_lines.len() as u16;
 
-    // Layout: summary (fixed) + output log (fill).
+    // Layout inside the outer border: summary (fixed) + output log (fill).
     let [summary_area, output_area] =
-        Layout::vertical([Constraint::Length(summary_height), Constraint::Min(0)]).areas(area);
+        Layout::vertical([Constraint::Length(summary_height), Constraint::Min(0)])
+            .areas(inner_area);
 
     let summary = Paragraph::new(summary_lines);
     frame.render_widget(summary, summary_area);
@@ -86,7 +96,7 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
         visible_height,
     );
 
-    // Show scroll position indicator in the border title if scrolling is possible.
+    // Show scroll position indicator in the divider title if scrolling is possible.
     let total_lines = app.output_log.len();
     let title = if total_lines > visible_height {
         let end_line = (app.output_scroll + visible_height).min(total_lines);
@@ -100,14 +110,14 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
         format!(" Output ({total_lines} lines) ")
     };
 
-    let border_color = if app.command_error.is_some() {
+    let divider_color = if app.command_error.is_some() {
         Color::Red
     } else {
-        Color::Reset
+        border_color
     };
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(border_color))
+        .border_style(Style::default().fg(divider_color))
         .title(title);
     let paragraph = Paragraph::new(lines)
         .block(block)
@@ -119,7 +129,7 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use std::time::Duration;
 
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
     use crate::app::{App, AppState};
@@ -277,6 +287,81 @@ mod tests {
         assert!(
             text.contains("0 passed, 0 failed"),
             "Expected zero counts, got:\n{text}"
+        );
+    }
+
+    /// Helper: extract a single buffer line as a string.
+    fn buffer_line(buf: &ratatui::buffer::Buffer, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn test_results_has_outer_border_with_title() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        app.running_command = Some("analyze".to_string());
+        app.finished_packages = vec![("pkg_a".to_string(), true, Duration::from_millis(50))];
+
+        let buf = render_frame(draw_results, &app, 80, 20);
+        let top_line = buffer_line(&buf, 0, 80);
+        assert!(
+            top_line.contains("Results: analyze"),
+            "Expected 'Results: analyze' in top border, got: {top_line}"
+        );
+    }
+
+    #[test]
+    fn test_results_border_green_on_success() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        app.running_command = Some("test".to_string());
+        app.finished_packages = vec![("pkg_a".to_string(), true, Duration::from_millis(50))];
+
+        let buf = render_frame(draw_results, &app, 80, 20);
+        // Top-left corner cell should have green border style.
+        let cell = buf.cell((0, 0)).unwrap();
+        assert_eq!(
+            cell.fg,
+            Color::Green,
+            "Expected green border on success, got: {:?}",
+            cell.fg
+        );
+    }
+
+    #[test]
+    fn test_results_border_red_on_failure() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        app.running_command = Some("test".to_string());
+        app.finished_packages = vec![("pkg_a".to_string(), false, Duration::from_millis(50))];
+
+        let buf = render_frame(draw_results, &app, 80, 20);
+        // Top-left corner cell should have red border style.
+        let cell = buf.cell((0, 0)).unwrap();
+        assert_eq!(
+            cell.fg,
+            Color::Red,
+            "Expected red border on failure, got: {:?}",
+            cell.fg
+        );
+    }
+
+    #[test]
+    fn test_results_has_bottom_border() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        app.running_command = Some("analyze".to_string());
+
+        let height: u16 = 20;
+        let buf = render_frame(draw_results, &app, 80, height);
+        // Bottom-left corner should be a box-drawing character (not a space).
+        let cell = buf.cell((0, height - 1)).unwrap();
+        let sym = cell.symbol();
+        assert!(
+            sym != " ",
+            "Expected border character at bottom-left, got space"
         );
     }
 }
