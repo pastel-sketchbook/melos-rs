@@ -72,13 +72,30 @@ fn render_output_lines<'a>(
         .collect()
 }
 
-/// Draw the Running state: progress area + live output.
+/// Draw the Running state: command title + progress bar + live output.
 pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     let cmd_name = app.running_command.as_deref().unwrap_or("command");
 
-    // Split: progress info (3 lines) + output log (fill).
-    let [progress_area, output_area] =
-        Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).areas(area);
+    // Split: title (1) + progress bar (1) + spacer (1) + output log (fill).
+    let [title_area, gauge_area, _spacer, output_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+
+    // Command title.
+    let title = Line::from(vec![
+        Span::styled("Running ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            cmd_name,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(title), title_area);
 
     // Progress gauge.
     let (completed, total) = match &app.progress {
@@ -95,13 +112,13 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         format!("  ({})", app.running_packages.join(", "))
     };
-    let label = format!("{cmd_name}: {completed}/{total}{running_names}");
+    let label = format!("{completed}/{total}{running_names}");
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::NONE))
         .gauge_style(Style::default().fg(Color::Cyan))
         .ratio(ratio)
         .label(label);
-    frame.render_widget(gauge, progress_area);
+    frame.render_widget(gauge, gauge_area);
 
     // Live output log: always auto-scroll to the bottom.
     let visible_height = output_area.height as usize;
@@ -232,7 +249,11 @@ mod tests {
         let buf = render_frame(draw_running, &app, 80, 20);
         let text = buffer_text(&buf, 80, 20);
         assert!(
-            text.contains("analyze: 3/10"),
+            text.contains("Running") && text.contains("analyze"),
+            "Expected title with command name, got:\n{text}"
+        );
+        assert!(
+            text.contains("3/10"),
             "Expected progress text, got:\n{text}"
         );
         assert!(

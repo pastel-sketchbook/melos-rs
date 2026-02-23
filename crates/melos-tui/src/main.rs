@@ -13,10 +13,12 @@ use melos_core::workspace::Workspace;
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::{debug, error, info, warn};
 
 mod app;
 mod dispatch;
 mod event;
+mod logging;
 mod ui;
 mod views;
 
@@ -25,6 +27,11 @@ use event::recv_core_event;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize file logging before anything else.
+    let _guard = logging::init();
+
+    info!("melos-tui starting");
+
     // Install panic hook that restores terminal before printing the panic.
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -42,18 +49,34 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    info!("terminal initialized, entering event loop");
+
     // Run the app.
     let result = run(&mut terminal, workspace).await;
 
     // Always restore terminal, even on error.
     restore_terminal()?;
 
+    match &result {
+        Ok(()) => info!("melos-tui exiting normally"),
+        Err(e) => error!("melos-tui exiting with error: {e}"),
+    }
+
     result
 }
 
 /// Load the workspace, returning Ok(Workspace) or an error message.
 fn load_workspace() -> Result<Workspace> {
-    Workspace::find_and_load(None).context("Failed to load workspace")
+    let result = Workspace::find_and_load(None).context("Failed to load workspace");
+    match &result {
+        Ok(ws) => info!(
+            name = ws.config.name,
+            packages = ws.packages.len(),
+            "workspace loaded"
+        ),
+        Err(e) => warn!("workspace load failed: {e}"),
+    }
+    result
 }
 
 /// Main event loop: render, poll events, update state.
@@ -78,6 +101,11 @@ async fn run(
     // Set page size from terminal height (body area minus header, footer, table border, header row).
     let term_height = terminal.size()?.height;
     app.page_size = term_height.saturating_sub(5) as usize;
+    debug!(
+        height = term_height,
+        page_size = app.page_size,
+        "terminal size"
+    );
 
     // Event sources.
     let mut event_stream = EventStream::new();
@@ -99,10 +127,20 @@ async fn run(
             maybe_event = event_stream.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                        debug!(
+                            code = ?key.code,
+                            modifiers = ?key.modifiers,
+                            state = ?app.state,
+                            "key press"
+                        );
                         app.handle_key(key.code, key.modifiers);
                     }
-                    Some(Err(_)) | None => {
-                        // Event stream closed or errored; exit gracefully.
+                    Some(Err(e)) => {
+                        error!("event stream error: {e}");
+                        break;
+                    }
+                    None => {
+                        debug!("event stream closed");
                         break;
                     }
                     _ => {}
@@ -112,19 +150,37 @@ async fn run(
             result = recv_core_event(&mut core_rx) => {
                 match result {
                     Some(core_event) => {
+                        debug!(event = ?core_event, "core event received");
                         app.handle_core_event(core_event);
                     }
                     None => {
                         // Channel closed: command task finished. Join the handle.
+                        debug!("core event channel closed, joining task handle");
                         core_rx = None;
                         if let Some(handle) = task_handle.take() {
                             let join_result = handle.await;
                             // Map Result<Result<PackageResults>> to Result<Result<()>>
                             // by discarding PackageResults (already tracked via events).
                             let mapped = match join_result {
-                                Ok(Ok(_)) => Ok(Ok(())),
-                                Ok(Err(e)) => Ok(Err(e)),
-                                Err(e) => Err(e),
+                                Ok(Ok(r)) => {
+                                    info!(
+                                        results = r.results.len(),
+                                        "command task completed successfully"
+                                    );
+                                    Ok(Ok(()))
+                                }
+                                Ok(Err(e)) => {
+                                    error!("command task returned error: {e}");
+                                    Ok(Err(e))
+                                }
+                                Err(e) => {
+                                    if e.is_cancelled() {
+                                        debug!("command task was cancelled");
+                                    } else {
+                                        error!("command task panicked: {e}");
+                                    }
+                                    Err(e)
+                                }
                             };
                             app.on_command_finished(mapped);
                         }
@@ -139,6 +195,7 @@ async fn run(
 
         // Handle pending cancel request.
         if app.pending_cancel {
+            info!("cancel requested, aborting command task");
             app.pending_cancel = false;
             if let Some(handle) = task_handle.take() {
                 handle.abort();
@@ -150,6 +207,7 @@ async fn run(
         // Handle pending command execution request.
         if let Some(cmd_name) = app.pending_command.take() {
             if let Some(ref ws) = workspace {
+                info!(command = cmd_name, "dispatching command");
                 let ws = Arc::clone(ws);
                 let name = cmd_name.clone();
                 let (tx, rx) = mpsc::unbounded_channel();
@@ -161,12 +219,14 @@ async fn run(
                 task_handle = Some(handle);
                 app.start_command(&cmd_name);
             } else {
+                warn!(command = cmd_name, "cannot execute: no workspace loaded");
                 app.exec_messages
                     .push("Cannot execute: no workspace loaded".to_string());
             }
         }
 
         if app.should_quit() {
+            info!("quit requested");
             // Abort any running command before exiting.
             if let Some(handle) = task_handle.take() {
                 handle.abort();

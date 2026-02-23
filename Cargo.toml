@@ -53,6 +53,11 @@ ratatui = "0.30.0"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 futures = "0.3.31"
 
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2.4"
+
 # Dev
 tempfile = "3.25.0"
 assert_cmd = "2.1.2"

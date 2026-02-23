@@ -556,11 +556,7 @@ impl App {
             let abs = (-delta) as usize;
             if abs > current {
                 // Wrap: single-step up wraps to end; page-up clamps to 0.
-                if abs == 1 {
-                    len - 1
-                } else {
-                    0
-                }
+                if abs == 1 { len - 1 } else { 0 }
             } else {
                 current - abs
             }
@@ -568,11 +564,7 @@ impl App {
             let abs = delta as usize;
             if current + abs >= len {
                 // Wrap: single-step down wraps to start; page-down clamps to end.
-                if abs == 1 {
-                    0
-                } else {
-                    len - 1
-                }
+                if abs == 1 { 0 } else { len - 1 }
             } else {
                 current + abs
             }
@@ -1275,10 +1267,11 @@ mod tests {
         app.state = AppState::Running;
         app.on_command_finished(Ok(Err(anyhow::anyhow!("command failed"))));
         assert_eq!(app.state, AppState::Done);
-        assert!(app
-            .command_error
-            .as_ref()
-            .is_some_and(|e| e.contains("command failed")));
+        assert!(
+            app.command_error
+                .as_ref()
+                .is_some_and(|e| e.contains("command failed"))
+        );
     }
 
     // --- on_command_cancelled tests ---
