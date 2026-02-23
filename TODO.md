@@ -10,7 +10,7 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 |------|-------------|----------|-------|
 | Config: `melos.yaml` (6.x) | Yes | Yes | Full support |
 | Config: `pubspec.yaml` (7.x) | Yes | Yes | `melos:` section parsing |
-| `bootstrap` | Yes | Partial | `resolution: workspace` override skip in progress |
+| `bootstrap` | Yes | Yes | Full support incl. `resolution: workspace` skip |
 | `clean` | Yes | Yes | Deep clean + hooks |
 | `exec` | Yes | Yes | Concurrency, fail-fast, watch, timeout, dry-run |
 | `run` | Yes | Yes | Steps, exec config, watch, groups, private |
@@ -26,7 +26,6 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 | `health` | N/A | Yes | melos-rs exclusive: version drift, missing fields, SDK consistency |
 | `resolution: workspace` | Yes | Yes | Skip `pubspec_overrides.yaml` for workspace-resolved packages |
 | IDE integration | Yes (IntelliJ, VS Code) | No | Out of scope for CLI tool |
-| `build:android/ios` | Partial | No | Low priority |
 | Migration guide | Yes | No | Planned |
 
 ## Phase 1: Core Infrastructure (MVP)
@@ -195,7 +194,7 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 - [x] `pub get`, `pub outdated`, `pub upgrade` subcommands (groups by SDK, `--major-versions` flag)
 
 ### Build Commands (from melos.yaml scripts)
-- [ ] _(see "Known Gaps" section below)_
+- [ ] `build:android` / `build:ios` wrapper commands — low priority, out of scope for CLI parity
 
 ### Versioning & Release
 - [x] `version:set` command (works via `melos-rs version 2.0.0 --all`)
@@ -212,7 +211,7 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 - [x] `changelogCommitBodies` config (include/onlyBreaking options for commit body inclusion)
 - [x] `changelogFormat.includeDate` config (optional date in version headers, default false)
 - [x] `updateGitTagRefs` config (update git dependency `ref:` tags in pubspec.yaml)
-- [ ] Release branch management _(see "Known Gaps" section below)_
+- [x] Release branch management (auto-create release branches during `version`)
 
 ### Developer Experience
 - [x] `melos-rs init` - scaffold new 7.x workspace (with `--legacy` for 6.x)
@@ -256,15 +255,15 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
 
 ### Missing commands / features
 - [ ] `build:android` / `build:ios` wrapper commands (flavor/environment support, artifact resolution, simulator/bundletool)
-- [ ] Release branch management (auto-create/merge release branches during `version`)
+- [x] Release branch management (auto-create release branches during `version`) — done in Batch 24
 - [x] Progress bars with `indicatif` for more commands (only bootstrap has one currently)
 - [x] Watch mode for development (`--watch` flag on exec/run)
 
 ## Phase 4: Parity & Beyond
 
 - [x] Full Melos CLI flag compatibility audit
-- [ ] Migration guide from Melos to melos-rs
-- [ ] Performance benchmarks vs Melos
+- [x] Migration guide from Melos to melos-rs (`docs/migration-from-melos.md`)
+- [x] Performance benchmarks vs Melos (68x list, 69x list --json, 19x exec)
 - [ ] Plugin system for custom commands
 - [ ] GitHub Actions integration helpers
 - [x] Monorepo health checks (unused deps, version drift)
@@ -520,3 +519,20 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
   - `test_hook_test_both`, `test_hook_publish_pre`, `test_hook_unknown_command`
   - `test_hook_unknown_phase`, `test_hook_no_hooks_configured`
 - [x] Benchmark: melos-rs list 67.92x faster than melos list (7.6ms vs 518.2ms)
+
+### Batch 27: Housekeeping & Migration Guide
+- [x] Fix stale TODO.md entries
+  - Parity table: `bootstrap` updated from "Partial" to "Yes" (completed in Batch 25)
+  - Parity table: removed `build:android/ios` row (low priority, out of scope)
+  - Phase 3: checked release branch management (completed in Batch 24)
+  - Phase 3: clarified `build:android/ios` as out of scope
+  - Phase 4: checked performance benchmarks (68x list, 69x list --json, 19x exec)
+  - Known Gaps: marked release branch as done
+- [x] Migration guide from Melos to melos-rs (`docs/migration-from-melos.md`)
+  - Covers: binary name swap, config compatibility, script auto-adaptation
+  - Documents behavioral differences (publish dry-run default, format concurrency, init format)
+  - Lists features only in melos-rs (health, watch, deep clean, cycle detection, mermaid)
+  - Lists features only in Melos (IDE integration)
+  - CI/CD migration examples
+- [x] README.md created (Batch 26)
+- [x] `task check:all` passes — 371 tests, zero clippy warnings
