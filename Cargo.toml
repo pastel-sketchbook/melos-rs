@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/melos-core", "crates/melos-cli", "crates/melos-tui"]
+default-members = ["crates/melos-core", "crates/melos-cli"]
 resolver = "3"
 
 [workspace.package]

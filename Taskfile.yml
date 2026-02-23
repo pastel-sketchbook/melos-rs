@@ -8,40 +8,71 @@ tasks:
       - cargo fmt --all
 
   build:
-    desc: "Build in debug mode"
+    desc: "Build core + CLI (excludes TUI)"
+    deps: [fmt]
+    cmds:
+      - cargo build
+
+  build:all:
+    desc: "Build all crates including TUI"
     deps: [fmt]
     cmds:
       - cargo build --workspace
 
   build:release:
-    desc: "Build optimized release binary"
+    desc: "Build optimized release binary (core + CLI)"
     deps: [check:all]
+    cmds:
+      - cargo build --release
+
+  build:release:all:
+    desc: "Build optimized release binaries including TUI"
+    deps: [check:all:full]
     cmds:
       - cargo build --workspace --release
 
   check:
-    desc: "Run fmt, cargo check, and clippy"
+    desc: "Run fmt, cargo check, and clippy (core + CLI)"
     deps: [fmt]
     cmds:
-      - cargo check --workspace --all-targets
-      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo check --all-targets
+      - cargo clippy --all-targets -- -D warnings
+
+  check:tui:
+    desc: "Run clippy on TUI crate"
+    deps: [fmt]
+    cmds:
+      - cargo clippy -p melos-tui --all-targets -- -D warnings
 
   test:
-    desc: "Run all tests"
+    desc: "Run tests (core + CLI)"
     cmds:
-      - cargo test --workspace
+      - cargo test
+
+  test:tui:
+    desc: "Run TUI tests"
+    cmds:
+      - cargo test -p melos-tui
 
   test:verbose:
     desc: "Run tests with output visible (--nocapture)"
     cmds:
-      - cargo test --workspace -- --nocapture
+      - cargo test -- --nocapture
 
   check:all:
-    desc: "Run fmt, clippy, and tests"
+    desc: "Run fmt, clippy, and tests (core + CLI)"
     cmds:
       - task: fmt
       - task: check
       - task: test
+
+  check:all:full:
+    desc: "Run fmt, clippy, and tests for all crates including TUI"
+    cmds:
+      - task: fmt
+      - cargo check --workspace --all-targets
+      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo test --workspace
 
   # --- Run ---
   run:
@@ -52,7 +83,6 @@ tasks:
 
   run:tui:
     desc: "Run melos-tui"
-    deps: [build]
     cmds:
       - cargo run -p melos-tui
 
@@ -88,8 +118,14 @@ tasks:
 
   # --- Install ---
   install:
-    desc: "Install melos-rs and melos-tui binaries to ~/.cargo/bin"
+    desc: "Install melos-rs CLI to ~/.cargo/bin"
     deps: [check:all]
+    cmds:
+      - cargo install --path crates/melos-cli --force
+
+  install:all:
+    desc: "Install melos-rs CLI and TUI to ~/.cargo/bin"
+    deps: [check:all:full]
     cmds:
       - cargo install --path crates/melos-cli --force
       - cargo install --path crates/melos-tui --force
