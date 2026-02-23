@@ -569,3 +569,15 @@ Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22)
   - `test_collect_missing_fields_skips_private`, `test_collect_sdk_consistency_missing`
   - `test_build_sorted_usages_deterministic`
 - [x] `task check:all` passes — 378 tests, zero clippy warnings
+
+## Batch 29 — Integration tests for Batch 28 features (6 tests)
+
+End-to-end CLI tests for dry-run modes, health --json, and exec summary.
+
+- [x] `test_bootstrap_dry_run` — bootstrap --dry-run shows packages + "DRY RUN", does not generate pubspec_overrides.yaml
+- [x] `test_clean_dry_run` — clean --dry-run shows "DRY RUN", build artifacts remain on disk
+- [x] `test_version_dry_run` — version --dry-run --all shows "Version changes:" plan + "DRY RUN", pubspec versions unchanged
+- [x] `test_health_json_no_issues` — health --json --version-drift outputs valid JSON with total_issues: 0
+- [x] `test_health_json_with_drift` — health --json --version-drift detects drift, exits non-zero, JSON has VersionDriftIssue entries
+- [x] `test_exec_success_summary` — exec outputs standardized "All 2 package(s) passed exec." message
+- [x] `task check:all` passes — 384 tests (358 unit + 26 integration), zero clippy warnings

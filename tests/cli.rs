@@ -534,3 +534,269 @@ fn test_init_7x_with_apps() {
     assert!(dir.path().join("packages").is_dir());
     assert!(dir.path().join("apps").is_dir());
 }
+
+// ---------------------------------------------------------------------------
+// Bootstrap dry-run test (Batch 29)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_bootstrap_dry_run() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "boot_dry",
+        &[
+            ("core", "1.0.0", false, &[]),
+            ("app", "2.0.0", false, &["core"]),
+        ],
+    );
+
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["bootstrap", "--dry-run", "--quiet"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("core"))
+        .stdout(predicate::str::contains("app"))
+        .stdout(predicate::str::contains("DRY RUN"));
+
+    // No pubspec_overrides.yaml should have been generated
+    assert!(
+        !dir.path()
+            .join("packages/core/pubspec_overrides.yaml")
+            .exists(),
+        "dry-run should not generate pubspec_overrides.yaml"
+    );
+    assert!(
+        !dir.path()
+            .join("packages/app/pubspec_overrides.yaml")
+            .exists(),
+        "dry-run should not generate pubspec_overrides.yaml"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Clean dry-run test (Batch 29)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_clean_dry_run() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "clean_dry",
+        &[
+            ("pkg_a", "1.0.0", false, &[]),
+            ("pkg_b", "1.0.0", false, &[]),
+        ],
+    );
+
+    // Create build artifacts that should NOT be removed in dry-run
+    let build_a = dir.path().join("packages/pkg_a/build");
+    let build_b = dir.path().join("packages/pkg_b/build");
+    fs::create_dir_all(&build_a).unwrap();
+    fs::create_dir_all(&build_b).unwrap();
+    fs::write(build_a.join("output.js"), "// compiled").unwrap();
+
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["clean", "--dry-run", "--quiet"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DRY RUN"));
+
+    // Build artifacts must still exist (nothing was deleted)
+    assert!(build_a.exists(), "dry-run should not remove pkg_a/build");
+    assert!(build_b.exists(), "dry-run should not remove pkg_b/build");
+}
+
+// ---------------------------------------------------------------------------
+// Version dry-run test (Batch 29)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_version_dry_run() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "ver_dry",
+        &[
+            ("core", "1.0.0", false, &[]),
+            ("app", "2.0.0", false, &["core"]),
+        ],
+    );
+
+    let output = melos_cmd()
+        .current_dir(dir.path())
+        .args(["version", "--dry-run", "--all", "--quiet", "patch"])
+        .output()
+        .expect("command should run");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Version changes:"),
+        "should show the version plan"
+    );
+    assert!(stdout.contains("core"), "should mention core package");
+    assert!(stdout.contains("app"), "should mention app package");
+    assert!(
+        stdout.contains("DRY RUN"),
+        "should indicate this is a dry run"
+    );
+
+    // Pubspec versions must remain unchanged on disk
+    let core_pubspec = fs::read_to_string(dir.path().join("packages/core/pubspec.yaml")).unwrap();
+    assert!(
+        core_pubspec.contains("version: 1.0.0"),
+        "dry-run should not modify core version"
+    );
+    let app_pubspec = fs::read_to_string(dir.path().join("packages/app/pubspec.yaml")).unwrap();
+    assert!(
+        app_pubspec.contains("version: 2.0.0"),
+        "dry-run should not modify app version"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Health --json with no issues (Batch 29)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_health_json_no_issues() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "health_json_ok",
+        &[
+            ("svc_a", "1.0.0", false, &[]),
+            ("svc_b", "2.0.0", false, &[]),
+        ],
+    );
+
+    let output = melos_cmd()
+        .current_dir(dir.path())
+        .args(["health", "--json", "--version-drift", "--quiet"])
+        .output()
+        .expect("command should run");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("Invalid JSON output: {e}\nOutput: {stdout}"));
+
+    assert_eq!(
+        parsed["total_issues"], 0,
+        "should have zero issues for consistent workspace"
+    );
+    let drift = parsed["version_drift"]
+        .as_array()
+        .expect("version_drift should be an array");
+    assert!(drift.is_empty(), "version_drift should be empty");
+}
+
+// ---------------------------------------------------------------------------
+// Health --json with version drift (Batch 29)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_health_json_with_drift() {
+    let dir = TempDir::new().unwrap();
+
+    // Write melos.yaml
+    fs::write(
+        dir.path().join("melos.yaml"),
+        "name: drift_test\n\npackages:\n  - packages/*\n\nscripts: {}\n",
+    )
+    .unwrap();
+
+    // Create two packages that depend on the same external dep at different versions
+    let pkg_a_dir = dir.path().join("packages/pkg_a");
+    let pkg_b_dir = dir.path().join("packages/pkg_b");
+    fs::create_dir_all(&pkg_a_dir).unwrap();
+    fs::create_dir_all(&pkg_b_dir).unwrap();
+
+    fs::write(
+        pkg_a_dir.join("pubspec.yaml"),
+        "name: pkg_a\nversion: 1.0.0\ndependencies:\n  http: ^1.0.0\n",
+    )
+    .unwrap();
+    fs::write(
+        pkg_b_dir.join("pubspec.yaml"),
+        "name: pkg_b\nversion: 1.0.0\ndependencies:\n  http: ^2.0.0\n",
+    )
+    .unwrap();
+
+    let output = melos_cmd()
+        .current_dir(dir.path())
+        .args(["health", "--json", "--version-drift", "--quiet"])
+        .output()
+        .expect("command should run");
+
+    // Should fail because of drift
+    assert!(
+        !output.status.success(),
+        "health should exit non-zero when drift is found"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("health issue(s) found"),
+        "stderr should mention health issues"
+    );
+
+    // JSON is on stdout
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("Invalid JSON output: {e}\nOutput: {stdout}"));
+
+    assert!(
+        parsed["total_issues"].as_u64().unwrap_or(0) > 0,
+        "should have at least one issue"
+    );
+
+    let drift = parsed["version_drift"]
+        .as_array()
+        .expect("version_drift should be an array");
+    assert!(!drift.is_empty(), "version_drift should have entries");
+
+    // Find the http drift entry
+    let http_drift = drift
+        .iter()
+        .find(|d| d["dependency"] == "http")
+        .expect("should have a drift entry for 'http'");
+    let constraints = http_drift["constraints"]
+        .as_array()
+        .expect("constraints should be an array");
+    assert_eq!(
+        constraints.len(),
+        2,
+        "http should have 2 different constraints"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Exec success summary (Batch 29)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_exec_success_summary() {
+    let dir = TempDir::new().unwrap();
+    create_fixture_workspace(
+        dir.path(),
+        "exec_summary",
+        &[
+            ("pkg_a", "1.0.0", false, &[]),
+            ("pkg_b", "1.0.0", false, &[]),
+        ],
+    );
+
+    melos_cmd()
+        .current_dir(dir.path())
+        .args(["exec", "--quiet", "--", "echo", "hi"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("All 2 package(s) passed exec."));
+}
