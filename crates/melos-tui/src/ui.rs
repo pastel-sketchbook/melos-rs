@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::app::{ActivePanel, App, AppState};
 use crate::views::commands::draw_commands;
+use crate::views::execution::{draw_done, draw_running};
 use crate::views::help::draw_help;
 use crate::views::packages::draw_packages;
 
@@ -15,8 +16,9 @@ use crate::views::packages::draw_packages;
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
-    // Three-row layout: header (1), body (fill), footer (1).
-    let [header_area, body_area, footer_area] = Layout::vertical([
+    // Four-row layout: header (1), spacer (1), body (fill), footer (1).
+    let [header_area, _spacer, body_area, footer_area] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
@@ -89,37 +91,10 @@ fn draw_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             );
         }
         AppState::Running => {
-            let cmd_name = app.running_command.as_deref().unwrap_or("command");
-            let progress_text = match &app.progress {
-                Some((done, total, _)) => format!("Running {cmd_name}... ({done}/{total})"),
-                None => format!("Running {cmd_name}..."),
-            };
-            let running_names = if app.running_packages.is_empty() {
-                String::new()
-            } else {
-                format!("\n  {}", app.running_packages.join(", "))
-            };
-            let msg = Paragraph::new(format!("{progress_text}{running_names}"))
-                .style(Style::default().fg(Color::Yellow));
-            frame.render_widget(msg, area);
+            draw_running(frame, area, app);
         }
         AppState::Done => {
-            let passed = app.finished_packages.iter().filter(|(_, s, _)| *s).count();
-            let failed = app.finished_packages.iter().filter(|(_, s, _)| !*s).count();
-            let summary = format!("{passed} passed, {failed} failed");
-            let error_line = match &app.command_error {
-                Some(e) => format!("\nError: {e}"),
-                None => String::new(),
-            };
-            let msg = Paragraph::new(format!(
-                "Command finished: {summary}{error_line}\nPress Esc to return."
-            ))
-            .style(Style::default().fg(if failed > 0 {
-                Color::Red
-            } else {
-                Color::Green
-            }));
-            frame.render_widget(msg, area);
+            draw_done(frame, area, app);
         }
     }
 }
@@ -129,7 +104,7 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let keys = match app.state {
         AppState::Idle => "q:quit  j/k:navigate  g/G:jump  f/b:page  tab:switch  enter:run  ?:help",
         AppState::Running => "esc:cancel",
-        AppState::Done => "esc:back  q:quit",
+        AppState::Done => "esc/enter/q:back  j/k:scroll  g/G:jump  f/b:page  ctrl+c:quit",
     };
 
     let footer = Line::from(vec![

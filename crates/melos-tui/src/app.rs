@@ -129,6 +129,8 @@ pub struct App {
     pub exec_messages: Vec<String>,
     /// Error message if the command failed (shown in Done state).
     pub command_error: Option<String>,
+    /// Scroll offset into output_log for Done state viewing.
+    pub output_scroll: usize,
 }
 
 impl App {
@@ -166,6 +168,7 @@ impl App {
             output_log: Vec::new(),
             exec_messages: Vec::new(),
             command_error: None,
+            output_scroll: 0,
         }
     }
 
@@ -254,6 +257,45 @@ impl App {
             return;
         }
 
+        // In Done state, Esc/Enter/q return to Idle; scroll keys navigate output.
+        if self.state == AppState::Done {
+            let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+            let half_page = (self.page_size / 2).max(1);
+            match (code, ctrl) {
+                (KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q'), false) => {
+                    self.state = AppState::Idle;
+                }
+                (KeyCode::Char('c'), true) => self.quit = true,
+                // Scroll navigation in output log
+                (KeyCode::Up | KeyCode::Char('k'), false) => {
+                    self.output_scroll = self.output_scroll.saturating_sub(1);
+                }
+                (KeyCode::Down | KeyCode::Char('j'), false) => {
+                    self.scroll_output_down(1);
+                }
+                (KeyCode::Home | KeyCode::Char('g'), false) => {
+                    self.output_scroll = 0;
+                }
+                (KeyCode::End | KeyCode::Char('G'), false) => {
+                    self.scroll_output_end();
+                }
+                (KeyCode::Char('d'), true) => {
+                    self.scroll_output_down(half_page);
+                }
+                (KeyCode::Char('u'), true) => {
+                    self.output_scroll = self.output_scroll.saturating_sub(half_page);
+                }
+                (KeyCode::PageDown, _) | (KeyCode::Char('f'), _) => {
+                    self.scroll_output_down(self.page_size);
+                }
+                (KeyCode::PageUp, _) | (KeyCode::Char('b'), _) => {
+                    self.output_scroll = self.output_scroll.saturating_sub(self.page_size);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
         let half_page = (self.page_size / 2).max(1) as isize;
 
@@ -297,19 +339,23 @@ impl App {
         }
     }
 
-    /// Handle the Escape key based on current state.
+    /// Handle the Escape key in Idle state (quit).
+    ///
+    /// Running and Done states are handled by the early-return blocks in
+    /// `handle_key()` before this is ever reached.
     fn handle_esc(&mut self) {
-        match self.state {
-            AppState::Running => {
-                // Handled in the Running early-return above.
-            }
-            AppState::Done => {
-                self.state = AppState::Idle;
-            }
-            AppState::Idle => {
-                self.quit = true;
-            }
-        }
+        self.quit = true;
+    }
+
+    /// Scroll output log down by `n` lines, clamping to the end.
+    fn scroll_output_down(&mut self, n: usize) {
+        let max_scroll = self.output_log.len().saturating_sub(1);
+        self.output_scroll = (self.output_scroll + n).min(max_scroll);
+    }
+
+    /// Scroll output log to the very end.
+    fn scroll_output_end(&mut self) {
+        self.output_scroll = self.output_log.len().saturating_sub(1);
     }
 
     /// Request execution of the currently selected command.
@@ -337,6 +383,7 @@ impl App {
         self.output_log.clear();
         self.exec_messages.clear();
         self.command_error = None;
+        self.output_scroll = 0;
     }
 
     /// Process a core event received from the running command.
@@ -465,7 +512,11 @@ impl App {
             let abs = (-delta) as usize;
             if abs > current {
                 // Wrap: single-step up wraps to end; page-up clamps to 0.
-                if abs == 1 { len - 1 } else { 0 }
+                if abs == 1 {
+                    len - 1
+                } else {
+                    0
+                }
             } else {
                 current - abs
             }
@@ -473,7 +524,11 @@ impl App {
             let abs = delta as usize;
             if current + abs >= len {
                 // Wrap: single-step down wraps to start; page-down clamps to end.
-                if abs == 1 { 0 } else { len - 1 }
+                if abs == 1 {
+                    0
+                } else {
+                    len - 1
+                }
             } else {
                 current + abs
             }
@@ -575,6 +630,24 @@ mod tests {
         let mut app = App::new();
         app.state = AppState::Done;
         press(&mut app, KeyCode::Esc);
+        assert_eq!(app.state, AppState::Idle);
+        assert!(!app.should_quit());
+    }
+
+    #[test]
+    fn test_enter_in_done_returns_to_idle() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.state, AppState::Idle);
+        assert!(!app.should_quit());
+    }
+
+    #[test]
+    fn test_q_in_done_returns_to_idle() {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        press(&mut app, KeyCode::Char('q'));
         assert_eq!(app.state, AppState::Idle);
         assert!(!app.should_quit());
     }
@@ -1158,11 +1231,10 @@ mod tests {
         app.state = AppState::Running;
         app.on_command_finished(Ok(Err(anyhow::anyhow!("command failed"))));
         assert_eq!(app.state, AppState::Done);
-        assert!(
-            app.command_error
-                .as_ref()
-                .is_some_and(|e| e.contains("command failed"))
-        );
+        assert!(app
+            .command_error
+            .as_ref()
+            .is_some_and(|e| e.contains("command failed")));
     }
 
     // --- on_command_cancelled tests ---
@@ -1252,5 +1324,96 @@ mod tests {
         // Esc returns to Idle.
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.state, AppState::Idle);
+    }
+
+    // --- Done state scroll tests ---
+
+    fn app_in_done_with_output(line_count: usize) -> App {
+        let mut app = App::new();
+        app.state = AppState::Done;
+        app.page_size = 10;
+        for i in 0..line_count {
+            app.output_log
+                .push(("pkg".to_string(), format!("line {i}"), false));
+        }
+        app
+    }
+
+    #[test]
+    fn test_done_j_scrolls_down() {
+        let mut app = app_in_done_with_output(30);
+        assert_eq!(app.output_scroll, 0);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.output_scroll, 1);
+        assert_eq!(app.state, AppState::Done);
+    }
+
+    #[test]
+    fn test_done_k_scrolls_up() {
+        let mut app = app_in_done_with_output(30);
+        app.output_scroll = 5;
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.output_scroll, 4);
+    }
+
+    #[test]
+    fn test_done_k_clamps_at_zero() {
+        let mut app = app_in_done_with_output(30);
+        app.output_scroll = 0;
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.output_scroll, 0);
+    }
+
+    #[test]
+    fn test_done_g_jumps_to_start() {
+        let mut app = app_in_done_with_output(30);
+        app.output_scroll = 20;
+        press(&mut app, KeyCode::Char('g'));
+        assert_eq!(app.output_scroll, 0);
+    }
+
+    #[test]
+    fn test_done_shift_g_jumps_to_end() {
+        let mut app = app_in_done_with_output(30);
+        press(&mut app, KeyCode::Char('G'));
+        assert_eq!(app.output_scroll, 29);
+    }
+
+    #[test]
+    fn test_done_f_pages_down() {
+        let mut app = app_in_done_with_output(30);
+        press(&mut app, KeyCode::Char('f'));
+        assert_eq!(app.output_scroll, 10);
+    }
+
+    #[test]
+    fn test_done_b_pages_up() {
+        let mut app = app_in_done_with_output(30);
+        app.output_scroll = 20;
+        press(&mut app, KeyCode::Char('b'));
+        assert_eq!(app.output_scroll, 10);
+    }
+
+    #[test]
+    fn test_done_ctrl_d_half_page_down() {
+        let mut app = app_in_done_with_output(30);
+        ctrl(&mut app, KeyCode::Char('d'));
+        assert_eq!(app.output_scroll, 5);
+    }
+
+    #[test]
+    fn test_done_ctrl_u_half_page_up() {
+        let mut app = app_in_done_with_output(30);
+        app.output_scroll = 15;
+        ctrl(&mut app, KeyCode::Char('u'));
+        assert_eq!(app.output_scroll, 10);
+    }
+
+    #[test]
+    fn test_done_scroll_clamped_to_max() {
+        let mut app = app_in_done_with_output(5);
+        press(&mut app, KeyCode::Char('f'));
+        // max_scroll = 5 - 1 = 4
+        assert_eq!(app.output_scroll, 4);
     }
 }
