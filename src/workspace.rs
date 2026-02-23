@@ -205,6 +205,9 @@ impl Workspace {
     ///   MELOS_PACKAGE_NAME - (set per-package during exec)
     ///   MELOS_PACKAGE_PATH - (set per-package during exec)
     ///   MELOS_PACKAGE_VERSION - (set per-package during exec)
+    ///
+    /// When `sdk_path` is set, `{sdk_path}/bin` is prepended to `PATH` so that
+    /// `dart` and `flutter` executables from that SDK are found by child processes.
     pub fn env_vars(&self) -> HashMap<String, String> {
         let mut env = HashMap::new();
         env.insert(
@@ -213,6 +216,19 @@ impl Workspace {
         );
         if let Some(ref sdk_path) = self.sdk_path {
             env.insert("MELOS_SDK_PATH".to_string(), sdk_path.clone());
+
+            // Prepend sdk_path/bin to PATH so child processes find dart/flutter
+            let sdk_bin = std::path::Path::new(sdk_path).join("bin");
+            let separator = if cfg!(target_os = "windows") {
+                ";"
+            } else {
+                ":"
+            };
+            let new_path = match std::env::var("PATH") {
+                Ok(current) => format!("{}{}{}", sdk_bin.display(), separator, current),
+                Err(_) => sdk_bin.display().to_string(),
+            };
+            env.insert("PATH".to_string(), new_path);
         }
         env
     }
@@ -621,5 +637,35 @@ mod tests {
         }));
         assert!(ws.hook("clean", "pre").is_none());
         assert!(ws.hook("clean", "post").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Workspace::env_vars() tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_env_vars_without_sdk_path() {
+        let ws = make_workspace_with_commands(None);
+        let env = ws.env_vars();
+        assert_eq!(env.get("MELOS_ROOT_PATH").unwrap(), "/workspace");
+        assert!(env.get("MELOS_SDK_PATH").is_none());
+        assert!(env.get("PATH").is_none());
+    }
+
+    #[test]
+    fn test_env_vars_with_sdk_path_prepends_bin_to_path() {
+        let mut ws = make_workspace_with_commands(None);
+        ws.sdk_path = Some("/opt/flutter".to_string());
+
+        let env = ws.env_vars();
+        assert_eq!(env.get("MELOS_SDK_PATH").unwrap(), "/opt/flutter");
+
+        let path = env
+            .get("PATH")
+            .expect("PATH should be set when sdk_path is configured");
+        assert!(
+            path.starts_with("/opt/flutter/bin"),
+            "PATH should start with sdk_path/bin, got: {path}"
+        );
     }
 }

@@ -358,7 +358,7 @@ async fn run_script_recursive(
         run_exec_config_script(workspace, script, exec_cmd, &env_vars, cli_filters).await?;
     } else if let Some(run_command) = script.run_command() {
         // Mode 3: Traditional run command
-        let substituted = substitute_env_vars(run_command, &env_vars);
+        let substituted = normalize_line_continuations(&substitute_env_vars(run_command, &env_vars));
 
         if is_exec_command(&substituted) {
             // Legacy exec-style: `melos exec -- <command>` in run string
@@ -831,6 +831,37 @@ fn extract_melos_run_script_name(command: &str) -> Option<&str> {
     Some(rest)
 }
 
+/// Normalize shell line continuations in a command string.
+///
+/// YAML literal block scalars (`|`) preserve newlines and backslash characters
+/// literally. A script like:
+/// ```yaml
+/// run: |
+///   melos exec -c 1 -- \
+///     flutter analyze .
+/// ```
+/// produces the string `"melos exec -c 1 -- \\\n    flutter analyze .\n"`.
+/// The `\<newline>` is a shell line continuation that should collapse into a
+/// single space so that downstream parsing (split_whitespace, etc.) does not
+/// treat the backslash as part of the command.
+fn normalize_line_continuations(command: &str) -> String {
+    let mut result = String::with_capacity(command.len());
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && chars.peek() == Some(&'\n') {
+            // Consume the newline and any leading whitespace on the next line
+            chars.next(); // skip '\n'
+            while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') {
+                chars.next();
+            }
+            result.push(' ');
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 /// Substitute environment variables in a command string.
 ///
 /// Replaces `${VAR_NAME}` (braced form) and `$VAR_NAME` (bare form) with their
@@ -1107,5 +1138,45 @@ mod tests {
         // Should return None when no script name is given
         assert_eq!(extract_melos_run_script_name("melos run "), None);
         assert_eq!(extract_melos_run_script_name("melos-rs run"), None);
+    }
+
+    // ── normalize_line_continuations tests ──────────────────────────────
+
+    #[test]
+    fn test_normalize_line_continuations_basic() {
+        // Backslash-newline is collapsed to a single space
+        assert_eq!(
+            normalize_line_continuations("melos exec -c 1 -- \\\n    flutter analyze ."),
+            "melos exec -c 1 --  flutter analyze ."
+        );
+    }
+
+    #[test]
+    fn test_normalize_line_continuations_multiline_yaml() {
+        // Simulates what YAML `|` produces for the analyze script
+        let yaml_string = "melos exec -c 1 -- \\\n  flutter analyze .\n";
+        let normalized = normalize_line_continuations(yaml_string);
+        assert_eq!(normalized, "melos exec -c 1 --  flutter analyze .\n");
+        // After normalization, extract_exec_command should work correctly
+        assert_eq!(extract_exec_command(&normalized), "flutter analyze .");
+    }
+
+    #[test]
+    fn test_normalize_line_continuations_no_continuations() {
+        let cmd = "melos exec -c 1 -- flutter analyze .";
+        assert_eq!(normalize_line_continuations(cmd), cmd);
+    }
+
+    #[test]
+    fn test_normalize_line_continuations_backslash_not_before_newline() {
+        // Backslash not followed by newline should be preserved
+        let cmd = "echo hello\\ world";
+        assert_eq!(normalize_line_continuations(cmd), cmd);
+    }
+
+    #[test]
+    fn test_normalize_line_continuations_multiple() {
+        let cmd = "first \\\n  second \\\n  third";
+        assert_eq!(normalize_line_continuations(cmd), "first  second  third");
     }
 }
