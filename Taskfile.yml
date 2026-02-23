@@ -87,6 +87,52 @@ tasks:
     cmds:
       - cargo install --path .
 
+  # --- Versioning ---
+  version:patch:
+    desc: "Bump patch version (0.4.2 -> 0.4.3)"
+    cmds:
+      - |
+        set -e
+        CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+        NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+        sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        cargo generate-lockfile
+        echo "Bumped $CURRENT -> $NEXT"
+
+  version:minor:
+    desc: "Bump minor version (0.4.2 -> 0.5.0)"
+    cmds:
+      - |
+        set -e
+        CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+        NEXT="$MAJOR.$((MINOR + 1)).0"
+        sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        cargo generate-lockfile
+        echo "Bumped $CURRENT -> $NEXT"
+
+  version:major:
+    desc: "Bump major version (0.4.2 -> 1.0.0)"
+    cmds:
+      - |
+        set -e
+        CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+        NEXT="$((MAJOR + 1)).0.0"
+        sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        cargo generate-lockfile
+        echo "Bumped $CURRENT -> $NEXT"
+
+  version:tag:
+    desc: "Git tag current version as v<version>"
+    cmds:
+      - |
+        set -e
+        VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        git tag "v$VERSION"
+        echo "Tagged v$VERSION"
+
   # --- Code Quality ---
   loc:
     desc: "Show lines of code statistics using tokei"
