@@ -861,12 +861,18 @@ pub fn is_prerelease(version_str: &str) -> bool {
 }
 
 /// Extract build number from a Flutter version string like "1.2.3+42"
-fn extract_build_number(version_str: &str) -> Option<u64> {
+pub fn extract_build_number(version_str: &str) -> Option<u64> {
     version_str.split('+').nth(1).and_then(|b| b.parse().ok())
 }
 
-/// Apply a version bump to a package's pubspec.yaml
-fn apply_version_bump(pkg: &Package, bump: &str) -> Result<String> {
+/// Apply a version bump to a package's pubspec.yaml.
+///
+/// Reads the pubspec, computes the next version, writes it back.
+/// For `bump == "build"`, increments the `+N` suffix.
+/// For `bump == "patch"/"minor"/"major"`, bumps the semver part while preserving any `+N` suffix.
+///
+/// Returns the new version string.
+pub fn apply_version_bump(pkg: &Package, bump: &str) -> Result<String> {
     let pubspec_path = pkg.path.join("pubspec.yaml");
     let content = std::fs::read_to_string(&pubspec_path)
         .with_context(|| format!("Failed to read {}", pubspec_path.display()))?;
@@ -882,7 +888,10 @@ fn apply_version_bump(pkg: &Package, bump: &str) -> Result<String> {
     } else {
         let build_num = extract_build_number(current_version);
         match build_num {
-            Some(n) => format!("{}+{}", next_version, n),
+            Some(n) => format!(
+                "{}.{}.{}+{}",
+                next_version.major, next_version.minor, next_version.patch, n
+            ),
             None => next_version.to_string(),
         }
     };

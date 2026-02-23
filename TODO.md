@@ -852,9 +852,16 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Tests: 24 new tests covering artifact paths, template expansion, simulator command resolution
 - Total: 444 unit tests + 26 integration tests = 470 tests
 
-#### Batch D — Version bump integration & composite builds
-- [ ] `--version-bump` calls into existing `commands::version` before building
-- [ ] `--build-number-bump` increments build number in pubspec.yaml
+#### Batch D — Version bump integration ✅ (Batch 35)
+- [x] Made `apply_version_bump()` and `extract_build_number()` public in `version.rs`
+- [x] Added `VALID_VERSION_BUMPS` constant — restricts build command to `patch`/`minor`/`major` (excludes `build` since `--build-number-bump` handles that)
+- [x] Added `validate_version_bump()` function with actionable error messages
+- [x] Wired `--version-bump` into `build::run()` — validates bump type, applies to all filtered packages before build loop
+- [x] Wired `--build-number-bump` into `build::run()` — calls `apply_version_bump(pkg, "build")` for each package
+- [x] Fixed bug in `apply_version_bump`: `compute_next_version("1.2.3+42", "patch")` returned semver with build metadata, causing `format!("{}+{}", next_version, n)` to produce "1.2.4+42+42". Fix: use `major.minor.patch` format to strip build metadata before appending preserved build number
+- [x] Tests: 6 validation tests (patch/minor/major accepted, build/empty/arbitrary rejected) + 7 filesystem-based version bump tests (patch/minor/major/build, build-from-zero, patch-preserves-build-number, noop-when-absent)
+- Total: 457 unit tests + 26 integration tests = 483 tests
+
+#### Future — Composite builds & progress reporting
 - [ ] `--all` platform flag builds Android then iOS sequentially
 - [ ] Progress reporting: per-platform, per-flavor status
-- [ ] Tests: version bump + build integration, multi-platform sequencing

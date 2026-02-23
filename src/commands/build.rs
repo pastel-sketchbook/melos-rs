@@ -11,6 +11,9 @@ use crate::package::filter::apply_filters_with_categories;
 use crate::runner::{ProcessRunner, run_lifecycle_hook};
 use crate::workspace::Workspace;
 
+/// Valid values for the --version-bump flag
+const VALID_VERSION_BUMPS: &[&str] = &["patch", "minor", "major"];
+
 /// Arguments for the `build` command
 #[derive(Args, Debug)]
 pub struct BuildArgs {
@@ -382,6 +385,18 @@ fn resolve_simulator_command(
     Ok(Some(expanded))
 }
 
+/// Validate the --version-bump argument value.
+fn validate_version_bump(bump: &str) -> Result<()> {
+    if !VALID_VERSION_BUMPS.contains(&bump) {
+        bail!(
+            "Invalid --version-bump value '{}'. Must be one of: {}",
+            bump,
+            VALID_VERSION_BUMPS.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// Run the `build` command
 pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
     let build_config = workspace
@@ -426,6 +441,63 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
     // Pre-hook
     if let Some(hook) = workspace.hook("build", "pre") {
         run_lifecycle_hook(hook, "pre-build", &workspace.root_path, &[]).await?;
+    }
+
+    // Version bump: apply to all matching Flutter packages before building
+    if let Some(ref bump) = args.version_bump {
+        validate_version_bump(bump)?;
+    }
+
+    let needs_version_bump = args.version_bump.is_some() || args.build_number_bump;
+    if needs_version_bump {
+        // Collect all flutter packages (union of all platforms) for version bumping
+        let mut version_filters = base_filters.clone();
+        version_filters.flutter = Some(true);
+        let version_packages = apply_filters_with_categories(
+            &workspace.packages,
+            &version_filters,
+            Some(&workspace.root_path),
+            &workspace.config.categories,
+        )?;
+
+        if version_packages.is_empty() {
+            println!(
+                "{} No Flutter packages matched filters — skipping version bump.",
+                "i".blue(),
+            );
+        } else {
+            // Determine bump types to apply (build number first, then version)
+            let bump_label = match (&args.version_bump, args.build_number_bump) {
+                (Some(v), true) => format!("{} + build number", v),
+                (Some(v), false) => v.clone(),
+                (None, true) => "build number".to_string(),
+                (None, false) => unreachable!(),
+            };
+
+            println!(
+                "\n{} Bumping {} ({} package(s))\n",
+                "VERSION".yellow().bold(),
+                bump_label.bold(),
+                version_packages.len().to_string().cyan(),
+            );
+
+            if args.dry_run {
+                for pkg in &version_packages {
+                    let current = pkg.version.as_deref().unwrap_or("0.0.0");
+                    println!("  {} {} ({})", "DRY".yellow(), pkg.name, current);
+                }
+            } else {
+                for pkg in &version_packages {
+                    // Build number bump first (if both requested, bump build number then version)
+                    if args.build_number_bump {
+                        crate::commands::version::apply_version_bump(pkg, "build")?;
+                    }
+                    if let Some(ref bump) = args.version_bump {
+                        crate::commands::version::apply_version_bump(pkg, bump)?;
+                    }
+                }
+            }
+        }
     }
 
     let mut total_failed = 0usize;
@@ -1258,5 +1330,191 @@ mod tests {
                 .to_string()
                 .contains("no command template")
         );
+    }
+
+    // ── validate_version_bump tests ─────────────────────────────────────
+
+    #[test]
+    fn test_validate_version_bump_patch() {
+        assert!(validate_version_bump("patch").is_ok());
+    }
+
+    #[test]
+    fn test_validate_version_bump_minor() {
+        assert!(validate_version_bump("minor").is_ok());
+    }
+
+    #[test]
+    fn test_validate_version_bump_major() {
+        assert!(validate_version_bump("major").is_ok());
+    }
+
+    #[test]
+    fn test_validate_version_bump_build_rejected() {
+        let err = validate_version_bump("build").unwrap_err();
+        assert!(err.to_string().contains("Invalid --version-bump"));
+        assert!(err.to_string().contains("patch, minor, major"));
+    }
+
+    #[test]
+    fn test_validate_version_bump_empty_rejected() {
+        let err = validate_version_bump("").unwrap_err();
+        assert!(err.to_string().contains("Invalid --version-bump"));
+    }
+
+    #[test]
+    fn test_validate_version_bump_arbitrary_rejected() {
+        let err = validate_version_bump("prerelease").unwrap_err();
+        assert!(err.to_string().contains("Invalid --version-bump"));
+    }
+
+    // ── apply_version_bump integration tests (filesystem) ───────────────
+
+    #[test]
+    fn test_apply_version_bump_patch() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3\n").expect("write pubspec");
+
+        let pkg = crate::package::Package {
+            name: "test_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.2.3".to_string()),
+            is_flutter: true,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: std::collections::HashMap::new(),
+            resolution: None,
+        };
+
+        let result = crate::commands::version::apply_version_bump(&pkg, "patch").unwrap();
+        assert_eq!(result, "1.2.4");
+
+        let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
+        assert!(content.contains("version: 1.2.4"));
+    }
+
+    #[test]
+    fn test_apply_version_bump_minor() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3\n").expect("write pubspec");
+
+        let pkg = crate::package::Package {
+            name: "test_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.2.3".to_string()),
+            is_flutter: true,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: std::collections::HashMap::new(),
+            resolution: None,
+        };
+
+        let result = crate::commands::version::apply_version_bump(&pkg, "minor").unwrap();
+        assert_eq!(result, "1.3.0");
+    }
+
+    #[test]
+    fn test_apply_version_bump_major() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3\n").expect("write pubspec");
+
+        let pkg = crate::package::Package {
+            name: "test_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.2.3".to_string()),
+            is_flutter: true,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: std::collections::HashMap::new(),
+            resolution: None,
+        };
+
+        let result = crate::commands::version::apply_version_bump(&pkg, "major").unwrap();
+        assert_eq!(result, "2.0.0");
+    }
+
+    #[test]
+    fn test_apply_version_bump_build_number() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3+5\n").expect("write pubspec");
+
+        let pkg = crate::package::Package {
+            name: "test_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.2.3+5".to_string()),
+            is_flutter: true,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: std::collections::HashMap::new(),
+            resolution: None,
+        };
+
+        let result = crate::commands::version::apply_version_bump(&pkg, "build").unwrap();
+        assert_eq!(result, "1.2.3+6");
+
+        let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
+        assert!(content.contains("version: 1.2.3+6"));
+    }
+
+    #[test]
+    fn test_apply_version_bump_build_number_from_zero() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(&pubspec, "name: test_app\nversion: 1.0.0\n").expect("write pubspec");
+
+        let pkg = crate::package::Package {
+            name: "test_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: true,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: std::collections::HashMap::new(),
+            resolution: None,
+        };
+
+        let result = crate::commands::version::apply_version_bump(&pkg, "build").unwrap();
+        assert_eq!(result, "1.0.0+1");
+    }
+
+    #[test]
+    fn test_apply_version_bump_patch_preserves_build_number() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(&pubspec, "name: test_app\nversion: 1.2.3+42\n").expect("write pubspec");
+
+        let pkg = crate::package::Package {
+            name: "test_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.2.3+42".to_string()),
+            is_flutter: true,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec![],
+            dependency_versions: std::collections::HashMap::new(),
+            resolution: None,
+        };
+
+        let result = crate::commands::version::apply_version_bump(&pkg, "patch").unwrap();
+        assert_eq!(result, "1.2.4+42");
+
+        let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
+        assert!(content.contains("version: 1.2.4+42"));
+    }
+
+    // ── VALID_VERSION_BUMPS constant test ───────────────────────────────
+
+    #[test]
+    fn test_valid_version_bumps_constant() {
+        assert_eq!(VALID_VERSION_BUMPS, &["patch", "minor", "major"]);
     }
 }
