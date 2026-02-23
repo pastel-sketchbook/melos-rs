@@ -4,9 +4,9 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar};
 use melos_core::package::Package;
 use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Arguments for the `pub` command
@@ -268,16 +268,20 @@ async fn run_pub_in_packages(
     let flutter_pkgs: Vec<&Package> = packages.iter().filter(|p| p.is_flutter).collect();
     let dart_pkgs: Vec<&Package> = packages.iter().filter(|p| !p.is_flutter).collect();
 
-    let pb = create_progress_bar(packages.len() as u64, pub_subcmd);
+    let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), pub_subcmd);
     let runner = ProcessRunner::new(concurrency, false);
     let mut all_results = Vec::new();
 
     if !flutter_pkgs.is_empty() {
         let cmd = format!("flutter {}", pub_subcmd);
         let pkgs: Vec<Package> = flutter_pkgs.into_iter().cloned().collect();
-        pb.set_message(format!("flutter {}...", pub_subcmd));
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: format!("flutter {}...", pub_subcmd),
+        });
         let results = runner
-            .run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages)
+            .run_in_packages_with_events(&pkgs, &cmd, env_vars, None, Some(&tx), all_packages)
             .await?;
         all_results.extend(results);
     }
@@ -285,14 +289,19 @@ async fn run_pub_in_packages(
     if !dart_pkgs.is_empty() {
         let cmd = format!("dart {}", pub_subcmd);
         let pkgs: Vec<Package> = dart_pkgs.into_iter().cloned().collect();
-        pb.set_message(format!("dart {}...", pub_subcmd));
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: format!("dart {}...", pub_subcmd),
+        });
         let results = runner
-            .run_in_packages_with_progress(&pkgs, &cmd, env_vars, None, Some(&pb), all_packages)
+            .run_in_packages_with_events(&pkgs, &cmd, env_vars, None, Some(&tx), all_packages)
             .await?;
         all_results.extend(results);
     }
 
-    pb.finish_and_clear();
+    drop(tx);
+    render_handle.await??;
 
     let failed = all_results.iter().filter(|(_, success)| !success).count();
     let passed = all_results.len() - failed;

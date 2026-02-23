@@ -718,23 +718,37 @@ Convert the single binary crate into a Cargo workspace. Move pure logic modules 
 Define the core Event type and refactor ProcessRunner to emit events instead of
 driving progress bars directly.
 
-- [ ] Create `crates/melos-core/src/events.rs` with `Event` enum:
+- [x] Create `crates/melos-core/src/events.rs` with `Event` enum:
   - `CommandStarted { command, package_count }`
   - `CommandFinished { command, duration }`
   - `PackageStarted { name }`
   - `PackageFinished { name, success, duration }`
-  - `PackageOutput { name, line }`
+  - `PackageOutput { name, line, is_stderr }`
   - `Progress { completed, total, message }`
   - `Warning(String)`, `Info(String)`
-- [ ] Refactor `ProcessRunner::run_in_packages_with_progress` to accept `UnboundedSender<Event>` instead of `Option<&ProgressBar>`
-- [ ] Create CLI render module `crates/melos-cli/src/render.rs`:
-  - Subscribe to event channel
-  - `Event::Progress` drives indicatif progress bar
-  - `Event::PackageFinished` prints per-package status line
-  - `Event::Warning` prints colored warning
-- [ ] Update all CLI command wrappers to spawn render task + pass event sender to core
-- [ ] Verify `task check:all` passes -- identical behavior, identical test count
-- [ ] Remove `indicatif` and `colored` from `melos-core` dependencies
+- [x] Move `ProcessRunner`, `shell_command`, `build_package_env`, `find_parent_package` to `melos-core/src/runner.rs`
+  - New method: `run_in_packages_with_events()` accepts `Option<&UnboundedSender<Event>>`
+  - Old `run_in_packages()` is convenience wrapper passing `None`
+  - 11 unit tests moved from CLI to core (CLI: 353->342, core: 154->165)
+- [x] Create CLI render module `crates/melos-cli/src/render.rs`:
+  - `spawn_renderer(total, message)` -- progress bar + event loop
+  - `spawn_plain_renderer()` -- colored output, no progress bar
+  - `create_progress_bar(total, message)` -- standalone progress bar for non-runner use
+  - `render_loop()` -- internal event consumer with per-package color assignment
+- [x] Gut CLI `runner/mod.rs` to only `run_lifecycle_hook()` (imports `shell_command` from core)
+- [x] Update all 10 CLI command files to use event-based patterns:
+  - `format.rs` -- standard `spawn_renderer` + `run_in_packages_with_events`
+  - `exec.rs` -- two `spawn_renderer` instances (normal + watch)
+  - `publish.rs` -- standard + lifecycle hooks
+  - `pub_cmds.rs` -- flutter/dart split with `Progress` events
+  - `test.rs` -- flutter/dart split with `Progress` events + lifecycle hooks
+  - `build.rs` -- `spawn_plain_renderer` + lifecycle hooks
+  - `run.rs` -- `spawn_plain_renderer` + `shell_command` import update
+  - `clean.rs` -- mixed: renderer for flutter, manual pb for dart filesystem ops
+  - `bootstrap.rs` -- renderer with `bail_msg` pattern for error collection
+  - `analyze.rs` -- flutter/dart split with `Progress` events + `scan_dry_run` uses standalone pb
+- [x] Verify `task check:all` passes -- 533 tests (342 CLI + 26 integration + 165 core), zero clippy warnings
+- [x] `indicatif` and `colored` already absent from `melos-core` (never added)
 
 ### Phase 3 -- Migrate command run() functions to core
 

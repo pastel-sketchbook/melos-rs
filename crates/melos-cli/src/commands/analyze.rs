@@ -9,8 +9,9 @@ use tokio::sync::Semaphore;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar, shell_command};
+use crate::render::{create_progress_bar, spawn_renderer};
 use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::runner::{ProcessRunner, shell_command};
 use melos_core::workspace::Workspace;
 
 /// Arguments for the `analyze` command
@@ -167,19 +168,20 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
 
         if !skip_fix {
             let fix_cmd = build_fix_command(true, &args.code);
-            let fix_pb = create_progress_bar(packages.len() as u64, "fixing");
+            let (fix_tx, fix_render) = spawn_renderer(packages.len(), "fixing");
             let fix_runner = ProcessRunner::new(args.concurrency, false);
             let fix_results = fix_runner
-                .run_in_packages_with_progress(
+                .run_in_packages_with_events(
                     &packages,
                     &fix_cmd,
                     &workspace.env_vars(),
                     None,
-                    Some(&fix_pb),
+                    Some(&fix_tx),
                     &workspace.packages,
                 )
                 .await?;
-            fix_pb.finish_and_clear();
+            drop(fix_tx);
+            fix_render.await??;
 
             let fix_failed = fix_results.iter().filter(|(_, success)| !success).count();
             if fix_failed > 0 {
@@ -206,20 +208,24 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
     let flutter_pkgs: Vec<_> = packages.iter().filter(|p| p.is_flutter).cloned().collect();
     let dart_pkgs: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
 
-    let pb = create_progress_bar(packages.len() as u64, "analyzing");
+    let (tx, render_handle) = spawn_renderer(packages.len(), "analyzing");
     let runner = ProcessRunner::new(args.concurrency, false);
     let mut all_results = Vec::new();
 
     if !flutter_pkgs.is_empty() {
         let cmd = build_analyze_command(true, args.fatal_warnings, args.fatal_infos, args.no_fatal);
-        pb.set_message("flutter analyze...");
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: "flutter analyze...".to_string(),
+        });
         let results = runner
-            .run_in_packages_with_progress(
+            .run_in_packages_with_events(
                 &flutter_pkgs,
                 &cmd,
                 &workspace.env_vars(),
                 None,
-                Some(&pb),
+                Some(&tx),
                 &workspace.packages,
             )
             .await?;
@@ -229,21 +235,26 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
     if !dart_pkgs.is_empty() {
         let cmd =
             build_analyze_command(false, args.fatal_warnings, args.fatal_infos, args.no_fatal);
-        pb.set_message("dart analyze...");
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: "dart analyze...".to_string(),
+        });
         let results = runner
-            .run_in_packages_with_progress(
+            .run_in_packages_with_events(
                 &dart_pkgs,
                 &cmd,
                 &workspace.env_vars(),
                 None,
-                Some(&pb),
+                Some(&tx),
                 &workspace.packages,
             )
             .await?;
         all_results.extend(results);
     }
 
-    pb.finish_and_clear();
+    drop(tx);
+    render_handle.await??;
 
     let failed = all_results.iter().filter(|(_, success)| !success).count();
     let passed = all_results.len() - failed;

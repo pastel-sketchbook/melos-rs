@@ -8,11 +8,11 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::ProcessRunner;
 use melos_core::config::ScriptEntry;
 use melos_core::config::filter::PackageFilters;
 use melos_core::package::Package;
 use melos_core::package::filter::{apply_filters_with_categories, topological_sort};
+use melos_core::runner::ProcessRunner;
 use melos_core::watcher;
 use melos_core::workspace::Workspace;
 
@@ -389,7 +389,7 @@ async fn run_script_recursive(
 
                 println!("{}{} {}", indent, ">".dimmed(), cmd.dimmed());
 
-                let (shell, shell_flag) = crate::runner::shell_command();
+                let (shell, shell_flag) = melos_core::runner::shell_command();
                 let status = tokio::process::Command::new(shell)
                     .arg(shell_flag)
                     .arg(cmd)
@@ -469,7 +469,7 @@ async fn run_steps(
                     cmd.dimmed()
                 );
 
-                let (shell, shell_flag) = crate::runner::shell_command();
+                let (shell, shell_flag) = melos_core::runner::shell_command();
                 let status = tokio::process::Command::new(shell)
                     .arg(shell_flag)
                     .arg(cmd)
@@ -550,10 +550,20 @@ async fn run_exec_config_script(
     // Substitute env vars in the exec command
     let substituted = substitute_env_vars(exec_command, env_vars);
 
+    let (tx, render_handle) = crate::render::spawn_plain_renderer();
     let runner = ProcessRunner::new(concurrency, fail_fast);
     let results = runner
-        .run_in_packages(&packages, &substituted, env_vars, None, &workspace.packages)
+        .run_in_packages_with_events(
+            &packages,
+            &substituted,
+            env_vars,
+            None,
+            Some(&tx),
+            &workspace.packages,
+        )
         .await?;
+    drop(tx);
+    render_handle.await??;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
     if failed > 0 {
@@ -714,16 +724,20 @@ async fn run_exec_script(
     // Extract the actual command after `melos exec` / `melos-rs exec`
     let actual_cmd = extract_exec_command(command);
 
+    let (tx, render_handle) = crate::render::spawn_plain_renderer();
     let runner = ProcessRunner::new(flags.concurrency, flags.fail_fast);
     let results = runner
-        .run_in_packages(
+        .run_in_packages_with_events(
             &packages,
             &actual_cmd,
             env_vars,
             flags.timeout,
+            Some(&tx),
             &workspace.packages,
         )
         .await?;
+    drop(tx);
+    render_handle.await??;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
     if failed > 0 {

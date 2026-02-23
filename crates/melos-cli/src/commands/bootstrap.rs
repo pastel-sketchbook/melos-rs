@@ -6,9 +6,9 @@ use colored::Colorize;
 
 use crate::cli::BootstrapArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar};
 use melos_core::package::Package;
 use melos_core::package::filter::{apply_filters_with_categories, topological_sort};
+use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Bootstrap the workspace: link local packages and run `pub get` in each package
@@ -108,55 +108,70 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
     let dart_packages: Vec<_> = packages.iter().filter(|p| !p.is_flutter).cloned().collect();
 
     let total = flutter_packages.len() + dart_packages.len();
-    let pb = create_progress_bar(total as u64, "bootstrapping");
+    let (tx, render_handle) = crate::render::spawn_renderer(total, "bootstrapping");
+
+    let mut bail_msg: Option<String> = None;
 
     // Bootstrap Flutter packages in parallel
     if !flutter_packages.is_empty() {
-        pb.set_message("flutter pub get...");
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: "flutter pub get...".into(),
+        });
         let runner = ProcessRunner::new(concurrency, true);
         let results = runner
-            .run_in_packages(
+            .run_in_packages_with_events(
                 &flutter_packages,
                 &flutter_cmd,
                 &workspace.env_vars(),
                 None,
+                Some(&tx),
                 &workspace.packages,
             )
             .await?;
 
         for (name, success) in &results {
-            pb.inc(1);
             if !success {
-                pb.finish_and_clear();
-                anyhow::bail!("flutter pub get failed in package '{}'", name);
+                bail_msg = Some(format!("flutter pub get failed in package '{}'", name));
+                break;
             }
         }
     }
 
     // Bootstrap Dart packages in parallel
-    if !dart_packages.is_empty() {
-        pb.set_message("dart pub get...");
+    if bail_msg.is_none() && !dart_packages.is_empty() {
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: "dart pub get...".into(),
+        });
         let runner = ProcessRunner::new(concurrency, true);
         let results = runner
-            .run_in_packages(
+            .run_in_packages_with_events(
                 &dart_packages,
                 &dart_cmd,
                 &workspace.env_vars(),
                 None,
+                Some(&tx),
                 &workspace.packages,
             )
             .await?;
 
         for (name, success) in &results {
-            pb.inc(1);
             if !success {
-                pb.finish_and_clear();
-                anyhow::bail!("dart pub get failed in package '{}'", name);
+                bail_msg = Some(format!("dart pub get failed in package '{}'", name));
+                break;
             }
         }
     }
 
-    pb.finish_and_clear();
+    drop(tx);
+    render_handle.await??;
+
+    if let Some(msg) = bail_msg {
+        anyhow::bail!(msg);
+    }
 
     if let Some(post_hook) = workspace.hook("bootstrap", "post") {
         crate::runner::run_lifecycle_hook(post_hook, "post-bootstrap", &workspace.root_path, &[])

@@ -1,6 +1,7 @@
 mod cli;
 mod commands;
 mod filter_ext;
+mod render;
 mod runner;
 
 use anyhow::Result;

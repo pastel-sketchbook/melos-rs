@@ -4,8 +4,8 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar};
 use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Arguments for the `publish` command
@@ -115,19 +115,20 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
 
     let cmd = build_publish_command(args.dry_run);
 
-    let pb = create_progress_bar(packages.len() as u64, "publishing");
+    let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), "publishing");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages_with_progress(
+        .run_in_packages_with_events(
             &packages,
             &cmd,
             &workspace.env_vars(),
             None,
-            Some(&pb),
+            Some(&tx),
             &workspace.packages,
         )
         .await?;
-    pb.finish_and_clear();
+    drop(tx);
+    render_handle.await??;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
     let succeeded: Vec<_> = results

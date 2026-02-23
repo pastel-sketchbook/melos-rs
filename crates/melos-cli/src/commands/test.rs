@@ -4,8 +4,8 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar};
 use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Arguments for the `test` command
@@ -98,20 +98,24 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
 
     let extra_flags = build_extra_flags(&args);
 
-    let pb = create_progress_bar(testable_packages.len() as u64, "testing");
+    let (tx, render_handle) = crate::render::spawn_renderer(testable_packages.len(), "testing");
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let mut all_results = Vec::new();
 
     if !flutter_pkgs.is_empty() {
         let cmd = build_test_command("flutter", &extra_flags, &args.extra_args);
-        pb.set_message("flutter test...");
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: "flutter test...".into(),
+        });
         let results = runner
-            .run_in_packages_with_progress(
+            .run_in_packages_with_events(
                 &flutter_pkgs,
                 &cmd,
                 &workspace.env_vars(),
                 None,
-                Some(&pb),
+                Some(&tx),
                 &workspace.packages,
             )
             .await?;
@@ -120,21 +124,26 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
 
     if !dart_pkgs.is_empty() {
         let cmd = build_test_command("dart", &extra_flags, &args.extra_args);
-        pb.set_message("dart test...");
+        let _ = tx.send(melos_core::events::Event::Progress {
+            completed: 0,
+            total: 0,
+            message: "dart test...".into(),
+        });
         let results = runner
-            .run_in_packages_with_progress(
+            .run_in_packages_with_events(
                 &dart_pkgs,
                 &cmd,
                 &workspace.env_vars(),
                 None,
-                Some(&pb),
+                Some(&tx),
                 &workspace.packages,
             )
             .await?;
         all_results.extend(results);
     }
 
-    pb.finish_and_clear();
+    drop(tx);
+    render_handle.await??;
 
     let failed = all_results.iter().filter(|(_, success)| !success).count();
     let passed = all_results.len() - failed;

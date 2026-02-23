@@ -4,8 +4,8 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar};
 use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Arguments for the `format` command
@@ -59,19 +59,20 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
 
     let cmd_str = build_format_command(args.set_exit_if_changed, &args.output, args.line_length);
 
-    let pb = create_progress_bar(packages.len() as u64, "formatting");
+    let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), "formatting");
     let runner = ProcessRunner::new(args.concurrency, false);
     let results = runner
-        .run_in_packages_with_progress(
+        .run_in_packages_with_events(
             &packages,
             &cmd_str,
             &workspace.env_vars(),
             None,
-            Some(&pb),
+            Some(&tx),
             &workspace.packages,
         )
         .await?;
-    pb.finish_and_clear();
+    drop(tx);
+    render_handle.await??;
 
     let failed = results.iter().filter(|(_, success)| !success).count();
     let passed = results.len() - failed;

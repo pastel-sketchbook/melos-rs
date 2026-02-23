@@ -3,8 +3,8 @@ use colored::Colorize;
 
 use crate::cli::CleanArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar};
 use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Paths removed during a deep clean
@@ -76,21 +76,23 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         .collect();
 
     let mut failed = 0u32;
-    let pb = create_progress_bar(all_filtered.len() as u64, "cleaning");
 
     if !flutter_packages.is_empty() {
-        pb.set_message("flutter clean...");
+        let (tx, render_handle) =
+            crate::render::spawn_renderer(flutter_packages.len(), "flutter clean...");
         let runner = ProcessRunner::new(1, false);
         let results = runner
-            .run_in_packages_with_progress(
+            .run_in_packages_with_events(
                 &flutter_packages,
                 "flutter clean",
                 &workspace.env_vars(),
                 None,
-                Some(&pb),
+                Some(&tx),
                 &workspace.packages,
             )
             .await?;
+        drop(tx);
+        render_handle.await??;
 
         for (name, success) in &results {
             if *success {
@@ -102,9 +104,11 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
         }
     }
 
-    // For pure Dart packages, remove build artifacts
     if !dart_packages.is_empty() {
-        pb.set_message("cleaning dart packages...");
+        let pb = crate::render::create_progress_bar(
+            dart_packages.len() as u64,
+            "cleaning dart packages...",
+        );
         println!("{}", "Cleaning pure Dart packages...".dimmed());
         for pkg in &dart_packages {
             let build_dir = pkg.path.join("build");
@@ -136,9 +140,8 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
             println!("  {} {}", "CLEANED".green(), pkg.name);
             pb.inc(1);
         }
+        pb.finish_and_clear();
     }
-
-    pb.finish_and_clear();
 
     // Deep clean: remove additional artifacts from ALL packages
     if args.deep {

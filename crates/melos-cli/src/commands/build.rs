@@ -7,9 +7,10 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, run_lifecycle_hook};
+use crate::runner::run_lifecycle_hook;
 use melos_core::config::{BuildMode, FlavorConfig, SimulatorConfig};
 use melos_core::package::filter::apply_filters_with_categories;
+use melos_core::runner::ProcessRunner;
 use melos_core::workspace::Workspace;
 
 /// Valid values for the --version-bump flag
@@ -743,9 +744,19 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
 
             let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
             let env_vars = workspace.env_vars();
+            let (tx, render_handle) = crate::render::spawn_plain_renderer();
             let results = runner
-                .run_in_packages(&packages, &cmd, &env_vars, None, &workspace.packages)
+                .run_in_packages_with_events(
+                    &packages,
+                    &cmd,
+                    &env_vars,
+                    None,
+                    Some(&tx),
+                    &workspace.packages,
+                )
                 .await?;
+            drop(tx);
+            render_handle.await??;
 
             let failed = results.iter().filter(|(_, success)| !success).count();
             let passed = results.len() - failed;
@@ -771,9 +782,19 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
                 // Run simulator command sequentially in each package dir
                 // (concurrency=1: bundletool/xcodebuild are heavy processes)
                 let sim_runner = ProcessRunner::new(1, args.fail_fast);
+                let (sim_tx, sim_render) = crate::render::spawn_plain_renderer();
                 let sim_results = sim_runner
-                    .run_in_packages(&packages, &sim_cmd, &env_vars, None, &workspace.packages)
+                    .run_in_packages_with_events(
+                        &packages,
+                        &sim_cmd,
+                        &env_vars,
+                        None,
+                        Some(&sim_tx),
+                        &workspace.packages,
+                    )
                     .await?;
+                drop(sim_tx);
+                sim_render.await??;
 
                 sim_failed = sim_results.iter().filter(|(_, success)| !success).count();
                 total_failed += sim_failed;

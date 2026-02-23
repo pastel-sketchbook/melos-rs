@@ -6,9 +6,9 @@ use colored::Colorize;
 
 use crate::cli::GlobalFilterArgs;
 use crate::filter_ext::package_filters_from_args;
-use crate::runner::{ProcessRunner, create_progress_bar};
 use melos_core::package::Package;
 use melos_core::package::filter::{apply_filters_with_categories, topological_sort};
+use melos_core::runner::ProcessRunner;
 use melos_core::watcher;
 use melos_core::workspace::Workspace;
 
@@ -133,19 +133,20 @@ async fn run_exec_once(
         None
     };
 
-    let pb = create_progress_bar(packages.len() as u64, "exec");
+    let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), "exec");
     let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
     let results = runner
-        .run_in_packages_with_progress(
+        .run_in_packages_with_events(
             packages,
             cmd_str,
             &workspace.env_vars(),
             timeout,
-            Some(&pb),
+            Some(&tx),
             &workspace.packages,
         )
         .await?;
-    pb.finish_and_clear();
+    drop(tx);
+    render_handle.await??;
 
     // Count failures
     let failed = results.iter().filter(|(_, success)| !success).count();
@@ -244,19 +245,20 @@ async fn run_watch_loop(
             None
         };
 
-        let pb = create_progress_bar(affected.len() as u64, "exec");
+        let (tx, render_handle) = crate::render::spawn_renderer(affected.len(), "exec");
         let runner = ProcessRunner::new(args.concurrency, args.fail_fast);
         let results = runner
-            .run_in_packages_with_progress(
+            .run_in_packages_with_events(
                 &affected,
                 cmd_str,
                 &workspace.env_vars(),
                 timeout,
-                Some(&pb),
+                Some(&tx),
                 &workspace.packages,
             )
             .await;
-        pb.finish_and_clear();
+        drop(tx);
+        let _ = render_handle.await;
 
         match results {
             Ok(ref r) => {
