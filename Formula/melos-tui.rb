@@ -12,30 +12,30 @@
 class MelosTui < Formula
   desc "Terminal UI for melos-rs — Flutter/Dart monorepo management"
   homepage "https://github.com/pastel-sketchbook/melos-rs"
-  version "0.6.6"
+  version "0.6.7"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-tui-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "PLACEHOLDER_ARM64_SHA256"
+      sha256 "260c12801c9a23f9c4f5451f371dd2787008903913043d284f947d7aaceb785a"
     end
 
     on_intel do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-tui-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "PLACEHOLDER_X86_64_SHA256"
+      sha256 "0858c6d3d949b44e5f8c404909d4adf8661c5bf65f56e3325b723812aa774d0b"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-tui-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "PLACEHOLDER_LINUX_ARM64_SHA256"
+      sha256 "7e75b1e84e2b51310aa5053f2ea179c90903dcce07e278a0c6de34bb24e266ff"
     end
 
     on_intel do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-tui-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "PLACEHOLDER_LINUX_X86_64_SHA256"
+      sha256 "34737afbab311fbe73b05719dee75d1442ef1f16bf4e8c926e8e7a4c3f17b0cb"
     end
   end
 

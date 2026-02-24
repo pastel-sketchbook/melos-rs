@@ -39,7 +39,7 @@ update_formula() {
 
   local ver="${VERSION#v}"  # strip leading v
 
-  sed -i '' \
+  sed -i"" \
     -e "s/version \".*\"/version \"${ver}\"/" \
     "${formula}"
 
@@ -61,7 +61,7 @@ def replace_sha(match):
         return result
     return match.group(0)
 
-content = re.sub(r'sha256 \"[A-Fa-f0-9_]+\"', replace_sha, content)
+content = re.sub(r'sha256 \"[A-Za-z0-9_]+\"', replace_sha, content)
 
 with open('${formula}', 'w') as f:
     f.write(content)

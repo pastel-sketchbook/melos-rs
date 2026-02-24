@@ -222,7 +222,7 @@ tasks:
       - |
         set -e
         VERSION=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
-        ./scripts/update-formula.sh "$VERSION"
+        ./scripts/update-formula.sh "v$VERSION"
 
   # --- Code Quality ---
   loc:
