@@ -176,6 +176,54 @@ tasks:
         git tag "v$VERSION"
         echo "Tagged v$VERSION"
 
+  # --- Release & Distribution ---
+  release:
+    desc: "Bump patch, commit, tag, and push to trigger release workflow"
+    cmds:
+      - task: version:patch
+      - |
+        set -e
+        VERSION=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to $VERSION"
+        git tag "v$VERSION"
+        git push && git push origin "v$VERSION"
+        echo "Pushed v$VERSION — release workflow triggered"
+
+  release:minor:
+    desc: "Bump minor, commit, tag, and push to trigger release workflow"
+    cmds:
+      - task: version:minor
+      - |
+        set -e
+        VERSION=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to $VERSION"
+        git tag "v$VERSION"
+        git push && git push origin "v$VERSION"
+        echo "Pushed v$VERSION — release workflow triggered"
+
+  release:major:
+    desc: "Bump major, commit, tag, and push to trigger release workflow"
+    cmds:
+      - task: version:major
+      - |
+        set -e
+        VERSION=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to $VERSION"
+        git tag "v$VERSION"
+        git push && git push origin "v$VERSION"
+        echo "Pushed v$VERSION — release workflow triggered"
+
+  brew:update:
+    desc: "Update Homebrew formula SHA256 values after a release"
+    cmds:
+      - |
+        set -e
+        VERSION=$(sed -n '/\[workspace\.package\]/,/^\[/{s/^version = "\(.*\)"/\1/p}' Cargo.toml)
+        ./scripts/update-formula.sh "$VERSION"
+
   # --- Code Quality ---
   loc:
     desc: "Show lines of code statistics using tokei"
