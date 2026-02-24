@@ -113,6 +113,33 @@ Build progress is reported per-step with timing and a summary table at completio
 
 ## Installation
 
+### Homebrew (macOS / Linux)
+
+```sh
+brew tap pastel-sketchbook/melos-rs https://github.com/pastel-sketchbook/melos-rs
+brew install melos-rs
+
+# TUI (optional, separate binary)
+brew install melos-tui
+```
+
+Or as a one-liner:
+
+```sh
+brew install pastel-sketchbook/melos-rs/melos-rs
+```
+
+### Download from GitHub Releases
+
+Pre-built binaries for macOS (ARM64, x86_64) and Linux (ARM64, x86_64) are available on the [Releases](https://github.com/pastel-sketchbook/melos-rs/releases) page:
+
+```sh
+# Example: download latest for macOS ARM64
+curl -LO https://github.com/pastel-sketchbook/melos-rs/releases/latest/download/melos-rs-v0.6.6-aarch64-apple-darwin.tar.gz
+tar xzf melos-rs-v0.6.6-aarch64-apple-darwin.tar.gz
+mv melos-rs /usr/local/bin/
+```
+
 ### From source
 
 Requires [Rust toolchain](https://rustup.rs/) (stable, 1.85+; uses `let_chains` which stabilized in 1.87).

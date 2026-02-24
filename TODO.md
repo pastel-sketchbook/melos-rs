@@ -1360,3 +1360,23 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Rewrote CLI `version.rs` (3213->657 lines, -80%) to import from core, removed duplicated logic and tests
 - [x] Architecture: core `run()` functions for build/version take pre-filtered packages + workspace + opts + event sender; CLI retains clap args, colored output, renderer, lifecycle hooks, confirmation prompts, git push/commit orchestration
 - Total: 534 unit tests + 26 integration tests = 560 tests (39 CLI unit + 495 core unit + 26 integration); 203 net new core tests
+
+## CI/CD & Distribution (v0.6.6)
+
+### GitHub Actions Workflows
+- [x] `.github/workflows/ci.yml` — clippy + test on PR/push to main
+  - Runs `cargo clippy --workspace -- -D warnings`
+  - Runs `cargo test --workspace -- --test-threads=1`
+- [x] `.github/workflows/release.yml` — multi-arch binary release on tag push (`v*`)
+  - 4 targets: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+  - Linux ARM64 uses `cross` for cross-compilation; all others build natively
+  - Both `melos-rs` and `melos-tui` binaries packaged as separate tar.gz archives
+  - SHA256 checksums generated for each archive
+  - Automatic GitHub Release creation with all assets attached
+
+### Homebrew Distribution
+- [x] `Formula/melos-rs.rb` — Homebrew formula for CLI binary (arch-specific URLs + SHA256 placeholders)
+- [x] `Formula/melos-tui.rb` — Homebrew formula for TUI binary (arch-specific URLs + SHA256 placeholders)
+- [x] `scripts/update-formula.sh` — automates SHA256 replacement after releases (downloads checksums, updates formulas)
+- [x] README updated with Homebrew, download, and source installation instructions
+- [ ] After first release: run `scripts/update-formula.sh <version>` to replace SHA256 placeholders

@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (Linux ARM)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (native)
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package binaries
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # CLI binary
+          cli_bin="target/${{ matrix.target }}/release/melos-rs"
+          cli_archive="melos-rs-${tag}-${{ matrix.target }}.tar.gz"
+          tar czf "${cli_archive}" -C "$(dirname "${cli_bin}")" "$(basename "${cli_bin}")"
+          shasum -a 256 "${cli_archive}" > "${cli_archive}.sha256"
+
+          # TUI binary
+          tui_bin="target/${{ matrix.target }}/release/melos-tui"
+          tui_archive="melos-tui-${tag}-${{ matrix.target }}.tar.gz"
+          tar czf "${tui_archive}" -C "$(dirname "${tui_bin}")" "$(basename "${tui_bin}")"
+          shasum -a 256 "${tui_archive}" > "${tui_archive}.sha256"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: |
+            melos-rs-*.tar.gz
+            melos-rs-*.tar.gz.sha256
+            melos-tui-*.tar.gz
+            melos-tui-*.tar.gz.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/melos-rs-*.tar.gz
+            artifacts/melos-rs-*.tar.gz.sha256
+            artifacts/melos-tui-*.tar.gz
+            artifacts/melos-tui-*.tar.gz.sha256
