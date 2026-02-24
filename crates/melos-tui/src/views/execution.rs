@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, Padding, Paragraph, Wrap},
 };
 
 use crate::app::App;
@@ -85,37 +85,31 @@ fn format_elapsed(d: std::time::Duration) -> String {
 }
 
 /// Draw the Running state: command title + progress bar + live output.
+/// Wrapped in a bordered block matching the results view style.
 pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     let cmd_name = app.running_command.as_deref().unwrap_or("command");
 
-    // Split: title (1) + progress bar (1) + spacer (1) + output log (fill).
-    let [title_area, gauge_area, _spacer, output_area] = Layout::vertical([
-        Constraint::Length(1),
+    // Outer border matching the results view panels.
+    let elapsed_str = match app.elapsed() {
+        Some(d) => format!("  {}", format_elapsed(d)),
+        None => String::new(),
+    };
+    let outer_title = format!(" Running: {cmd_name}{elapsed_str} ");
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(outer_title)
+        .padding(Padding::horizontal(2));
+    let inner_area = outer_block.inner(area);
+    frame.render_widget(outer_block, area);
+
+    // Split: progress bar (1) + spacer (1) + output log (fill).
+    let [gauge_area, _spacer, output_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
     ])
-    .areas(area);
-
-    // Command title with elapsed time.
-    let elapsed_span = match app.elapsed() {
-        Some(d) => Span::styled(
-            format!("  {}", format_elapsed(d)),
-            Style::default().fg(Color::DarkGray),
-        ),
-        None => Span::raw(""),
-    };
-    let title = Line::from(vec![
-        Span::styled("Running ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            cmd_name,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        elapsed_span,
-    ]);
-    frame.render_widget(Paragraph::new(title), title_area);
+    .areas(inner_area);
 
     // Progress gauge.
     let (completed, total) = match &app.progress {

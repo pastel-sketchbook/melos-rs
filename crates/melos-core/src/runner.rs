@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -77,9 +78,6 @@ impl ProcessRunner {
         let semaphore = std::sync::Arc::new(Semaphore::new(self.concurrency));
         let results = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        // Mutex used to serialize event emission so concurrent package output
-        // does not interleave.
-        let output_lock = std::sync::Arc::new(std::sync::Mutex::new(()));
 
         let mut handles = Vec::new();
 
@@ -91,7 +89,6 @@ impl ProcessRunner {
             let sem = semaphore.clone();
             let results = results.clone();
             let failed = failed.clone();
-            let output_lock = output_lock.clone();
             let fail_fast = self.fail_fast;
             let command = command.to_string();
             let pkg_name = pkg.name.clone();
@@ -129,85 +126,126 @@ impl ProcessRunner {
                     .stderr(std::process::Stdio::piped())
                     .spawn();
 
-                // Collect output and determine success.
-                // stdout/stderr are buffered and emitted atomically after completion.
-                let (success, stdout_buf, stderr_buf) = match child {
-                    Ok(child) => {
-                        if let Some(dur) = timeout {
-                            match tokio::time::timeout(dur, child.wait_with_output()).await {
-                                Ok(Ok(output)) => {
-                                    (output.status.success(), output.stdout, output.stderr)
-                                }
+                let success = match child {
+                    Ok(mut child) => {
+                        // Take stdout/stderr handles for streaming.
+                        // safety: we set Stdio::piped() above so these are always Some
+                        let stdout = child.stdout.take().expect("stdout piped");
+                        let stderr = child.stderr.take().expect("stderr piped");
+
+                        let stdout_tx = tx.clone();
+                        let stderr_tx = tx.clone();
+                        let stdout_name = pkg_name.clone();
+                        let stderr_name = pkg_name.clone();
+
+                        // Stream stdout lines as they arrive.
+                        let stdout_task = tokio::spawn(async move {
+                            let reader = BufReader::new(stdout);
+                            let mut lines = reader.lines();
+                            while let Ok(Some(line)) = lines.next_line().await {
+                                emit(
+                                    &stdout_tx,
+                                    Event::PackageOutput {
+                                        name: stdout_name.clone(),
+                                        line,
+                                        is_stderr: false,
+                                    },
+                                );
+                            }
+                        });
+
+                        // Stream stderr lines as they arrive.
+                        let stderr_task = tokio::spawn(async move {
+                            let reader = BufReader::new(stderr);
+                            let mut lines = reader.lines();
+                            while let Ok(Some(line)) = lines.next_line().await {
+                                emit(
+                                    &stderr_tx,
+                                    Event::PackageOutput {
+                                        name: stderr_name.clone(),
+                                        line,
+                                        is_stderr: true,
+                                    },
+                                );
+                            }
+                        });
+
+                        // Wait for the process to exit, optionally with a timeout.
+                        let status = if let Some(dur) = timeout {
+                            match tokio::time::timeout(dur, child.wait()).await {
+                                Ok(Ok(s)) => Some(s),
                                 Ok(Err(e)) => {
-                                    let msg = format!("ERROR: {}", e);
-                                    (false, Vec::new(), msg.into_bytes())
+                                    emit(
+                                        &tx,
+                                        Event::PackageOutput {
+                                            name: pkg_name.clone(),
+                                            line: format!("ERROR: {}", e),
+                                            is_stderr: true,
+                                        },
+                                    );
+                                    None
                                 }
                                 Err(_) => {
-                                    let msg =
-                                        format!("TIMEOUT: timed out after {}s", dur.as_secs());
-                                    (false, Vec::new(), msg.into_bytes())
+                                    emit(
+                                        &tx,
+                                        Event::PackageOutput {
+                                            name: pkg_name.clone(),
+                                            line: format!(
+                                                "TIMEOUT: timed out after {}s",
+                                                dur.as_secs()
+                                            ),
+                                            is_stderr: true,
+                                        },
+                                    );
+                                    None
                                 }
                             }
                         } else {
-                            match child.wait_with_output().await {
-                                Ok(output) => {
-                                    (output.status.success(), output.stdout, output.stderr)
-                                }
+                            match child.wait().await {
+                                Ok(s) => Some(s),
                                 Err(e) => {
-                                    let msg = format!("ERROR: {}", e);
-                                    (false, Vec::new(), msg.into_bytes())
+                                    emit(
+                                        &tx,
+                                        Event::PackageOutput {
+                                            name: pkg_name.clone(),
+                                            line: format!("ERROR: {}", e),
+                                            is_stderr: true,
+                                        },
+                                    );
+                                    None
                                 }
                             }
-                        }
+                        };
+
+                        // Ensure streaming tasks finish before we emit PackageFinished.
+                        let _ = stdout_task.await;
+                        let _ = stderr_task.await;
+
+                        status.is_some_and(|s| s.success())
                     }
                     Err(e) => {
-                        let msg = format!("ERROR: {}", e);
-                        (false, Vec::new(), msg.into_bytes())
+                        emit(
+                            &tx,
+                            Event::PackageOutput {
+                                name: pkg_name.clone(),
+                                line: format!("ERROR: {}", e),
+                                is_stderr: true,
+                            },
+                        );
+                        false
                     }
                 };
 
                 let duration = start.elapsed();
 
-                // Atomically emit all output events under the lock to prevent
-                // interleaving with other packages' output.
-                {
-                    // safety: we never panic while holding this lock
-                    let _guard = output_lock.lock().expect("output lock poisoned");
-
-                    if !stdout_buf.is_empty() {
-                        for line in String::from_utf8_lossy(&stdout_buf).lines() {
-                            emit(
-                                &tx,
-                                Event::PackageOutput {
-                                    name: pkg_name.clone(),
-                                    line: line.to_string(),
-                                    is_stderr: false,
-                                },
-                            );
-                        }
-                    }
-                    if !stderr_buf.is_empty() {
-                        for line in String::from_utf8_lossy(&stderr_buf).lines() {
-                            emit(
-                                &tx,
-                                Event::PackageOutput {
-                                    name: pkg_name.clone(),
-                                    line: line.to_string(),
-                                    is_stderr: true,
-                                },
-                            );
-                        }
-                    }
-
-                    emit(
-                        &tx,
-                        Event::PackageFinished {
-                            name: pkg_name.clone(),
-                            success,
-                            duration,
-                        },
-                    );
-                }
+                emit(
+                    &tx,
+                    Event::PackageFinished {
+                        name: pkg_name.clone(),
+                        success,
+                        duration,
+                    },
+                );
 
                 if !success {
                     failed.store(true, std::sync::atomic::Ordering::Relaxed);
