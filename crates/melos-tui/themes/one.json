@@ -1,0 +1,55 @@
+{
+  "name": "One",
+  "themes": [
+    {
+      "name": "One Dark",
+      "mode": "dark",
+      "colors": {
+        "accent": "#61AFEF",
+        "text": "#ABB2BF",
+        "text_muted": "#5C6370",
+        "text_secondary": "#828997",
+        "header": "#E5C07B",
+        "success": "#98C379",
+        "error": "#E06C75",
+        "highlight_bg": "#3E4451",
+        "highlight_fg": "#ABB2BF",
+        "pkg_color_0": "#61AFEF",
+        "pkg_color_1": "#98C379",
+        "pkg_color_2": "#E5C07B",
+        "pkg_color_3": "#C678DD",
+        "pkg_color_4": "#E06C75",
+        "pkg_color_5": "#BE5046",
+        "pkg_color_6": "#56B6C2",
+        "pkg_color_7": "#D19A66",
+        "pkg_color_8": "#ABB2BF",
+        "pkg_color_9": "#528BFF"
+      }
+    },
+    {
+      "name": "One Light",
+      "mode": "light",
+      "colors": {
+        "accent": "#4078F2",
+        "text": "#383A42",
+        "text_muted": "#A0A1A7",
+        "text_secondary": "#696C77",
+        "header": "#C18401",
+        "success": "#50A14F",
+        "error": "#E45649",
+        "highlight_bg": "#E5E5E6",
+        "highlight_fg": "#383A42",
+        "pkg_color_0": "#4078F2",
+        "pkg_color_1": "#50A14F",
+        "pkg_color_2": "#C18401",
+        "pkg_color_3": "#A626A4",
+        "pkg_color_4": "#E45649",
+        "pkg_color_5": "#CA1243",
+        "pkg_color_6": "#0184BC",
+        "pkg_color_7": "#986801",
+        "pkg_color_8": "#383A42",
+        "pkg_color_9": "#4078F2"
+      }
+    }
+  ]
+}

@@ -8,13 +8,9 @@ use ratatui::{
 use crate::app::App;
 
 /// Build a section header row that spans both columns.
-fn section_header(label: &str) -> Row<'_> {
+fn section_header(label: &str, color: Color) -> Row<'_> {
     Row::new(vec![
-        Cell::from(label).style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Cell::from(label).style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
         Cell::from(""),
     ])
 }
@@ -22,14 +18,15 @@ fn section_header(label: &str) -> Row<'_> {
 /// Draw the command/script table into the given area.
 ///
 /// Commands are grouped under "Built-in" and "Scripts" section headers.
-/// Built-in commands appear in white, user scripts in cyan.
+/// Built-in commands appear in the text color, user scripts in the accent color.
 /// Section headers are visual-only rows; the selection highlight always
 /// lands on a real command row.
-/// When `focused` is true, the border is highlighted in cyan.
+/// When `focused` is true, the border is highlighted in the accent color.
 pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, focused: bool) {
+    let theme = &app.theme;
     let header_cells = ["Command", "Description"]
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
+        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header).bold()));
     let header = Row::new(header_cells).height(1);
 
     let has_builtins = app.command_rows.iter().any(|c| c.is_builtin);
@@ -39,12 +36,12 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
     let mut selected_visual: usize = 0;
 
     if has_builtins {
-        visual_rows.push(section_header("-- Built-in --"));
+        visual_rows.push(section_header("-- Built-in --", theme.header));
     }
 
     for (i, cmd) in app.command_rows.iter().enumerate() {
         if Some(i) == first_script_idx {
-            visual_rows.push(section_header("-- Scripts --"));
+            visual_rows.push(section_header("-- Scripts --", theme.header));
         }
 
         if i == app.selected_command {
@@ -52,27 +49,27 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         }
 
         let name_style = if !cmd.is_supported {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.text_muted)
         } else if cmd.is_builtin {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.text)
         } else {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(theme.accent)
         };
 
         let desc = cmd.description.as_deref().unwrap_or("");
 
         visual_rows.push(Row::new(vec![
             Cell::from(cmd.name.as_str()).style(name_style),
-            Cell::from(desc).style(Style::default().fg(Color::DarkGray)),
+            Cell::from(desc).style(Style::default().fg(theme.text_muted)),
         ]));
     }
 
     let title = format!(" Commands ({}) ", app.command_count());
 
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme.accent)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_muted)
     };
 
     let table = Table::new(visual_rows, [Constraint::Length(24), Constraint::Fill(1)])
@@ -85,8 +82,8 @@ pub fn draw_commands(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         )
         .row_highlight_style(
             Style::default()
-                .bg(Color::Indexed(237))
-                .fg(Color::White)
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
@@ -105,6 +102,7 @@ mod tests {
 
     use super::*;
     use crate::app::CommandRow;
+    use crate::theme::Theme;
 
     /// Helper: render the command table and return the buffer.
     fn render_commands(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
@@ -129,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_command_table_shows_count_in_title() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_commands(&app, 80, 20);
         let title_line = buffer_line(&buf, 0, 80);
         let expected = format!("Commands ({})", app.command_count());
@@ -141,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_command_table_shows_column_headers() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_commands(&app, 80, 20);
         let header_line = buffer_line(&buf, 1, 80);
         assert!(
@@ -156,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_command_table_shows_builtin_names() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_commands(&app, 80, 20);
         // Section header "-- Built-in --" at y=2, first builtin "analyze" at y=3
         let header_row = buffer_line(&buf, 2, 80);
@@ -173,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_command_table_shows_script_with_description() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.command_rows.push(CommandRow {
             name: "custom_script".to_string(),
             description: Some("runs custom logic".to_string()),
@@ -203,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_command_table_scripts_only_no_builtin_header() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.command_rows = vec![CommandRow {
             name: "my_script".to_string(),
             description: None,
@@ -227,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_command_table_empty_shows_zero_count() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.command_rows.clear();
         let buf = render_commands(&app, 80, 10);
         let title_line = buffer_line(&buf, 0, 80);

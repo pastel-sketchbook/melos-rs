@@ -1,0 +1,55 @@
+{
+  "name": "Tokyo Night",
+  "themes": [
+    {
+      "name": "Tokyo Night",
+      "mode": "dark",
+      "colors": {
+        "accent": "#7AA2F7",
+        "text": "#C0CAF5",
+        "text_muted": "#565F89",
+        "text_secondary": "#737AA2",
+        "header": "#E0AF68",
+        "success": "#9ECE6A",
+        "error": "#F7768E",
+        "highlight_bg": "#414868",
+        "highlight_fg": "#C0CAF5",
+        "pkg_color_0": "#7AA2F7",
+        "pkg_color_1": "#9ECE6A",
+        "pkg_color_2": "#E0AF68",
+        "pkg_color_3": "#BB9AF7",
+        "pkg_color_4": "#F7768E",
+        "pkg_color_5": "#FF9E64",
+        "pkg_color_6": "#7DCFFF",
+        "pkg_color_7": "#2AC3DE",
+        "pkg_color_8": "#73DACA",
+        "pkg_color_9": "#B4F9F8"
+      }
+    },
+    {
+      "name": "Tokyo Night Light",
+      "mode": "light",
+      "colors": {
+        "accent": "#34548A",
+        "text": "#343B58",
+        "text_muted": "#9699A3",
+        "text_secondary": "#6172B0",
+        "header": "#8F5E15",
+        "success": "#485E30",
+        "error": "#8C4351",
+        "highlight_bg": "#D5D6DB",
+        "highlight_fg": "#343B58",
+        "pkg_color_0": "#34548A",
+        "pkg_color_1": "#485E30",
+        "pkg_color_2": "#8F5E15",
+        "pkg_color_3": "#5A4A78",
+        "pkg_color_4": "#8C4351",
+        "pkg_color_5": "#965027",
+        "pkg_color_6": "#0F4B6E",
+        "pkg_color_7": "#166775",
+        "pkg_color_8": "#33635C",
+        "pkg_color_9": "#2E7DE9"
+      }
+    }
+  ]
+}

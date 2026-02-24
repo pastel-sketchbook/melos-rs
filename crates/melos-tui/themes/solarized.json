@@ -1,0 +1,55 @@
+{
+  "name": "Solarized",
+  "themes": [
+    {
+      "name": "Solarized Dark",
+      "mode": "dark",
+      "colors": {
+        "accent": "#268BD2",
+        "text": "#839496",
+        "text_muted": "#586E75",
+        "text_secondary": "#657B83",
+        "header": "#B58900",
+        "success": "#859900",
+        "error": "#DC322F",
+        "highlight_bg": "#073642",
+        "highlight_fg": "#FDF6E3",
+        "pkg_color_0": "#268BD2",
+        "pkg_color_1": "#859900",
+        "pkg_color_2": "#B58900",
+        "pkg_color_3": "#6C71C4",
+        "pkg_color_4": "#D33682",
+        "pkg_color_5": "#DC322F",
+        "pkg_color_6": "#2AA198",
+        "pkg_color_7": "#CB4B16",
+        "pkg_color_8": "#93A1A1",
+        "pkg_color_9": "#839496"
+      }
+    },
+    {
+      "name": "Solarized Light",
+      "mode": "light",
+      "colors": {
+        "accent": "#268BD2",
+        "text": "#657B83",
+        "text_muted": "#93A1A1",
+        "text_secondary": "#839496",
+        "header": "#B58900",
+        "success": "#859900",
+        "error": "#DC322F",
+        "highlight_bg": "#EEE8D5",
+        "highlight_fg": "#002B36",
+        "pkg_color_0": "#268BD2",
+        "pkg_color_1": "#859900",
+        "pkg_color_2": "#B58900",
+        "pkg_color_3": "#6C71C4",
+        "pkg_color_4": "#D33682",
+        "pkg_color_5": "#DC322F",
+        "pkg_color_6": "#2AA198",
+        "pkg_color_7": "#CB4B16",
+        "pkg_color_8": "#586E75",
+        "pkg_color_9": "#657B83"
+      }
+    }
+  ]
+}

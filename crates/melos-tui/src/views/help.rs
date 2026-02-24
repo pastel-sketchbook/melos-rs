@@ -1,10 +1,13 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
+
+use crate::app::App;
+use crate::theme::Theme;
 
 /// Navigation keybindings displayed in the left column.
 const NAV_KEYS: &[(&str, &str)] = &[
@@ -19,6 +22,8 @@ const NAV_KEYS: &[(&str, &str)] = &[
     ("h / l", "Focus left / right panel"),
     ("Tab", "Toggle panel"),
     ("Enter", "Run selected command"),
+    ("/", "Filter packages"),
+    ("t", "Cycle theme"),
     ("Esc", "Back / quit"),
     ("q", "Quit"),
     ("?", "Toggle this help"),
@@ -44,7 +49,8 @@ const MELOS_COMMANDS: &[(&str, &str)] = &[
 ///
 /// The overlay clears the background area, draws a bordered box, and renders
 /// two columns: navigation keys (left) and melos commands (right).
-pub fn draw_help(frame: &mut Frame, area: Rect) {
+pub fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
     let popup = centered_rect(70, 80, area);
 
     // Clear the area behind the popup.
@@ -53,8 +59,8 @@ pub fn draw_help(frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Help ")
-        .title_style(Style::default().fg(Color::Cyan).bold())
-        .border_style(Style::default().fg(Color::Cyan));
+        .title_style(Style::default().fg(theme.accent).bold())
+        .border_style(Style::default().fg(theme.accent));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -63,30 +69,34 @@ pub fn draw_help(frame: &mut Frame, area: Rect) {
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(inner);
 
     // Left column: navigation keys
-    let nav_lines = build_key_lines("Navigation", NAV_KEYS);
+    let nav_lines = build_key_lines("Navigation", NAV_KEYS, theme);
     frame.render_widget(Paragraph::new(nav_lines), left_area);
 
     // Right column: melos commands
-    let cmd_lines = build_key_lines("Commands", MELOS_COMMANDS);
+    let cmd_lines = build_key_lines("Commands", MELOS_COMMANDS, theme);
     frame.render_widget(Paragraph::new(cmd_lines), right_area);
 }
 
 /// Build styled lines for a key/description table with a section header.
-fn build_key_lines<'a>(header: &'a str, entries: &[(&'a str, &'a str)]) -> Vec<Line<'a>> {
+fn build_key_lines<'a>(
+    header: &'a str,
+    entries: &[(&'a str, &'a str)],
+    theme: &Theme,
+) -> Vec<Line<'a>> {
     let mut lines = Vec::with_capacity(entries.len() + 2);
 
     lines.push(Line::from(Span::styled(
         header,
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme.header)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
     for (key, desc) in entries {
         lines.push(Line::from(vec![
-            Span::styled(format!(" {key:<16}"), Style::default().fg(Color::Green)),
-            Span::styled(*desc, Style::default().fg(Color::White)),
+            Span::styled(format!(" {key:<16}"), Style::default().fg(theme.success)),
+            Span::styled(*desc, Style::default().fg(theme.text)),
         ]));
     }
 
@@ -120,11 +130,12 @@ mod tests {
 
     /// Helper: render the help overlay and return the buffer.
     fn render_help(width: u16, height: u16) -> ratatui::buffer::Buffer {
+        let app = App::new(Theme::default());
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
-                draw_help(frame, frame.area());
+                draw_help(frame, frame.area(), &app);
             })
             .unwrap();
         terminal.backend().buffer().clone()

@@ -190,6 +190,44 @@ melos-rs list --scope="my_package*"
 melos-rs completion bash >> ~/.bashrc
 ```
 
+## TUI Themes
+
+`melos-tui` supports a JSON-based theme system. Select a theme with the `--theme` flag:
+
+```sh
+melos-tui --theme solarized-dark
+```
+
+**Bundled themes:**
+
+| Theme | Mode | Description |
+|-------|------|-------------|
+| `dark` (default) | Dark | Default dark theme with cyan accent |
+| `light` | Light | Light theme with blue accent on white background |
+| `catppuccin-mocha` | Dark | Catppuccin Mocha — warm pastel palette |
+| `catppuccin-latte` | Light | Catppuccin Latte — warm pastel palette (light) |
+| `dracula` | Dark | Dracula — purple-accented dark theme |
+| `everforest-dark` | Dark | Everforest — green-tinted nature palette |
+| `everforest-light` | Light | Everforest — green-tinted nature palette (light) |
+| `gruvbox-dark` | Dark | Gruvbox retro groove palette |
+| `gruvbox-light` | Light | Gruvbox retro groove palette (light) |
+| `nord` | Dark | Nord — arctic, north-bluish palette |
+| `nord-light` | Light | Nord — arctic palette on light background |
+| `one-dark` | Dark | Atom One Dark |
+| `one-light` | Light | Atom One Light |
+| `rose-pine` | Dark | Rosé Pine — soho vibes with muted tones |
+| `rose-pine-dawn` | Light | Rosé Pine Dawn — light variant |
+| `solarized-dark` | Dark | Ethan Schoonover's Solarized palette |
+| `solarized-light` | Light | Ethan Schoonover's Solarized palette (light) |
+| `tokyo-night` | Dark | Tokyo Night — inspired by Tokyo city lights |
+| `tokyo-night-light` | Light | Tokyo Night Light variant |
+
+Aliases `default-dark` and `default-light` also work.
+
+**Runtime theme cycling:** Press `t` in the TUI to cycle through all bundled themes without restarting.
+
+**Custom themes:** Place a JSON file following the [gpui-component theme format](https://github.com/longbridgeapp/gpui-component) and pass its path via `--theme /path/to/theme.json`. The file should contain a `themes` array with objects specifying `name`, `mode` (`"light"` or `"dark"`), and `colors`.
+
 ## Development
 
 Uses [Task](https://taskfile.dev/) for development workflow:
@@ -225,15 +263,18 @@ crates/
       render.rs           Progress bars + colored output via events
       filter_ext.rs       GlobalFilterArgs -> PackageFilters conversion
   melos-tui/              Binary: TUI frontend (optional, ratatui + crossterm)
+    themes/               Bundled JSON theme files (dark, light, solarized, gruvbox)
     src/
       app.rs              App state machine + keyboard handlers
       ui.rs               Layout rendering (header, body, footer)
-      views/              Panel widgets (packages, commands, help)
+      theme.rs            Theme struct, JSON parsing, bundled theme loading
+      views/              Panel widgets (packages, commands, execution,
+                            results, options, help, health)
 ```
 
 ### Test suite
 
-607 tests (39 CLI unit + 495 core unit + 47 TUI unit + 26 integration). Run with:
+865 tests (33 CLI unit + 513 core unit + 293 TUI unit + 26 integration). Run with:
 
 ```sh
 # Default members (core + CLI)

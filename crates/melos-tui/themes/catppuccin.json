@@ -1,0 +1,55 @@
+{
+  "name": "Catppuccin",
+  "themes": [
+    {
+      "name": "Catppuccin Mocha",
+      "mode": "dark",
+      "colors": {
+        "accent": "#89B4FA",
+        "text": "#CDD6F4",
+        "text_muted": "#6C7086",
+        "text_secondary": "#A6ADC8",
+        "header": "#F9E2AF",
+        "success": "#A6E3A1",
+        "error": "#F38BA8",
+        "highlight_bg": "#313244",
+        "highlight_fg": "#CDD6F4",
+        "pkg_color_0": "#89B4FA",
+        "pkg_color_1": "#A6E3A1",
+        "pkg_color_2": "#F9E2AF",
+        "pkg_color_3": "#CBA6F7",
+        "pkg_color_4": "#F5C2E7",
+        "pkg_color_5": "#F38BA8",
+        "pkg_color_6": "#94E2D5",
+        "pkg_color_7": "#FAB387",
+        "pkg_color_8": "#89DCFE",
+        "pkg_color_9": "#B4BEFE"
+      }
+    },
+    {
+      "name": "Catppuccin Latte",
+      "mode": "light",
+      "colors": {
+        "accent": "#1E66F5",
+        "text": "#4C4F69",
+        "text_muted": "#9CA0B0",
+        "text_secondary": "#6C6F85",
+        "header": "#DF8E1D",
+        "success": "#40A02B",
+        "error": "#D20F39",
+        "highlight_bg": "#CCD0DA",
+        "highlight_fg": "#4C4F69",
+        "pkg_color_0": "#1E66F5",
+        "pkg_color_1": "#40A02B",
+        "pkg_color_2": "#DF8E1D",
+        "pkg_color_3": "#8839EF",
+        "pkg_color_4": "#EA76CB",
+        "pkg_color_5": "#D20F39",
+        "pkg_color_6": "#179299",
+        "pkg_color_7": "#FE640B",
+        "pkg_color_8": "#04A5E5",
+        "pkg_color_9": "#7287FD"
+      }
+    }
+  ]
+}

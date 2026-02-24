@@ -7,6 +7,8 @@ use melos_core::events::Event as CoreEvent;
 use melos_core::package::Package;
 use melos_core::workspace::Workspace;
 
+use crate::theme::Theme;
+
 /// Application state for the TUI.
 ///
 /// The state machine has three phases:
@@ -454,6 +456,10 @@ pub struct App {
     quit: bool,
     /// Which panel is currently focused.
     pub active_panel: ActivePanel,
+    /// Color theme for all rendering.
+    pub theme: Theme,
+    /// Index into `Theme::available_names()` for theme cycling.
+    pub theme_index: usize,
     /// Workspace name (from config).
     pub workspace_name: Option<String>,
     /// Config source label (e.g. "melos.yaml" or "pubspec.yaml").
@@ -525,7 +531,7 @@ pub struct App {
 
 impl App {
     /// Create a new App in the Idle state with no workspace loaded.
-    pub fn new() -> Self {
+    pub fn new(theme: Theme) -> Self {
         // Pre-populate built-in commands even without a workspace.
         let command_rows = BUILTIN_COMMANDS
             .iter()
@@ -541,6 +547,8 @@ impl App {
             state: AppState::Idle,
             quit: false,
             active_panel: ActivePanel::Packages,
+            theme,
+            theme_index: 0,
             workspace_name: None,
             config_source_label: None,
             package_rows: Vec::new(),
@@ -642,6 +650,22 @@ impl App {
     /// Update page size from terminal height (called on resize).
     pub fn update_page_size(&mut self, term_height: u16) {
         self.page_size = term_height.saturating_sub(5) as usize;
+    }
+
+    /// Cycle to the next built-in theme.
+    pub fn cycle_theme(&mut self) {
+        let names = Theme::available_names();
+        self.theme_index = (self.theme_index + 1) % names.len();
+        // safety: theme_index is always in range due to modulo above
+        if let Some(t) = Theme::by_name(names[self.theme_index]) {
+            self.theme = t;
+        }
+    }
+
+    /// Return the name of the currently active theme.
+    pub fn theme_name(&self) -> &'static str {
+        let names = Theme::available_names();
+        names.get(self.theme_index).copied().unwrap_or("dark")
     }
 
     /// Handle a key press event.
@@ -804,6 +828,9 @@ impl App {
 
             // Filter bar activation
             (KeyCode::Char('/'), false) => self.activate_filter(),
+
+            // Theme cycling
+            (KeyCode::Char('t'), false) => self.cycle_theme(),
 
             _ => {}
         }
@@ -1243,7 +1270,7 @@ mod tests {
 
     /// Helper: create an App with N fake package rows.
     fn app_with_packages(count: usize) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         for i in 0..count {
             app.package_rows.push(PackageRow {
                 name: format!("pkg_{i}"),
@@ -1258,7 +1285,7 @@ mod tests {
 
     /// Helper: create an App with N fake command rows (replacing defaults).
     fn app_with_commands(count: usize) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.command_rows = (0..count)
             .map(|i| CommandRow {
                 name: format!("cmd_{i}"),
@@ -1275,7 +1302,7 @@ mod tests {
 
     #[test]
     fn test_new_app_is_idle() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         assert_eq!(app.state, AppState::Idle);
         assert!(!app.should_quit());
         assert_eq!(app.active_panel, ActivePanel::Packages);
@@ -1283,7 +1310,7 @@ mod tests {
 
     #[test]
     fn test_new_app_has_builtin_commands() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         assert_eq!(app.command_rows.len(), BUILTIN_COMMANDS.len());
         assert!(app.command_rows.iter().all(|r| r.is_builtin));
         assert_eq!(app.command_rows[0].name, "analyze");
@@ -1291,21 +1318,21 @@ mod tests {
 
     #[test]
     fn test_q_quits() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         press(&mut app, KeyCode::Char('q'));
         assert!(app.should_quit());
     }
 
     #[test]
     fn test_esc_in_idle_quits() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         press(&mut app, KeyCode::Esc);
         assert!(app.should_quit());
     }
 
     #[test]
     fn test_esc_in_done_returns_to_idle() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.state, AppState::Idle);
@@ -1314,7 +1341,7 @@ mod tests {
 
     #[test]
     fn test_enter_in_done_returns_to_idle() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.state, AppState::Idle);
@@ -1323,7 +1350,7 @@ mod tests {
 
     #[test]
     fn test_q_in_done_returns_to_idle() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         press(&mut app, KeyCode::Char('q'));
         assert_eq!(app.state, AppState::Idle);
@@ -1332,7 +1359,7 @@ mod tests {
 
     #[test]
     fn test_esc_in_running_requests_cancel() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         press(&mut app, KeyCode::Esc);
         // Running state sets pending_cancel; main loop handles actual cancellation.
@@ -1342,7 +1369,7 @@ mod tests {
 
     #[test]
     fn test_unknown_key_does_nothing() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         press(&mut app, KeyCode::Char('x'));
         assert_eq!(app.state, AppState::Idle);
         assert!(!app.should_quit());
@@ -1352,7 +1379,7 @@ mod tests {
 
     #[test]
     fn test_tab_toggles_to_commands() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         assert_eq!(app.active_panel, ActivePanel::Packages);
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.active_panel, ActivePanel::Commands);
@@ -1360,7 +1387,7 @@ mod tests {
 
     #[test]
     fn test_tab_toggles_back_to_packages() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Tab);
         assert_eq!(app.active_panel, ActivePanel::Packages);
@@ -1368,7 +1395,7 @@ mod tests {
 
     #[test]
     fn test_backtab_toggles_panel() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         press(&mut app, KeyCode::BackTab);
         assert_eq!(app.active_panel, ActivePanel::Commands);
     }
@@ -1481,7 +1508,7 @@ mod tests {
 
     #[test]
     fn test_pkg_navigation_on_empty() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         press(&mut app, KeyCode::Up);
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Home);
@@ -1586,7 +1613,7 @@ mod tests {
 
     #[test]
     fn test_cmd_navigation_on_empty() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.command_rows.clear();
         app.active_panel = ActivePanel::Commands;
         press(&mut app, KeyCode::Up);
@@ -1596,7 +1623,7 @@ mod tests {
 
     #[test]
     fn test_command_count() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         assert_eq!(app.command_count(), BUILTIN_COMMANDS.len());
     }
 
@@ -1604,7 +1631,7 @@ mod tests {
 
     #[test]
     fn test_ctrl_c_quits() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         ctrl(&mut app, KeyCode::Char('c'));
         assert!(app.should_quit());
     }
@@ -1647,7 +1674,7 @@ mod tests {
 
     #[test]
     fn test_h_focuses_packages_panel() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         press(&mut app, KeyCode::Char('h'));
         assert_eq!(app.active_panel, ActivePanel::Packages);
@@ -1655,7 +1682,7 @@ mod tests {
 
     #[test]
     fn test_l_focuses_commands_panel() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         assert_eq!(app.active_panel, ActivePanel::Packages);
         press(&mut app, KeyCode::Char('l'));
         assert_eq!(app.active_panel, ActivePanel::Commands);
@@ -1663,7 +1690,7 @@ mod tests {
 
     #[test]
     fn test_h_on_packages_panel_stays() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         assert_eq!(app.active_panel, ActivePanel::Packages);
         press(&mut app, KeyCode::Char('h'));
         assert_eq!(app.active_panel, ActivePanel::Packages);
@@ -1671,7 +1698,7 @@ mod tests {
 
     #[test]
     fn test_l_on_commands_panel_stays() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         press(&mut app, KeyCode::Char('l'));
         assert_eq!(app.active_panel, ActivePanel::Commands);
@@ -1681,7 +1708,7 @@ mod tests {
 
     #[test]
     fn test_question_mark_opens_help() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         assert!(!app.show_help);
         press(&mut app, KeyCode::Char('?'));
         assert!(app.show_help);
@@ -1689,7 +1716,7 @@ mod tests {
 
     #[test]
     fn test_question_mark_closes_help() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.show_help = true;
         press(&mut app, KeyCode::Char('?'));
         assert!(!app.show_help);
@@ -1697,7 +1724,7 @@ mod tests {
 
     #[test]
     fn test_esc_closes_help() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.show_help = true;
         press(&mut app, KeyCode::Esc);
         assert!(!app.show_help);
@@ -1721,7 +1748,7 @@ mod tests {
 
     #[test]
     fn test_help_toggle_roundtrip() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         press(&mut app, KeyCode::Char('?'));
         assert!(app.show_help);
         press(&mut app, KeyCode::Char('?'));
@@ -1735,7 +1762,7 @@ mod tests {
 
     #[test]
     fn test_enter_on_commands_panel_sets_pending_command() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         app.selected_command = 0; // "analyze" (supported)
 
@@ -1753,7 +1780,7 @@ mod tests {
 
     #[test]
     fn test_enter_on_packages_panel_does_nothing() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Packages;
         press(&mut app, KeyCode::Enter);
         assert!(app.pending_command.is_none());
@@ -1761,7 +1788,7 @@ mod tests {
 
     #[test]
     fn test_enter_in_running_does_nothing() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.active_panel = ActivePanel::Commands;
         press(&mut app, KeyCode::Enter);
@@ -1770,7 +1797,7 @@ mod tests {
 
     #[test]
     fn test_enter_with_empty_commands_does_nothing() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.command_rows.clear();
         app.active_panel = ActivePanel::Commands;
         press(&mut app, KeyCode::Enter);
@@ -1779,7 +1806,7 @@ mod tests {
 
     #[test]
     fn test_enter_selects_correct_command_by_index() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         // Select "format" (index 5 in BUILTIN_COMMANDS: analyze,bootstrap,build,clean,exec,format)
         app.selected_command = 5;
@@ -1798,7 +1825,7 @@ mod tests {
 
     #[test]
     fn test_start_command_transitions_to_running() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.start_command("analyze");
         assert_eq!(app.state, AppState::Running);
         assert_eq!(app.running_command.as_deref(), Some("analyze"));
@@ -1806,7 +1833,7 @@ mod tests {
 
     #[test]
     fn test_start_command_clears_previous_state() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.finished_packages
             .push(("old".to_string(), true, Duration::from_secs(1)));
         app.output_log
@@ -1824,7 +1851,7 @@ mod tests {
 
     #[test]
     fn test_handle_command_started_sets_progress() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.handle_core_event(CoreEvent::CommandStarted {
             command: "analyze".to_string(),
@@ -1835,7 +1862,7 @@ mod tests {
 
     #[test]
     fn test_handle_package_started_adds_to_running() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.handle_core_event(CoreEvent::PackageStarted {
             name: "pkg_a".to_string(),
@@ -1845,7 +1872,7 @@ mod tests {
 
     #[test]
     fn test_handle_package_finished_moves_to_results() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_packages.push("pkg_a".to_string());
         app.progress = Some((0, 3, String::new()));
@@ -1865,7 +1892,7 @@ mod tests {
 
     #[test]
     fn test_handle_package_output_appends_to_log() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.handle_core_event(CoreEvent::PackageOutput {
             name: "pkg_a".to_string(),
@@ -1879,7 +1906,7 @@ mod tests {
 
     #[test]
     fn test_handle_progress_updates_progress() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.handle_core_event(CoreEvent::Progress {
             completed: 3,
@@ -1891,7 +1918,7 @@ mod tests {
 
     #[test]
     fn test_handle_warning_appends_message() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.handle_core_event(CoreEvent::Warning("something wrong".to_string()));
         assert_eq!(app.exec_messages.len(), 1);
@@ -1900,7 +1927,7 @@ mod tests {
 
     #[test]
     fn test_handle_info_appends_message() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.handle_core_event(CoreEvent::Info("info msg".to_string()));
         assert_eq!(app.exec_messages, vec!["info msg"]);
@@ -1910,7 +1937,7 @@ mod tests {
 
     #[test]
     fn test_on_command_finished_success_transitions_to_done() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_command = Some("analyze".to_string());
         app.on_command_finished(Ok(Ok(())));
@@ -1922,7 +1949,7 @@ mod tests {
 
     #[test]
     fn test_on_command_finished_error_records_message() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.on_command_finished(Ok(Err(anyhow::anyhow!("command failed"))));
         assert_eq!(app.state, AppState::Done);
@@ -1937,7 +1964,7 @@ mod tests {
 
     #[test]
     fn test_on_command_cancelled_returns_to_idle() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_command = Some("test".to_string());
         app.running_packages.push("pkg_a".to_string());
@@ -1961,7 +1988,7 @@ mod tests {
 
     #[test]
     fn test_running_allows_ctrl_c_quit() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         ctrl(&mut app, KeyCode::Char('c'));
         assert!(app.should_quit());
@@ -1971,7 +1998,7 @@ mod tests {
 
     #[test]
     fn test_idle_to_running_to_done_lifecycle() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         assert_eq!(app.state, AppState::Idle);
 
@@ -2031,7 +2058,7 @@ mod tests {
     // --- Done state scroll tests ---
 
     fn app_in_done_with_output(line_count: usize) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.page_size = 10;
         for i in 0..line_count {
@@ -2162,7 +2189,7 @@ mod tests {
 
     #[test]
     fn test_handle_package_output_strips_ansi() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.handle_core_event(CoreEvent::PackageOutput {
             name: "pkg_a".to_string(),
@@ -2465,7 +2492,7 @@ mod tests {
     // --- Options overlay key handling tests ---
 
     fn app_with_options(command: &str) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         // Find the command index in command_rows.
         let idx = app
@@ -2585,7 +2612,7 @@ mod tests {
 
     #[test]
     fn test_unsupported_command_skips_overlay() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         // "exec" is at index 4 (analyze=0, bootstrap=1, build=2, clean=3, exec=4).
         app.selected_command = 4;
@@ -2598,7 +2625,7 @@ mod tests {
 
     #[test]
     fn test_unsupported_command_build_skips_overlay() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         // "build" is at index 2.
         app.selected_command = 2;
@@ -2611,7 +2638,7 @@ mod tests {
 
     #[test]
     fn test_is_supported_set_on_builtin_commands() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         for row in &app.command_rows {
             let expected = SUPPORTED_COMMANDS.contains(&row.name.as_str());
             assert_eq!(
@@ -2637,7 +2664,7 @@ mod tests {
 
     #[test]
     fn test_scrollback_truncation_at_limit() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         // Push exactly MAX_SCROLLBACK + 50 lines.
         for i in 0..MAX_SCROLLBACK + 50 {
@@ -2654,7 +2681,7 @@ mod tests {
 
     #[test]
     fn test_scrollback_below_limit_no_truncation() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..100 {
             app.handle_core_event(CoreEvent::PackageOutput {
@@ -2669,7 +2696,7 @@ mod tests {
 
     #[test]
     fn test_scrollback_truncation_adjusts_scroll_offset() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         // Push MAX_SCROLLBACK lines.
         for i in 0..MAX_SCROLLBACK {
@@ -2698,13 +2725,13 @@ mod tests {
 
     #[test]
     fn test_auto_scroll_default_true() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         assert!(app.auto_scroll);
     }
 
     #[test]
     fn test_auto_scroll_reset_on_start_command() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.auto_scroll = false;
         app.start_command("test");
         assert!(app.auto_scroll);
@@ -2712,7 +2739,7 @@ mod tests {
 
     #[test]
     fn test_scroll_up_disables_auto_scroll_in_running() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         // Add some output so scroll has room.
         for i in 0..50 {
@@ -2728,7 +2755,7 @@ mod tests {
 
     #[test]
     fn test_scroll_down_at_end_reengages_auto_scroll() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..10 {
             app.output_log
@@ -2744,7 +2771,7 @@ mod tests {
 
     #[test]
     fn test_scroll_end_reengages_auto_scroll() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..20 {
             app.output_log
@@ -2758,7 +2785,7 @@ mod tests {
 
     #[test]
     fn test_home_disables_auto_scroll() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..20 {
             app.output_log
@@ -2773,7 +2800,7 @@ mod tests {
 
     #[test]
     fn test_running_j_scrolls_down() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..30 {
             app.output_log
@@ -2786,7 +2813,7 @@ mod tests {
 
     #[test]
     fn test_running_k_scrolls_up() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..30 {
             app.output_log
@@ -2799,7 +2826,7 @@ mod tests {
 
     #[test]
     fn test_running_g_jumps_to_start() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..30 {
             app.output_log
@@ -2812,7 +2839,7 @@ mod tests {
 
     #[test]
     fn test_running_shift_g_jumps_to_end() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         for i in 0..30 {
             app.output_log
@@ -2824,7 +2851,7 @@ mod tests {
 
     #[test]
     fn test_running_page_down() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.page_size = 10;
         for i in 0..50 {
@@ -2837,7 +2864,7 @@ mod tests {
 
     #[test]
     fn test_running_page_up() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.page_size = 10;
         for i in 0..50 {
@@ -2851,7 +2878,7 @@ mod tests {
 
     #[test]
     fn test_running_ctrl_d_half_page() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.page_size = 10;
         for i in 0..50 {
@@ -2864,7 +2891,7 @@ mod tests {
 
     #[test]
     fn test_running_ctrl_u_half_page_up() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.page_size = 10;
         for i in 0..50 {
@@ -2878,7 +2905,7 @@ mod tests {
 
     #[test]
     fn test_running_q_does_not_quit() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         press(&mut app, KeyCode::Char('q'));
         assert!(!app.should_quit());
@@ -2886,7 +2913,7 @@ mod tests {
 
     #[test]
     fn test_running_tab_does_not_switch_panel() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.active_panel = ActivePanel::Packages;
         press(&mut app, KeyCode::Tab);
@@ -2897,14 +2924,14 @@ mod tests {
 
     #[test]
     fn test_command_start_none_initially() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         assert!(app.command_start.is_none());
         assert!(app.elapsed().is_none());
     }
 
     #[test]
     fn test_start_command_sets_command_start() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.start_command("analyze");
         assert!(app.command_start.is_some());
         assert!(app.elapsed().is_some());
@@ -2912,7 +2939,7 @@ mod tests {
 
     #[test]
     fn test_on_command_finished_clears_command_start() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.start_command("analyze");
         assert!(app.command_start.is_some());
         app.on_command_finished(Ok(Ok(())));
@@ -2921,7 +2948,7 @@ mod tests {
 
     #[test]
     fn test_on_command_cancelled_clears_command_start() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.start_command("analyze");
         assert!(app.command_start.is_some());
         app.on_command_cancelled();
@@ -2930,7 +2957,7 @@ mod tests {
 
     #[test]
     fn test_elapsed_returns_positive_duration() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.start_command("test");
         // Sleep briefly to ensure elapsed > 0.
         std::thread::sleep(Duration::from_millis(5));
@@ -2951,14 +2978,14 @@ mod tests {
 
     #[test]
     fn test_health_report_none_initially() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         assert!(app.health_report.is_none());
         assert_eq!(app.health_tab, 0);
     }
 
     #[test]
     fn test_start_command_clears_health_report() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.health_report = Some(make_health_report());
         app.health_tab = 2;
         app.start_command("analyze");
@@ -2968,14 +2995,14 @@ mod tests {
 
     #[test]
     fn test_set_health_report() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.set_health_report(make_health_report());
         assert!(app.health_report.is_some());
     }
 
     #[test]
     fn test_done_tab_cycles_health_tab_forward() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.health_report = Some(make_health_report());
         assert_eq!(app.health_tab, 0);
@@ -2989,7 +3016,7 @@ mod tests {
 
     #[test]
     fn test_done_backtab_cycles_health_tab_backward() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.health_report = Some(make_health_report());
         assert_eq!(app.health_tab, 0);
@@ -3003,7 +3030,7 @@ mod tests {
 
     #[test]
     fn test_done_tab_without_health_report_does_nothing() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         // No health report set.
         press(&mut app, KeyCode::Tab);
@@ -3014,7 +3041,7 @@ mod tests {
 
     #[test]
     fn test_on_command_finished_preserves_running_command() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.start_command("health");
         app.on_command_finished(Ok(Ok(())));
         assert_eq!(app.running_command.as_deref(), Some("health"));
@@ -3022,7 +3049,7 @@ mod tests {
 
     #[test]
     fn test_on_command_cancelled_clears_running_command() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.start_command("health");
         app.on_command_cancelled();
         assert!(app.running_command.is_none());
@@ -3032,7 +3059,7 @@ mod tests {
 
     /// Helper: create an App with named package rows for filter testing.
     fn app_with_named_packages(names: &[&str]) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.workspace_name = Some("test".to_string());
         for name in names {
             app.package_rows.push(PackageRow {
@@ -3135,7 +3162,7 @@ mod tests {
 
     #[test]
     fn test_has_filter_returns_false_when_empty() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         assert!(!app.has_filter());
     }
 
@@ -3279,14 +3306,14 @@ mod tests {
 
     #[test]
     fn test_update_page_size() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.update_page_size(40);
         assert_eq!(app.page_size, 35); // 40 - 5
     }
 
     #[test]
     fn test_update_page_size_small_terminal() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.update_page_size(3);
         assert_eq!(app.page_size, 0); // saturating_sub(5) from 3
     }
@@ -3321,5 +3348,99 @@ mod tests {
         press(&mut app, KeyCode::Char('/'));
         assert!(app.filter_active);
         assert_eq!(app.filter_text, "a");
+    }
+
+    // ── Theme cycling tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_theme_name_default() {
+        let app = App::new(Theme::default());
+        assert_eq!(app.theme_name(), "dark");
+        assert_eq!(app.theme_index, 0);
+    }
+
+    #[test]
+    fn test_cycle_theme_advances_index() {
+        let mut app = App::new(Theme::default());
+        let names = Theme::available_names();
+        assert_eq!(app.theme_index, 0);
+
+        app.cycle_theme();
+        assert_eq!(app.theme_index, 1);
+        assert_eq!(app.theme_name(), names[1]);
+    }
+
+    #[test]
+    fn test_cycle_theme_wraps_around() {
+        let mut app = App::new(Theme::default());
+        let count = Theme::available_names().len();
+        // Cycle through all themes to wrap back to 0.
+        for _ in 0..count {
+            app.cycle_theme();
+        }
+        assert_eq!(app.theme_index, 0);
+        assert_eq!(app.theme_name(), "dark");
+    }
+
+    #[test]
+    fn test_cycle_theme_updates_theme_struct() {
+        let mut app = App::new(Theme::default());
+        let original_accent = app.theme.accent;
+
+        // Cycle until we find a theme with a different accent (light theme should differ).
+        let count = Theme::available_names().len();
+        let mut found_different = false;
+        for _ in 0..count {
+            app.cycle_theme();
+            if app.theme.accent != original_accent {
+                found_different = true;
+                break;
+            }
+        }
+        assert!(
+            found_different,
+            "Expected at least one theme with a different accent color"
+        );
+    }
+
+    #[test]
+    fn test_t_key_cycles_theme_in_idle() {
+        let mut app = App::new(Theme::default());
+        assert_eq!(app.theme_index, 0);
+
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(app.theme_index, 1);
+
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(app.theme_index, 2);
+    }
+
+    #[test]
+    fn test_t_key_ignored_when_not_idle() {
+        let mut app = App::new(Theme::default());
+        app.state = AppState::Running;
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(
+            app.theme_index, 0,
+            "Theme should not cycle in Running state"
+        );
+    }
+
+    #[test]
+    fn test_theme_index_set_nonzero() {
+        let mut app = App::new(Theme::default());
+        let names = Theme::available_names();
+        // Simulate --theme flag setting index to last theme.
+        let last = names.len() - 1;
+        app.theme_index = last;
+        if let Some(t) = Theme::by_name(names[last]) {
+            app.theme = t;
+        }
+        assert_eq!(app.theme_name(), names[last]);
+
+        // Cycling should wrap to 0.
+        app.cycle_theme();
+        assert_eq!(app.theme_index, 0);
+        assert_eq!(app.theme_name(), "dark");
     }
 }

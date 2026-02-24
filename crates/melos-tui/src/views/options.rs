@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -14,6 +14,7 @@ use crate::app::{App, OptionRow};
 /// Boolean options show [x] / [ ], numeric options show the value
 /// with +/- hints. The last row is a "Run" action button.
 pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
     let opts = match &app.command_opts {
         Some(o) => o,
         None => return,
@@ -39,8 +40,8 @@ pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .title_style(Style::default().fg(Color::Cyan).bold())
-        .border_style(Style::default().fg(Color::Cyan));
+        .title_style(Style::default().fg(theme.accent).bold())
+        .border_style(Style::default().fg(theme.accent));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -49,11 +50,9 @@ pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
     for (i, row) in rows.iter().enumerate() {
         let selected = i == app.selected_option;
         let highlight = if selected {
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(theme.text_secondary)
         };
         let cursor = if selected { ">> " } else { "   " };
 
@@ -71,17 +70,15 @@ pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
                     Span::styled(format!("{label}: "), highlight),
                     Span::styled(
                         format!("{val}"),
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(if selected {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            }),
+                        Style::default().fg(theme.header).add_modifier(if selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                     ),
                     Span::styled(
                         if selected { "  -/+" } else { "" },
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_muted),
                     ),
                 ]));
             }
@@ -95,13 +92,11 @@ pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
                     Span::styled(format!("{label}: "), highlight),
                     Span::styled(
                         display,
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(if selected {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            }),
+                        Style::default().fg(theme.header).add_modifier(if selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                     ),
                 ]));
             }
@@ -115,10 +110,10 @@ pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
     let run_selected = app.selected_option == rows.len();
     let run_style = if run_selected {
         Style::default()
-            .fg(Color::Green)
+            .fg(theme.success)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Green)
+        Style::default().fg(theme.success)
     };
     let run_cursor = if run_selected { ">> " } else { "   " };
     lines.push(Line::from(vec![
@@ -129,7 +124,7 @@ pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
     // Hint line.
     lines.push(Line::from(Span::styled(
         "   space:toggle  -/+:adjust  enter:run  esc:cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.text_muted),
     )));
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -160,6 +155,7 @@ mod tests {
 
     use super::*;
     use crate::app::{ActivePanel, App, CommandOpts};
+    use crate::theme::Theme;
 
     /// Helper: render the options overlay and return the buffer.
     fn render_options(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
@@ -186,7 +182,7 @@ mod tests {
     }
 
     fn app_with_options(command_name: &str) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.active_panel = ActivePanel::Commands;
         // Find the command index.
         if let Some(idx) = app.command_rows.iter().position(|c| c.name == command_name) {
@@ -246,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_options_overlay_no_render_without_opts() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.command_opts = None;
         app.show_options = true;
         let buf = render_options(&app, 80, 30);

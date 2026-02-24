@@ -1,0 +1,55 @@
+{
+  "name": "Everforest",
+  "themes": [
+    {
+      "name": "Everforest Dark",
+      "mode": "dark",
+      "colors": {
+        "accent": "#7FBBB3",
+        "text": "#D3C6AA",
+        "text_muted": "#7A8478",
+        "text_secondary": "#9DA9A0",
+        "header": "#DBBC7F",
+        "success": "#A7C080",
+        "error": "#E67E80",
+        "highlight_bg": "#343F44",
+        "highlight_fg": "#D3C6AA",
+        "pkg_color_0": "#7FBBB3",
+        "pkg_color_1": "#A7C080",
+        "pkg_color_2": "#DBBC7F",
+        "pkg_color_3": "#D699B6",
+        "pkg_color_4": "#E67E80",
+        "pkg_color_5": "#E69875",
+        "pkg_color_6": "#83C092",
+        "pkg_color_7": "#E69875",
+        "pkg_color_8": "#859289",
+        "pkg_color_9": "#7FBBB3"
+      }
+    },
+    {
+      "name": "Everforest Light",
+      "mode": "light",
+      "colors": {
+        "accent": "#3A94C5",
+        "text": "#5C6A72",
+        "text_muted": "#A6B0A0",
+        "text_secondary": "#829181",
+        "header": "#DFA000",
+        "success": "#8DA101",
+        "error": "#F85552",
+        "highlight_bg": "#F4F0D9",
+        "highlight_fg": "#5C6A72",
+        "pkg_color_0": "#3A94C5",
+        "pkg_color_1": "#8DA101",
+        "pkg_color_2": "#DFA000",
+        "pkg_color_3": "#DF69BA",
+        "pkg_color_4": "#F85552",
+        "pkg_color_5": "#F57D26",
+        "pkg_color_6": "#35A77C",
+        "pkg_color_7": "#F57D26",
+        "pkg_color_8": "#939F91",
+        "pkg_color_9": "#3A94C5"
+      }
+    }
+  ]
+}

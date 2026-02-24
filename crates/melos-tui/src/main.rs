@@ -20,11 +20,13 @@ mod app;
 mod dispatch;
 mod event;
 mod logging;
+mod theme;
 mod ui;
 mod views;
 
 use app::App;
 use event::{poll_task_handle, recv_core_event};
+use theme::Theme;
 
 /// Interactive terminal UI for melos-rs workspace management.
 #[derive(Parser)]
@@ -33,6 +35,15 @@ struct Cli {
     /// Path to workspace directory (defaults to current directory).
     #[arg(long, value_name = "DIR")]
     workspace: Option<PathBuf>,
+
+    /// Color theme to use.
+    ///
+    /// Available themes: dark, light, catppuccin-mocha, catppuccin-latte,
+    /// dracula, everforest-dark, everforest-light, gruvbox-dark, gruvbox-light,
+    /// nord, nord-light, one-dark, one-light, rose-pine, rose-pine-dawn,
+    /// solarized-dark, solarized-light, tokyo-night, tokyo-night-light.
+    #[arg(long, value_name = "NAME", default_value = "dark")]
+    theme: String,
 }
 
 #[tokio::main]
@@ -79,6 +90,21 @@ async fn main() -> Result<()> {
     // Try to load the workspace before entering raw mode so errors print normally.
     let workspace = load_workspace();
 
+    // Resolve theme by name (fall back to default dark if unknown).
+    let theme_index = Theme::available_names()
+        .iter()
+        .position(|&n| n == cli.theme)
+        .unwrap_or(0);
+    let theme = Theme::by_name(&cli.theme).unwrap_or_else(|| {
+        eprintln!(
+            "Unknown theme '{}'. Available: {}",
+            cli.theme,
+            Theme::available_names().join(", ")
+        );
+        eprintln!("Falling back to 'dark' theme.");
+        Theme::default()
+    });
+
     // Set up terminal.
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -89,7 +115,7 @@ async fn main() -> Result<()> {
     info!("terminal initialized, entering event loop");
 
     // Run the app.
-    let result = run(&mut terminal, workspace).await;
+    let result = run(&mut terminal, workspace, theme, theme_index).await;
 
     // Always restore terminal, even on error.
     restore_terminal()?;
@@ -120,8 +146,13 @@ fn load_workspace() -> Result<Workspace> {
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     workspace: Result<Workspace>,
+    theme: Theme,
+    theme_index: usize,
 ) -> Result<()> {
-    let mut app = App::new();
+    let mut app = App::new(theme);
+
+    // Set the theme index so 't' cycling starts from the correct position.
+    app.theme_index = theme_index;
 
     // Wrap workspace in Arc for sharing with spawned command tasks.
     let workspace = match workspace {

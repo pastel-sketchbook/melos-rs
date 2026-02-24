@@ -1,0 +1,55 @@
+{
+  "name": "Rosé Pine",
+  "themes": [
+    {
+      "name": "Rosé Pine",
+      "mode": "dark",
+      "colors": {
+        "accent": "#C4A7E7",
+        "text": "#E0DEF4",
+        "text_muted": "#6E6A86",
+        "text_secondary": "#908CAA",
+        "header": "#F6C177",
+        "success": "#9CCFD8",
+        "error": "#EB6F92",
+        "highlight_bg": "#403D52",
+        "highlight_fg": "#E0DEF4",
+        "pkg_color_0": "#C4A7E7",
+        "pkg_color_1": "#9CCFD8",
+        "pkg_color_2": "#F6C177",
+        "pkg_color_3": "#31748F",
+        "pkg_color_4": "#EBBCBA",
+        "pkg_color_5": "#EB6F92",
+        "pkg_color_6": "#9CCFD8",
+        "pkg_color_7": "#F6C177",
+        "pkg_color_8": "#908CAA",
+        "pkg_color_9": "#C4A7E7"
+      }
+    },
+    {
+      "name": "Rosé Pine Dawn",
+      "mode": "light",
+      "colors": {
+        "accent": "#907AA9",
+        "text": "#575279",
+        "text_muted": "#9893A5",
+        "text_secondary": "#797593",
+        "header": "#EA9D34",
+        "success": "#56949F",
+        "error": "#B4637A",
+        "highlight_bg": "#DFDAD9",
+        "highlight_fg": "#575279",
+        "pkg_color_0": "#907AA9",
+        "pkg_color_1": "#56949F",
+        "pkg_color_2": "#EA9D34",
+        "pkg_color_3": "#286983",
+        "pkg_color_4": "#D7827E",
+        "pkg_color_5": "#B4637A",
+        "pkg_color_6": "#56949F",
+        "pkg_color_7": "#EA9D34",
+        "pkg_color_8": "#797593",
+        "pkg_color_9": "#907AA9"
+      }
+    }
+  ]
+}

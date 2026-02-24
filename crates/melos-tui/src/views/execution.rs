@@ -10,27 +10,18 @@ use ratatui::{
 
 use crate::app::App;
 
-/// Per-package color palette matching the CLI renderer (10 rotating colors).
-const PKG_COLORS: &[Color] = &[
-    Color::Cyan,
-    Color::Green,
-    Color::Yellow,
-    Color::Blue,
-    Color::Magenta,
-    Color::Red,
-    Color::LightCyan,
-    Color::LightGreen,
-    Color::LightYellow,
-    Color::LightBlue,
-];
-
 /// Assign a color to each unique package name based on first-seen order.
-pub(crate) fn build_color_map(output_log: &[(String, String, bool)]) -> HashMap<&str, Color> {
+///
+/// Colors are drawn from `pkg_colors`, wrapping when exhausted.
+pub(crate) fn build_color_map<'a>(
+    output_log: &'a [(String, String, bool)],
+    pkg_colors: &[Color; 10],
+) -> HashMap<&'a str, Color> {
     let mut map = HashMap::new();
     let mut idx = 0usize;
     for (name, _, _) in output_log {
         map.entry(name.as_str()).or_insert_with(|| {
-            let c = PKG_COLORS[idx % PKG_COLORS.len()];
+            let c = pkg_colors[idx % pkg_colors.len()];
             idx += 1;
             c
         });
@@ -41,12 +32,14 @@ pub(crate) fn build_color_map(output_log: &[(String, String, bool)]) -> HashMap<
 /// Render output log lines as styled ratatui Lines.
 ///
 /// Each line is formatted as `[pkg_name] output_text` with the prefix
-/// colored per-package, matching the CLI style.
+/// colored per-package, matching the CLI style. Stderr lines use the
+/// theme's error color.
 pub(crate) fn render_output_lines<'a>(
     output_log: &'a [(String, String, bool)],
     color_map: &HashMap<&str, Color>,
     scroll: usize,
     visible_height: usize,
+    error_color: Color,
 ) -> Vec<Line<'a>> {
     let end = output_log.len().min(scroll + visible_height);
     let start = scroll.min(end);
@@ -63,7 +56,7 @@ pub(crate) fn render_output_lines<'a>(
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             );
             let text_style = if *is_stderr {
-                Style::default().fg(Color::Red)
+                Style::default().fg(error_color)
             } else {
                 Style::default()
             };
@@ -89,6 +82,8 @@ fn format_elapsed(d: std::time::Duration) -> String {
 pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     let cmd_name = app.running_command.as_deref().unwrap_or("command");
 
+    let theme = &app.theme;
+
     // Outer border matching the results view panels.
     let elapsed_str = match app.elapsed() {
         Some(d) => format!("  {}", format_elapsed(d)),
@@ -97,7 +92,7 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     let outer_title = format!(" Running: {cmd_name}{elapsed_str} ");
     let outer_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(theme.accent))
         .title(outer_title)
         .padding(Padding::horizontal(2));
     let inner_area = outer_block.inner(area);
@@ -129,7 +124,7 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     let label = format!("{completed}/{total}{running_names}");
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::NONE))
-        .gauge_style(Style::default().fg(Color::Cyan))
+        .gauge_style(Style::default().fg(theme.accent))
         .ratio(ratio)
         .label(label);
     frame.render_widget(gauge, gauge_area);
@@ -141,8 +136,14 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         app.output_scroll
     };
-    let color_map = build_color_map(&app.output_log);
-    let lines = render_output_lines(&app.output_log, &color_map, scroll, visible_height);
+    let color_map = build_color_map(&app.output_log, &app.theme.pkg_colors);
+    let lines = render_output_lines(
+        &app.output_log,
+        &color_map,
+        scroll,
+        visible_height,
+        app.theme.error,
+    );
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, output_area);
 }
@@ -155,6 +156,7 @@ mod tests {
 
     use super::*;
     use crate::app::{App, AppState};
+    use crate::theme::Theme;
 
     /// Helper: render a frame into a test buffer.
     fn render_frame(
@@ -191,7 +193,7 @@ mod tests {
 
     #[test]
     fn test_running_shows_progress_gauge() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_command = Some("analyze".to_string());
         app.progress = Some((3, 10, "analyze".to_string()));
@@ -215,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_running_shows_output_lines() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_command = Some("analyze".to_string());
         app.output_log = vec![
@@ -241,25 +243,27 @@ mod tests {
 
     #[test]
     fn test_color_map_assigns_unique_colors() {
+        let theme = Theme::default();
         let log = vec![
             ("pkg_a".to_string(), "line1".to_string(), false),
             ("pkg_b".to_string(), "line2".to_string(), false),
             ("pkg_a".to_string(), "line3".to_string(), false),
         ];
-        let map = build_color_map(&log);
+        let map = build_color_map(&log, &theme.pkg_colors);
         assert_eq!(map.len(), 2);
         assert_ne!(map["pkg_a"], map["pkg_b"]);
     }
 
     #[test]
     fn test_color_map_wraps_after_palette_exhausted() {
+        let theme = Theme::default();
         let mut log = Vec::new();
         for i in 0..15 {
             log.push((format!("pkg_{i}"), "line".to_string(), false));
         }
-        let map = build_color_map(&log);
+        let map = build_color_map(&log, &theme.pkg_colors);
         assert_eq!(map.len(), 15);
-        // Colors wrap after PKG_COLORS.len() (10), so pkg_0 and pkg_10 share a color.
+        // Colors wrap after pkg_colors.len() (10), so pkg_0 and pkg_10 share a color.
         assert_eq!(map["pkg_0"], map["pkg_10"]);
     }
 
@@ -294,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_running_shows_elapsed_time() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_command = Some("analyze".to_string());
         // Set command_start to a known instant in the past.
@@ -312,7 +316,7 @@ mod tests {
 
     #[test]
     fn test_running_auto_scroll_shows_tail() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_command = Some("test".to_string());
         app.auto_scroll = true;
@@ -332,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_running_manual_scroll_shows_offset() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         app.running_command = Some("test".to_string());
         app.auto_scroll = false;

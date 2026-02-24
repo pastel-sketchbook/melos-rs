@@ -1,0 +1,30 @@
+{
+  "name": "Default Light",
+  "themes": [
+    {
+      "name": "Default Light",
+      "mode": "light",
+      "colors": {
+        "accent": "#0087AF",
+        "text": "#1C1C1C",
+        "text_muted": "#808080",
+        "text_secondary": "#6C6C6C",
+        "header": "#AF8700",
+        "success": "#008700",
+        "error": "#D70000",
+        "highlight_bg": "#D0D0D0",
+        "highlight_fg": "#000000",
+        "pkg_color_0": "#0087AF",
+        "pkg_color_1": "#008700",
+        "pkg_color_2": "#AF8700",
+        "pkg_color_3": "#0000AF",
+        "pkg_color_4": "#870087",
+        "pkg_color_5": "#D70000",
+        "pkg_color_6": "#005F87",
+        "pkg_color_7": "#5F8700",
+        "pkg_color_8": "#875F00",
+        "pkg_color_9": "#005FAF"
+      }
+    }
+  ]
+}

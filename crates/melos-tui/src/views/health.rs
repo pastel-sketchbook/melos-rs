@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -9,6 +9,7 @@ use ratatui::{
 use melos_core::commands::health::HealthReport;
 
 use crate::app::App;
+use crate::theme::Theme;
 
 /// Tab labels for the health dashboard.
 const TAB_LABELS: &[&str] = &["Version Drift", "Missing Fields", "SDK Consistency"];
@@ -22,6 +23,7 @@ pub fn draw_health(frame: &mut Frame, area: Rect, app: &App) {
         Some(r) => r,
         None => return,
     };
+    let theme = &app.theme;
 
     // Layout: tab bar (1) + spacer (1) + content (fill).
     let [tab_area, _spacer, content_area] = Layout::vertical([
@@ -31,28 +33,28 @@ pub fn draw_health(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .areas(area);
 
-    draw_tab_bar(frame, tab_area, app.health_tab);
+    draw_tab_bar(frame, tab_area, app.health_tab, theme);
 
     match app.health_tab {
-        0 => draw_version_drift(frame, content_area, report),
-        1 => draw_missing_fields(frame, content_area, report),
-        _ => draw_sdk_consistency(frame, content_area, report),
+        0 => draw_version_drift(frame, content_area, report, theme),
+        1 => draw_missing_fields(frame, content_area, report, theme),
+        _ => draw_sdk_consistency(frame, content_area, report, theme),
     }
 }
 
 /// Render the tab bar with three tabs, highlighting the active one.
-fn draw_tab_bar(frame: &mut Frame, area: Rect, active: usize) {
+fn draw_tab_bar(frame: &mut Frame, area: Rect, active: usize, theme: &Theme) {
     let mut spans = Vec::new();
     for (i, label) in TAB_LABELS.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(" | ", Style::default().fg(theme.text_muted)));
         }
         let style = if i == active {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.text_muted)
         };
         spans.push(Span::styled(*label, style));
     }
@@ -61,27 +63,27 @@ fn draw_tab_bar(frame: &mut Frame, area: Rect, active: usize) {
 }
 
 /// Render the Version Drift tab content.
-fn draw_version_drift(frame: &mut Frame, area: Rect, report: &HealthReport) {
+fn draw_version_drift(frame: &mut Frame, area: Rect, report: &HealthReport, theme: &Theme) {
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     match &report.version_drift {
         None => {
             lines.push(Line::from(Span::styled(
                 "Version drift check was not enabled.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )));
         }
         Some(drifts) if drifts.is_empty() => {
             lines.push(Line::from(Span::styled(
                 "No version drift detected.",
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.success),
             )));
         }
         Some(drifts) => {
             lines.push(Line::from(Span::styled(
                 format!("{} dependencies with version drift:", drifts.len()),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.header)
                     .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
@@ -93,17 +95,15 @@ fn draw_version_drift(frame: &mut Frame, area: Rect, report: &HealthReport) {
                         drift.dependency,
                         drift.constraints.len()
                     ),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                 )));
                 for usage in &drift.constraints {
                     lines.push(Line::from(vec![
                         Span::styled("    ", Style::default()),
-                        Span::styled(&usage.constraint, Style::default().fg(Color::Cyan)),
+                        Span::styled(&usage.constraint, Style::default().fg(theme.accent)),
                         Span::styled(
                             format!("  used by: {}", usage.packages.join(", ")),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme.text_muted),
                         ),
                     ]));
                 }
@@ -122,27 +122,27 @@ fn draw_version_drift(frame: &mut Frame, area: Rect, report: &HealthReport) {
 }
 
 /// Render the Missing Fields tab content.
-fn draw_missing_fields(frame: &mut Frame, area: Rect, report: &HealthReport) {
+fn draw_missing_fields(frame: &mut Frame, area: Rect, report: &HealthReport, theme: &Theme) {
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     match &report.missing_fields {
         None => {
             lines.push(Line::from(Span::styled(
                 "Missing fields check was not enabled.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )));
         }
         Some(issues) if issues.is_empty() => {
             lines.push(Line::from(Span::styled(
                 "All packages have required fields.",
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme.success),
             )));
         }
         Some(issues) => {
             lines.push(Line::from(Span::styled(
                 format!("{} packages with missing fields:", issues.len()),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.header)
                     .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
@@ -151,11 +151,9 @@ fn draw_missing_fields(frame: &mut Frame, area: Rect, report: &HealthReport) {
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("  {}: ", issue.package),
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(issue.missing.join(", "), Style::default().fg(Color::Red)),
+                    Span::styled(issue.missing.join(", "), Style::default().fg(theme.error)),
                 ]));
             }
         }
@@ -171,14 +169,14 @@ fn draw_missing_fields(frame: &mut Frame, area: Rect, report: &HealthReport) {
 }
 
 /// Render the SDK Consistency tab content.
-fn draw_sdk_consistency(frame: &mut Frame, area: Rect, report: &HealthReport) {
+fn draw_sdk_consistency(frame: &mut Frame, area: Rect, report: &HealthReport, theme: &Theme) {
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     match &report.sdk_consistency {
         None => {
             lines.push(Line::from(Span::styled(
                 "SDK consistency check was not enabled.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )));
         }
         Some(sdk) => {
@@ -189,20 +187,20 @@ fn draw_sdk_consistency(frame: &mut Frame, area: Rect, report: &HealthReport) {
             if !has_issues {
                 lines.push(Line::from(Span::styled(
                     "SDK constraints are consistent.",
-                    Style::default().fg(Color::Green),
+                    Style::default().fg(theme.success),
                 )));
             } else {
                 if !sdk.missing_sdk.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("{} packages missing SDK constraint:", sdk.missing_sdk.len()),
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.header)
                             .add_modifier(Modifier::BOLD),
                     )));
                     for name in &sdk.missing_sdk {
                         lines.push(Line::from(Span::styled(
                             format!("  {name}"),
-                            Style::default().fg(Color::Red),
+                            Style::default().fg(theme.error),
                         )));
                     }
                     lines.push(Line::from(""));
@@ -212,16 +210,16 @@ fn draw_sdk_consistency(frame: &mut Frame, area: Rect, report: &HealthReport) {
                     lines.push(Line::from(Span::styled(
                         "Dart SDK constraint drift:",
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.header)
                             .add_modifier(Modifier::BOLD),
                     )));
                     for usage in &sdk.dart_sdk_drift {
                         lines.push(Line::from(vec![
                             Span::styled("  ", Style::default()),
-                            Span::styled(&usage.constraint, Style::default().fg(Color::Cyan)),
+                            Span::styled(&usage.constraint, Style::default().fg(theme.accent)),
                             Span::styled(
                                 format!("  used by: {}", usage.packages.join(", ")),
-                                Style::default().fg(Color::DarkGray),
+                                Style::default().fg(theme.text_muted),
                             ),
                         ]));
                     }
@@ -232,16 +230,16 @@ fn draw_sdk_consistency(frame: &mut Frame, area: Rect, report: &HealthReport) {
                     lines.push(Line::from(Span::styled(
                         "Flutter SDK constraint drift:",
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(theme.header)
                             .add_modifier(Modifier::BOLD),
                     )));
                     for usage in &sdk.flutter_sdk_drift {
                         lines.push(Line::from(vec![
                             Span::styled("  ", Style::default()),
-                            Span::styled(&usage.constraint, Style::default().fg(Color::Cyan)),
+                            Span::styled(&usage.constraint, Style::default().fg(theme.accent)),
                             Span::styled(
                                 format!("  used by: {}", usage.packages.join(", ")),
-                                Style::default().fg(Color::DarkGray),
+                                Style::default().fg(theme.text_muted),
                             ),
                         ]));
                     }
@@ -309,7 +307,7 @@ mod tests {
     }
 
     fn app_with_health(report: HealthReport, tab: usize) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("health".to_string());
         app.health_report = Some(report);
@@ -319,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_health_no_report_renders_nothing() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         // No health_report set.
         let buf = render_frame(draw_health, &app, 80, 20);

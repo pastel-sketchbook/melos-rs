@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -41,7 +41,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     // Help overlay on top of everything.
     if app.show_help {
-        draw_help(frame, area);
+        draw_help(frame, area, app);
     }
 
     // Options overlay on top of everything (but below help).
@@ -52,6 +52,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
 /// Render the header bar with workspace info (left) and version (right).
 fn draw_header(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let theme = &app.theme;
     let workspace_info = match (&app.workspace_name, &app.config_source_label) {
         (Some(name), Some(source)) => {
             let pkg_count = app.package_count();
@@ -67,15 +68,15 @@ fn draw_header(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         Layout::horizontal([Constraint::Min(0), Constraint::Length(version_width)]).areas(area);
 
     let left = Line::from(vec![
-        Span::styled(" melos-tui ", Style::default().fg(Color::Cyan).bold()),
+        Span::styled(" melos-tui ", Style::default().fg(theme.accent).bold()),
         Span::raw("| "),
-        Span::styled(workspace_info, Style::default().fg(Color::White)),
+        Span::styled(workspace_info, Style::default().fg(theme.text)),
     ]);
     frame.render_widget(Paragraph::new(left), left_area);
 
     let right = Line::from(Span::styled(
         version_tag,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.text_muted),
     ));
     frame.render_widget(
         Paragraph::new(right).alignment(Alignment::Right),
@@ -120,12 +121,14 @@ fn draw_body(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
 /// Render the footer bar with context-sensitive keybindings or filter input.
 fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let theme = &app.theme;
+
     // When the filter input bar is active, show the filter prompt instead of keybindings.
     if app.filter_active {
         let footer = Line::from(vec![
-            Span::styled(" /", Style::default().fg(Color::Yellow).bold()),
+            Span::styled(" /", Style::default().fg(theme.header).bold()),
             Span::raw(&app.filter_text),
-            Span::styled("_", Style::default().fg(Color::DarkGray)),
+            Span::styled("_", Style::default().fg(theme.text_muted)),
         ]);
         frame.render_widget(Paragraph::new(footer), area);
         return;
@@ -136,11 +139,11 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         let footer = Line::from(vec![
             Span::styled(
                 format!(" filter: {} ", app.filter_text),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.header),
             ),
             Span::styled(
                 "| /:edit  esc:clear  j/k:navigate  tab:switch  enter:run  ?:help",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             ),
         ]);
         frame.render_widget(Paragraph::new(footer), area);
@@ -149,7 +152,7 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
     let keys = match app.state {
         AppState::Idle => {
-            "q:quit  j/k:navigate  g/G:jump  f/b:page  tab:switch  /:filter  enter:run  ?:help"
+            "q:quit  j/k:navigate  g/G:jump  f/b:page  tab:switch  /:filter  t:theme  enter:run  ?:help"
         }
         AppState::Running => "esc:cancel",
         AppState::Done if app.health_report.is_some() => {
@@ -160,9 +163,29 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
     let footer = Line::from(vec![
         Span::styled(" ", Style::default()),
-        Span::styled(keys, Style::default().fg(Color::DarkGray)),
+        Span::styled(keys, Style::default().fg(theme.text_muted)),
     ]);
     frame.render_widget(Paragraph::new(footer), area);
+
+    // In Idle state, show the current theme name at the right edge.
+    if app.state == AppState::Idle {
+        let theme_label = format!(" {} ", app.theme_name());
+        let label_width = theme_label.len() as u16;
+        if area.width > label_width {
+            let right_area = ratatui::layout::Rect::new(
+                area.x + area.width - label_width,
+                area.y,
+                label_width,
+                1,
+            );
+            let right = Paragraph::new(Line::from(Span::styled(
+                theme_label,
+                Style::default().fg(theme.text_muted),
+            )))
+            .alignment(Alignment::Right);
+            frame.render_widget(right, right_area);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +194,7 @@ mod tests {
 
     use super::*;
     use crate::app::PackageRow;
+    use crate::theme::Theme;
 
     /// Helper: render app state into a test backend and return the buffer.
     fn render_app(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
@@ -189,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_header_contains_melos_tui() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_app(&app, 80, 10);
         let header_line = buffer_line(&buf, 0, 80);
         assert!(header_line.contains("melos-tui"));
@@ -197,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_header_shows_no_workspace_when_unloaded() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_app(&app, 80, 10);
         let header_line = buffer_line(&buf, 0, 80);
         assert!(header_line.contains("no workspace loaded"));
@@ -205,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_header_shows_workspace_info_when_loaded() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.workspace_name = Some("my_workspace".to_string());
         app.config_source_label = Some("melos.yaml".to_string());
         app.package_rows = vec![
@@ -243,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_header_shows_version_at_right() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_app(&app, 80, 10);
         let header_line = buffer_line(&buf, 0, 80);
         let expected = format!("v{}", env!("CARGO_PKG_VERSION"));
@@ -261,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_footer_shows_navigation_keys_in_idle() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_app(&app, 100, 10);
         let footer_line = buffer_line(&buf, 9, 100);
         assert!(footer_line.contains("q:quit"));
@@ -271,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_footer_shows_esc_in_running() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Running;
         let buf = render_app(&app, 80, 10);
         let footer_line = buffer_line(&buf, 9, 80);
@@ -280,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_body_shows_both_panels_in_idle() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.package_rows = vec![PackageRow {
             name: "test_pkg".to_string(),
             version: "1.0.0".to_string(),
@@ -306,7 +330,7 @@ mod tests {
 
     #[test]
     fn test_help_overlay_renders_when_show_help_true() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.show_help = true;
 
         let buf = render_app(&app, 100, 40);
@@ -326,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_footer_shows_filter_hint_in_idle() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_app(&app, 100, 10);
         let footer_line = buffer_line(&buf, 9, 100);
         assert!(
@@ -337,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_footer_shows_filter_input_bar_when_active() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.filter_active = true;
         app.filter_text = "abc".to_string();
         let buf = render_app(&app, 100, 10);
@@ -350,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_footer_shows_filter_indicator_when_applied() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.filter_text = "test".to_string();
         app.filtered_indices = vec![0]; // Simulate non-empty filter result.
         let buf = render_app(&app, 100, 10);

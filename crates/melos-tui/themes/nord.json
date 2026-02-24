@@ -1,0 +1,55 @@
+{
+  "name": "Nord",
+  "themes": [
+    {
+      "name": "Nord",
+      "mode": "dark",
+      "colors": {
+        "accent": "#88C0D0",
+        "text": "#D8DEE9",
+        "text_muted": "#4C566A",
+        "text_secondary": "#E5E9F0",
+        "header": "#EBCB8B",
+        "success": "#A3BE8C",
+        "error": "#BF616A",
+        "highlight_bg": "#3B4252",
+        "highlight_fg": "#ECEFF4",
+        "pkg_color_0": "#88C0D0",
+        "pkg_color_1": "#A3BE8C",
+        "pkg_color_2": "#EBCB8B",
+        "pkg_color_3": "#81A1C1",
+        "pkg_color_4": "#B48EAD",
+        "pkg_color_5": "#BF616A",
+        "pkg_color_6": "#8FBCBB",
+        "pkg_color_7": "#D08770",
+        "pkg_color_8": "#5E81AC",
+        "pkg_color_9": "#D8DEE9"
+      }
+    },
+    {
+      "name": "Nord Light",
+      "mode": "light",
+      "colors": {
+        "accent": "#5E81AC",
+        "text": "#2E3440",
+        "text_muted": "#4C566A",
+        "text_secondary": "#3B4252",
+        "header": "#EBCB8B",
+        "success": "#A3BE8C",
+        "error": "#BF616A",
+        "highlight_bg": "#D8DEE9",
+        "highlight_fg": "#2E3440",
+        "pkg_color_0": "#5E81AC",
+        "pkg_color_1": "#A3BE8C",
+        "pkg_color_2": "#EBCB8B",
+        "pkg_color_3": "#81A1C1",
+        "pkg_color_4": "#B48EAD",
+        "pkg_color_5": "#BF616A",
+        "pkg_color_6": "#8FBCBB",
+        "pkg_color_7": "#D08770",
+        "pkg_color_8": "#88C0D0",
+        "pkg_color_9": "#434C5E"
+      }
+    }
+  ]
+}

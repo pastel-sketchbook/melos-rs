@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
@@ -13,6 +13,7 @@ use crate::views::execution::{build_color_map, render_output_lines};
 /// and scrollable output log. Wrapped in a bordered block matching the
 /// two-pane idle view style.
 pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
+    let theme = &app.theme;
     let passed = app.finished_packages.iter().filter(|(_, s, _)| *s).count();
     let failed = app.finished_packages.iter().filter(|(_, s, _)| !*s).count();
 
@@ -20,7 +21,11 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
     let has_error = failed > 0 || app.command_error.is_some();
 
     // Outer border matching the two-pane panels.
-    let border_color = if has_error { Color::Red } else { Color::Green };
+    let border_color = if has_error {
+        theme.error
+    } else {
+        theme.success
+    };
     let outer_title = format!(" Results: {cmd_name} ");
     let outer_block = Block::default()
         .borders(Borders::ALL)
@@ -32,7 +37,11 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut summary_lines: Vec<Line<'_>> = Vec::new();
 
-    let header_color = if has_error { Color::Red } else { Color::Green };
+    let header_color = if has_error {
+        theme.error
+    } else {
+        theme.success
+    };
 
     summary_lines.push(Line::from(Span::styled(
         format!("{cmd_name}: {passed} passed, {failed} failed"),
@@ -44,7 +53,7 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(ref err) = app.command_error {
         summary_lines.push(Line::from(Span::styled(
             format!("Error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.error),
         )));
     }
 
@@ -53,7 +62,7 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
         summary_lines.push(Line::from(""));
         for (name, success, duration) in &app.finished_packages {
             let icon = if *success { "+" } else { "x" };
-            let icon_color = if *success { Color::Green } else { Color::Red };
+            let icon_color = if *success { theme.success } else { theme.error };
             let dur_ms = duration.as_millis();
             let dur_str = if dur_ms >= 1000 {
                 format!("{:.1}s", duration.as_secs_f64())
@@ -68,7 +77,7 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
                 Span::raw(name.as_str()),
                 Span::styled(
                     format!("  ({dur_str})"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_muted),
                 ),
             ]));
         }
@@ -89,12 +98,13 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
 
     // Scrollable output log.
     let visible_height = output_area.height.saturating_sub(1) as usize;
-    let color_map = build_color_map(&app.output_log);
+    let color_map = build_color_map(&app.output_log, &app.theme.pkg_colors);
     let lines = render_output_lines(
         &app.output_log,
         &color_map,
         app.output_scroll,
         visible_height,
+        app.theme.error,
     );
 
     // Show scroll position indicator in the divider title if scrolling is possible.
@@ -112,7 +122,7 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let divider_color = if app.command_error.is_some() {
-        Color::Red
+        theme.error
     } else {
         border_color
     };
@@ -130,10 +140,11 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use std::time::Duration;
 
-    use ratatui::{Terminal, backend::TestBackend};
+    use ratatui::{Terminal, backend::TestBackend, style::Color};
 
     use super::*;
     use crate::app::{App, AppState};
+    use crate::theme::Theme;
 
     /// Helper: render a frame into a test buffer.
     fn render_frame(
@@ -167,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_results_shows_summary() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("analyze".to_string());
         app.finished_packages = vec![
@@ -189,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_results_shows_per_package_list() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("test".to_string());
         app.finished_packages = vec![
@@ -211,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_results_shows_output_log() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("analyze".to_string());
         app.finished_packages = vec![("pkg_a".to_string(), true, Duration::from_millis(100))];
@@ -231,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_results_shows_error_message() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.command_error = Some("connection failed".to_string());
 
@@ -245,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_results_scroll_indicator_when_content_overflows() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("test".to_string());
         app.finished_packages = vec![("pkg_a".to_string(), true, Duration::from_millis(50))];
@@ -264,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_results_shows_command_name_from_running_command() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("format".to_string());
         app.finished_packages = vec![("pkg_a".to_string(), true, Duration::from_millis(50))];
@@ -279,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_results_empty_packages_shows_zero_counts() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("bootstrap".to_string());
 
@@ -300,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_results_has_outer_border_with_title() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("analyze".to_string());
         app.finished_packages = vec![("pkg_a".to_string(), true, Duration::from_millis(50))];
@@ -315,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_results_border_green_on_success() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("test".to_string());
         app.finished_packages = vec![("pkg_a".to_string(), true, Duration::from_millis(50))];
@@ -333,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_results_border_red_on_failure() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("test".to_string());
         app.finished_packages = vec![("pkg_a".to_string(), false, Duration::from_millis(50))];
@@ -351,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_results_has_bottom_border() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.state = AppState::Done;
         app.running_command = Some("analyze".to_string());
 

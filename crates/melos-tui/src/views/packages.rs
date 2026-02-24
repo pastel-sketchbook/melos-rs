@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::Constraint,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
 };
@@ -11,13 +11,14 @@ use crate::app::App;
 /// Draw the package table into the given area.
 ///
 /// Uses `TableState` to track selection highlighting and scroll offset.
-/// When `focused` is true, the border is highlighted in cyan.
+/// When `focused` is true, the border is highlighted in the accent color.
 /// Respects the active package filter: only matching packages are shown.
 pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, focused: bool) {
+    let theme = &app.theme;
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme.accent)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_muted)
     };
 
     // No workspace loaded: show actionable error message.
@@ -25,21 +26,21 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         let block = Block::default()
             .borders(Borders::ALL)
             .title(" Packages ")
-            .border_style(Style::default().fg(Color::Red));
+            .border_style(Style::default().fg(theme.error));
         let message = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
                 "  No workspace found",
-                Style::default().fg(Color::Red).bold(),
+                Style::default().fg(theme.error).bold(),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  Run `melos-rs init` to create a workspace,",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )),
             Line::from(Span::styled(
                 "  or run from a directory with melos.yaml.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )),
         ])
         .block(block);
@@ -60,12 +61,12 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
             Line::from(""),
             Line::from(Span::styled(
                 format!("  No packages match \"{}\"", app.filter_text),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  Press Esc to clear filter",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )),
         ])
         .block(block);
@@ -83,12 +84,12 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
             Line::from(""),
             Line::from(Span::styled(
                 "  No packages found",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "  Check `packages` globs in melos.yaml",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )),
         ])
         .block(block);
@@ -98,7 +99,7 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
 
     let header_cells = ["Name", "Version", "SDK", "Path"]
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).bold()));
+        .map(|h| Cell::from(*h).style(Style::default().fg(theme.header).bold()));
     let header = Row::new(header_cells).height(1);
 
     let max_name_len = visible.iter().map(|pkg| pkg.name.len()).max().unwrap_or(0);
@@ -111,9 +112,9 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
         };
 
         let sdk_color = if pkg.sdk == "Flutter" {
-            Color::Cyan
+            theme.accent
         } else {
-            Color::Green
+            theme.success
         };
 
         Row::new(vec![
@@ -122,7 +123,7 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
             Cell::from(Span::styled(pkg.sdk, Style::default().fg(sdk_color))),
             Cell::from(Span::styled(
                 &pkg.path,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_muted),
             )),
         ])
     });
@@ -155,8 +156,8 @@ pub fn draw_packages(frame: &mut Frame, area: ratatui::layout::Rect, app: &App, 
     )
     .row_highlight_style(
         Style::default()
-            .bg(Color::Indexed(237))
-            .fg(Color::White)
+            .bg(theme.highlight_bg)
+            .fg(theme.highlight_fg)
             .add_modifier(Modifier::BOLD),
     )
     .highlight_symbol(">> ");
@@ -175,6 +176,7 @@ mod tests {
 
     use super::*;
     use crate::app::PackageRow;
+    use crate::theme::Theme;
 
     /// Helper: render the package table and return the buffer.
     fn render_packages(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
@@ -198,7 +200,7 @@ mod tests {
     }
 
     fn make_app_with_rows(rows: Vec<PackageRow>) -> App {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.workspace_name = Some("test".to_string());
         app.package_rows = rows;
         app
@@ -318,7 +320,7 @@ mod tests {
 
     #[test]
     fn test_no_workspace_shows_error_message() {
-        let app = App::new();
+        let app = App::new(Theme::default());
         let buf = render_packages(&app, 80, 10);
         let all_text: String = (0..10)
             .map(|y| buffer_line(&buf, y, 80))
@@ -336,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_empty_workspace_shows_no_packages() {
-        let mut app = App::new();
+        let mut app = App::new(Theme::default());
         app.workspace_name = Some("test".to_string());
         let buf = render_packages(&app, 80, 10);
         let all_text: String = (0..10)
