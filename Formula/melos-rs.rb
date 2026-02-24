@@ -16,30 +16,30 @@
 class MelosRs < Formula
   desc "Fast Rust replacement for Melos — Flutter/Dart monorepo management"
   homepage "https://github.com/pastel-sketchbook/melos-rs"
-  version "0.6.7"
+  version "0.7.0"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-rs-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "3907d3b1787fca926a604e1b424924c725f8e6299f03697a61291493e830bfed"
+      sha256 "fb8bb53e8c308dc2dee54f3088c8f3bb9aad7fbaf546526117697e63414af155"
     end
 
     on_intel do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-rs-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "29eaf67f6196b5ad527ea0f40e3b1135de280eac2a54c7d489e6a8a3241b6662"
+      sha256 "962aa4608f9473376822962bbf9ae91c59669f3f90b7ced8517ff014f75b287d"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-rs-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "07b556a39c7d74ccdf78b1d8f42894964ec0c94451843a113875e1e6cf255805"
+      sha256 "73d96f7311aa6f3ec6eda12041a3cf68010d9c4c26e2173d1919e5d7074ee081"
     end
 
     on_intel do
       url "https://github.com/pastel-sketchbook/melos-rs/releases/download/v#{version}/melos-rs-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "b561ec03cc0b3e305e2aacfdbdc54025bc2805383878912765594b3e9bd01c4f"
+      sha256 "18dac1a5ca8b238b429ea692f18e7ccd85cb20c1ff911b3f0dad132f7287c7bb"
     end
   end
 
