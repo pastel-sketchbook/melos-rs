@@ -70,6 +70,27 @@ fn pkg_color(color_map: &mut HashMap<String, Color>, color_idx: &mut usize, name
     })
 }
 
+/// Width (in characters) of the separator line drawn around package output.
+const SEPARATOR_WIDTH: usize = 60;
+
+/// Build a separator line: `─── pkg_name ─────────────────`
+fn separator_line(name: &str, color: Color) -> String {
+    let label = format!(" {} ", name);
+    let prefix_dashes = 3;
+    let suffix_dashes = SEPARATOR_WIDTH.saturating_sub(prefix_dashes + label.len());
+    format!(
+        "{}{}{}",
+        "─".repeat(prefix_dashes).color(color),
+        label.color(color).bold(),
+        "─".repeat(suffix_dashes).color(color),
+    )
+}
+
+/// Build a plain closing separator line: `──────────────────`
+fn closing_separator(color: Color) -> String {
+    format!("{}", "─".repeat(SEPARATOR_WIDTH).color(color))
+}
+
 /// Internal render loop that processes events and produces terminal output.
 async fn render_loop(
     mut rx: mpsc::UnboundedReceiver<Event>,
@@ -82,8 +103,7 @@ async fn render_loop(
         match event {
             Event::PackageStarted { ref name } => {
                 let color = pkg_color(&mut color_map, &mut color_idx, name);
-                let prefix = format!("[{}]", name).color(color).bold();
-                println!("{} running...", prefix);
+                println!("{}", separator_line(name, color));
             }
             Event::PackageOutput {
                 ref name,
@@ -99,15 +119,19 @@ async fn render_loop(
                 }
             }
             Event::PackageFinished {
-                ref name, success, ..
+                ref name,
+                success,
+                duration,
             } => {
                 let color = pkg_color(&mut color_map, &mut color_idx, name);
                 let prefix = format!("[{}]", name).color(color).bold();
+                let elapsed = format!("({:.1}s)", duration.as_secs_f64());
                 if success {
-                    println!("{} {}", prefix, "SUCCESS".green());
+                    println!("{} {} {}", prefix, "SUCCESS".green(), elapsed.dimmed());
                 } else {
-                    eprintln!("{} {}", prefix, "FAILED".red());
+                    eprintln!("{} {} {}", prefix, "FAILED".red(), elapsed.dimmed());
                 }
+                println!("{}", closing_separator(color));
                 if let Some(ref pb) = pb {
                     pb.inc(1);
                 }
