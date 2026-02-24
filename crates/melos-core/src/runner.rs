@@ -124,6 +124,7 @@ impl ProcessRunner {
                     .arg(&command)
                     .current_dir(&pkg_path)
                     .envs(&env)
+                    .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
                     .spawn();

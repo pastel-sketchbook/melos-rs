@@ -266,7 +266,10 @@ impl CommandOpts {
                 concurrency,
                 major_versions,
             } => vec![
-                OptionRow::Number("sub-cmd (1=get 2=outdated 3=upgrade 4=downgrade)", *subcommand),
+                OptionRow::Number(
+                    "sub-cmd (1=get 2=outdated 3=upgrade 4=downgrade)",
+                    *subcommand,
+                ),
                 OptionRow::Number("concurrency", *concurrency),
                 OptionRow::Bool("major-versions (upgrade only)", *major_versions),
             ],

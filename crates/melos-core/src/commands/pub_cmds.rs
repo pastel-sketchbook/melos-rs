@@ -15,13 +15,8 @@ pub enum PubSubcommand {
     Outdated,
     Upgrade,
     Downgrade,
-    Add {
-        package: String,
-        dev: bool,
-    },
-    Remove {
-        package: String,
-    },
+    Add { package: String, dev: bool },
+    Remove { package: String },
 }
 
 /// Options for the `pub` command (clap-free).

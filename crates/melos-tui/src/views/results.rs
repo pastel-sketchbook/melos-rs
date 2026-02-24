@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
 use crate::app::App;
@@ -25,7 +25,8 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(outer_title);
+        .title(outer_title)
+        .padding(Padding::horizontal(2));
     let inner_area = outer_block.inner(area);
     frame.render_widget(outer_block, area);
 

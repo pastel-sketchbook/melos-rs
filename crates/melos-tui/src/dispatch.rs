@@ -237,9 +237,8 @@ pub async fn dispatch_command(
                     major_versions: false,
                 },
             };
-            let r =
-                melos_core::commands::pub_cmds::run(packages, workspace, &core_opts, Some(&tx))
-                    .await?;
+            let r = melos_core::commands::pub_cmds::run(packages, workspace, &core_opts, Some(&tx))
+                .await?;
             Ok(DispatchResult {
                 package_results: r,
                 health_report: None,

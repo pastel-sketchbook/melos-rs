@@ -208,6 +208,11 @@ async fn run(
             join_result = poll_task_handle(&mut task_handle) => {
                 // Task handle resolved. Extract health report and notify app.
                 task_handle = None;
+
+                // Re-enable raw mode in case a child process corrupted
+                // terminal settings (e.g. by opening /dev/tty directly).
+                let _ = enable_raw_mode();
+
                 let mapped = match join_result {
                     Ok(Ok(dr)) => {
                         info!(
@@ -252,6 +257,7 @@ async fn run(
                 info!("cancel requested, aborting command task");
                 handle.abort();
                 core_rx = None;
+                let _ = enable_raw_mode();
                 app.on_command_cancelled();
             }
         }
