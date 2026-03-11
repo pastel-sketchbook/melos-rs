@@ -14,6 +14,7 @@ const THEME_TOKYO_NIGHT: &str = include_str!("../themes/tokyo-night.json");
 const THEME_ONE: &str = include_str!("../themes/one.json");
 const THEME_ROSE_PINE: &str = include_str!("../themes/rose-pine.json");
 const THEME_EVERFOREST: &str = include_str!("../themes/everforest.json");
+const THEME_FFE: &str = include_str!("../themes/ffe.json");
 
 /// JSON schema for a theme file (matches gpui-component format).
 #[derive(Debug, Deserialize)]
@@ -102,7 +103,7 @@ impl Theme {
     /// "gruvbox-dark", "gruvbox-light", "catppuccin-mocha", "catppuccin-latte",
     /// "dracula", "nord", "nord-light", "tokyo-night", "tokyo-night-light",
     /// "one-dark", "one-light", "rose-pine", "rose-pine-dawn",
-    /// "everforest-dark", "everforest-light".
+    /// "everforest-dark", "everforest-light", "ffe-dark", "ffe-light".
     ///
     /// Returns `None` if the name is not recognized.
     pub fn by_name(name: &str) -> Option<Self> {
@@ -126,6 +127,8 @@ impl Theme {
             "rose-pine-dawn" => (THEME_ROSE_PINE, "Rosé Pine Dawn"),
             "everforest-dark" => (THEME_EVERFOREST, "Everforest Dark"),
             "everforest-light" => (THEME_EVERFOREST, "Everforest Light"),
+            "ffe-dark" => (THEME_FFE, "FFE Dark"),
+            "ffe-light" => (THEME_FFE, "FFE Light"),
             _ => return None,
         };
 
@@ -149,6 +152,8 @@ impl Theme {
             "dracula",
             "everforest-dark",
             "everforest-light",
+            "ffe-dark",
+            "ffe-light",
             "gruvbox-dark",
             "gruvbox-light",
             "nord",
@@ -398,6 +403,22 @@ mod tests {
     }
 
     #[test]
+    fn test_by_name_ffe_dark() {
+        let t = Theme::by_name("ffe-dark").expect("ffe-dark should exist");
+        assert_ne!(t.accent, Color::Reset);
+        // Verify accent is the FFE teal (#4FD6BE)
+        assert_eq!(t.accent, Color::Rgb(79, 214, 190));
+    }
+
+    #[test]
+    fn test_by_name_ffe_light() {
+        let t = Theme::by_name("ffe-light").expect("ffe-light should exist");
+        assert_ne!(t.accent, Color::Reset);
+        // Verify accent is the FFE light teal (#2A9D84)
+        assert_eq!(t.accent, Color::Rgb(42, 157, 132));
+    }
+
+    #[test]
     fn test_by_name_unknown_returns_none() {
         assert!(Theme::by_name("nonexistent").is_none());
     }
@@ -405,7 +426,7 @@ mod tests {
     #[test]
     fn test_available_names_not_empty() {
         let names = Theme::available_names();
-        assert_eq!(names.len(), 19);
+        assert_eq!(names.len(), 21);
         assert!(names.contains(&"dark"));
         assert!(names.contains(&"light"));
         assert!(names.contains(&"catppuccin-mocha"));
@@ -415,6 +436,8 @@ mod tests {
         assert!(names.contains(&"one-dark"));
         assert!(names.contains(&"rose-pine"));
         assert!(names.contains(&"everforest-dark"));
+        assert!(names.contains(&"ffe-dark"));
+        assert!(names.contains(&"ffe-light"));
     }
 
     #[test]

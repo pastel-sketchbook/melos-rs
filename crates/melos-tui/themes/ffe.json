@@ -1,0 +1,55 @@
+{
+  "name": "Fuzzy Find Everything",
+  "themes": [
+    {
+      "name": "FFE Dark",
+      "mode": "dark",
+      "colors": {
+        "accent": "#4FD6BE",
+        "text": "#D8DEE9",
+        "text_muted": "#6C7086",
+        "text_secondary": "#9BA2AF",
+        "header": "#E5C07B",
+        "success": "#A1EFD3",
+        "error": "#FF757F",
+        "highlight_bg": "#3B4252",
+        "highlight_fg": "#D8DEE9",
+        "pkg_color_0": "#4FD6BE",
+        "pkg_color_1": "#A1EFD3",
+        "pkg_color_2": "#E5C07B",
+        "pkg_color_3": "#89DCEB",
+        "pkg_color_4": "#F28FAD",
+        "pkg_color_5": "#FF757F",
+        "pkg_color_6": "#F0A988",
+        "pkg_color_7": "#72E0CC",
+        "pkg_color_8": "#F0D090",
+        "pkg_color_9": "#A6E5F0"
+      }
+    },
+    {
+      "name": "FFE Light",
+      "mode": "light",
+      "colors": {
+        "accent": "#2A9D84",
+        "text": "#1E232B",
+        "text_muted": "#7C8496",
+        "text_secondary": "#4A5060",
+        "header": "#B8920D",
+        "success": "#1A8A6E",
+        "error": "#C9434E",
+        "highlight_bg": "#D8D0C5",
+        "highlight_fg": "#1E232B",
+        "pkg_color_0": "#2A9D84",
+        "pkg_color_1": "#1A8A6E",
+        "pkg_color_2": "#B8920D",
+        "pkg_color_3": "#3A8EA4",
+        "pkg_color_4": "#C0587A",
+        "pkg_color_5": "#C9434E",
+        "pkg_color_6": "#C07920",
+        "pkg_color_7": "#1E7360",
+        "pkg_color_8": "#8A6E0A",
+        "pkg_color_9": "#2A6878"
+      }
+    }
+  ]
+}
