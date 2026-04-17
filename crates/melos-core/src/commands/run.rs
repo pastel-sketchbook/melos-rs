@@ -45,33 +45,33 @@ pub fn parse_exec_flags(command: &str) -> ExecFlags {
     let mut i = 0;
     while i < parts.len() {
         match parts[i] {
-            "-c" | "--concurrency" => {
-                if i + 1 < parts.len() {
-                    if let Ok(n) = parts[i + 1].parse::<usize>() {
-                        flags.concurrency = n;
-                    }
-                    i += 1;
+            "-c" | "--concurrency"
+                if i + 1 < parts.len() =>
+            {
+                if let Ok(n) = parts[i + 1].parse::<usize>() {
+                    flags.concurrency = n;
                 }
+                i += 1;
             }
             "--fail-fast" => flags.fail_fast = true,
             "--order-dependents" => flags.order_dependents = true,
             "--dry-run" => flags.dry_run = true,
-            "--timeout" => {
-                if i + 1 < parts.len() {
-                    if let Ok(secs) = parts[i + 1].parse::<u64>()
-                        && secs > 0
-                    {
-                        flags.timeout = Some(Duration::from_secs(secs));
-                    }
-                    i += 1;
+            "--timeout"
+                if i + 1 < parts.len() =>
+            {
+                if let Ok(secs) = parts[i + 1].parse::<u64>()
+                    && secs > 0
+                {
+                    flags.timeout = Some(Duration::from_secs(secs));
                 }
+                i += 1;
             }
-            "--file-exists" => {
+            "--file-exists"
                 // Space-separated form: --file-exists pubspec.yaml
-                if i + 1 < parts.len() {
-                    flags.file_exists = Some(strip_outer_quotes(parts[i + 1]).to_string());
-                    i += 1;
-                }
+                if i + 1 < parts.len() =>
+            {
+                flags.file_exists = Some(strip_outer_quotes(parts[i + 1]).to_string());
+                i += 1;
             }
             s if s.starts_with("--file-exists=") => {
                 // Equals form: --file-exists="pubspec.yaml" or --file-exists=pubspec.yaml
