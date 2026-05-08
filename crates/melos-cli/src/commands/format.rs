@@ -19,16 +19,50 @@ pub struct FormatArgs {
     #[arg(long)]
     pub set_exit_if_changed: bool,
 
-    /// Output format: write (default), json, none
-    #[arg(short, long, default_value = "write")]
-    pub output: String,
+    /// Output format: write, json, none (defaults to config value or "write")
+    #[arg(short, long)]
+    pub output: Option<String>,
 
-    /// Line length (default: 80)
+    /// Line length (defaults to config value or dart format default)
     #[arg(short = 'l', long)]
     pub line_length: Option<u32>,
 
     #[command(flatten)]
     pub filters: GlobalFilterArgs,
+}
+
+/// Resolve format options by merging CLI args over config defaults.
+///
+/// Priority: CLI flag > `command.format` config > built-in default.
+fn resolve_format_opts(workspace: &Workspace, args: &FormatArgs) -> FormatOpts {
+    let cfg = workspace
+        .config
+        .command
+        .as_ref()
+        .and_then(|c| c.format.as_ref());
+
+    let set_exit_if_changed = if args.set_exit_if_changed {
+        true
+    } else {
+        cfg.and_then(|c| c.set_exit_if_changed).unwrap_or(false)
+    };
+
+    let output = args
+        .output
+        .clone()
+        .or_else(|| cfg.and_then(|c| c.output.clone()))
+        .unwrap_or_else(|| "write".to_string());
+
+    let line_length = args
+        .line_length
+        .or_else(|| cfg.and_then(|c| c.line_length));
+
+    FormatOpts {
+        concurrency: args.concurrency,
+        set_exit_if_changed,
+        output,
+        line_length,
+    }
 }
 
 /// Format Dart code across all matching packages using `dart format`
@@ -41,28 +75,28 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
         &workspace.config.categories,
     )?;
 
+    if packages.is_empty() {
+        println!("{}", "No packages matched the given filters.".yellow());
+        return Ok(());
+    }
+
+    if let Some(pre_hook) = workspace.hook("format", "pre") {
+        crate::runner::run_lifecycle_hook(pre_hook, "pre-format", &workspace.root_path, &[])
+            .await?;
+    }
+
     println!(
         "\n{} Formatting {} packages...\n",
         "$".cyan(),
         packages.len()
     );
 
-    if packages.is_empty() {
-        println!("{}", "No packages matched the given filters.".yellow());
-        return Ok(());
-    }
-
     for pkg in &packages {
         println!("  {} {}", "->".cyan(), pkg.name);
     }
     println!();
 
-    let opts = FormatOpts {
-        concurrency: args.concurrency,
-        set_exit_if_changed: args.set_exit_if_changed,
-        output: args.output.clone(),
-        line_length: args.line_length,
-    };
+    let opts = resolve_format_opts(workspace, &args);
 
     let (tx, render_handle) = crate::render::spawn_renderer(packages.len(), "formatting");
     let results = melos_core::commands::format::run(&packages, workspace, &opts, Some(&tx)).await?;
@@ -73,7 +107,7 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
     let passed = results.passed();
 
     if failed > 0 {
-        if args.set_exit_if_changed {
+        if opts.set_exit_if_changed {
             anyhow::bail!(
                 "{} package(s) have formatting changes ({} passed). Run `melos-rs format` to fix.",
                 failed,
@@ -91,5 +125,11 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
         "\n{}",
         format!("All {} package(s) passed formatting.", passed).green()
     );
+
+    if let Some(post_hook) = workspace.hook("format", "post") {
+        crate::runner::run_lifecycle_hook(post_hook, "post-format", &workspace.root_path, &[])
+            .await?;
+    }
+
     Ok(())
 }

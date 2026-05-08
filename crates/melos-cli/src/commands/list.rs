@@ -285,6 +285,7 @@ mod tests {
                 packages: packages.clone(),
                 sdk_path: None,
                 warnings: vec![],
+                melos_overrides: melos_core::workspace::MelosOverrides::default(),
             },
             false,
         );

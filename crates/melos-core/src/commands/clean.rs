@@ -299,6 +299,7 @@ mod tests {
             packages: vec![pkg.clone()],
             sdk_path: None,
             warnings: vec![],
+            melos_overrides: crate::workspace::MelosOverrides::default(),
         };
 
         let opts = CleanOpts { concurrency: 1 };

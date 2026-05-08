@@ -454,6 +454,9 @@ pub struct CommandConfig {
     /// Test command config
     pub test: Option<TestCommandConfig>,
 
+    /// Format command config (Melos v6.1.0, #709)
+    pub format: Option<FormatCommandConfig>,
+
     /// Build command config (beyond Melos parity — see docs/rationale/0004)
     pub build: Option<BuildCommandConfig>,
 }
@@ -794,6 +797,38 @@ pub struct CleanHooks {
     pub pre: Option<String>,
 
     /// Script to run after cleaning
+    pub post: Option<String>,
+}
+
+/// Configuration for the `format` command (Melos v6.1.0, #709).
+///
+/// Provides workspace-wide defaults for `melos-rs format` flags so users
+/// don't have to repeat them on every invocation. CLI flags take precedence
+/// over config values when explicitly provided.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FormatCommandConfig {
+    /// Default value for `--line-length` (e.g. 80, 100, 120)
+    pub line_length: Option<u32>,
+
+    /// Default value for `--set-exit-if-changed` (CI mode)
+    pub set_exit_if_changed: Option<bool>,
+
+    /// Default value for `--output` (`write`, `json`, `none`)
+    pub output: Option<String>,
+
+    /// Lifecycle hooks (pre/post)
+    pub hooks: Option<FormatHooks>,
+}
+
+/// Hooks for the format command
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormatHooks {
+    /// Script to run before formatting
+    pub pre: Option<String>,
+
+    /// Script to run after formatting
     pub post: Option<String>,
 }
 
@@ -2050,5 +2085,68 @@ command:
         let hooks = publish.hooks.unwrap();
         assert_eq!(hooks.pre.as_deref(), Some("echo pre-publish"));
         assert_eq!(hooks.post.as_deref(), Some("echo post-publish"));
+    }
+
+    // -----------------------------------------------------------------------
+    // FormatCommandConfig parsing (Batch 56, Melos v6.1.0 #709)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_format_command_config_full() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  format:
+    lineLength: 120
+    setExitIfChanged: true
+    output: json
+    hooks:
+      pre: echo pre-format
+      post: echo post-format
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let fmt = config.command.unwrap().format.unwrap();
+        assert_eq!(fmt.line_length, Some(120));
+        assert_eq!(fmt.set_exit_if_changed, Some(true));
+        assert_eq!(fmt.output.as_deref(), Some("json"));
+        let hooks = fmt.hooks.unwrap();
+        assert_eq!(hooks.pre.as_deref(), Some("echo pre-format"));
+        assert_eq!(hooks.post.as_deref(), Some("echo post-format"));
+    }
+
+    #[test]
+    fn test_parse_format_command_config_minimal() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  format:
+    lineLength: 80
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let fmt = config.command.unwrap().format.unwrap();
+        assert_eq!(fmt.line_length, Some(80));
+        assert_eq!(fmt.set_exit_if_changed, None);
+        assert_eq!(fmt.output, None);
+        assert!(fmt.hooks.is_none());
+    }
+
+    #[test]
+    fn test_parse_format_command_config_absent() {
+        let yaml = r#"
+name: test_project
+packages:
+  - packages/**
+command:
+  bootstrap:
+    hooks:
+      pre: echo hi
+"#;
+        let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
+        let cmd = config.command.unwrap();
+        assert!(cmd.format.is_none());
     }
 }

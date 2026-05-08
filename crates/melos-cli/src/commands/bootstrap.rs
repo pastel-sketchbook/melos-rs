@@ -83,6 +83,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
                 &workspace.packages,
                 &override_paths,
                 &workspace.root_path,
+                &workspace.melos_overrides.dependency_overrides,
             )?;
 
             for warning in &result.warnings {
@@ -161,6 +162,23 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
         );
     }
 
+    // Detect git dependency ref changes and invalidate caches (Melos v7.0.0-dev.3, #659)
+    let (git_changed, git_snapshot) =
+        melos_core::commands::bootstrap::detect_git_dep_changes(&packages, &workspace.root_path);
+    if !git_changed.is_empty() {
+        println!(
+            "  {} Git dependency refs changed in {} package{}, clearing cache...",
+            "i".blue(),
+            git_changed.len(),
+            if git_changed.len() == 1 { "" } else { "s" }
+        );
+        for pkg_name in &git_changed {
+            if let Some(pkg) = packages.iter().find(|p| p.name == *pkg_name) {
+                melos_core::commands::bootstrap::invalidate_package_cache(pkg)?;
+            }
+        }
+    }
+
     let flutter_cmd = build_pub_get_command("flutter", enforce_lockfile, args.no_example, offline);
     let dart_cmd = build_pub_get_command("dart", enforce_lockfile, args.no_example, offline);
 
@@ -229,6 +247,14 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 
     if let Some(msg) = bail_msg {
         anyhow::bail!(msg);
+    }
+
+    // Save git dep snapshot after successful bootstrap
+    if !git_snapshot.is_empty() {
+        melos_core::commands::bootstrap::save_git_deps_snapshot(
+            &workspace.root_path,
+            &git_snapshot,
+        )?;
     }
 
     if let Some(post_hook) = workspace.hook("bootstrap", "post") {

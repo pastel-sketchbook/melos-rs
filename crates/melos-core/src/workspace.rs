@@ -6,6 +6,16 @@ use anyhow::{Context, Result};
 use crate::config::{self, ConfigSource, MelosConfig};
 use crate::package::{self, Package};
 
+/// Raw dependency override entries loaded from `melos_overrides.yaml`.
+///
+/// Each key is a package name, and the value is the YAML representation
+/// (e.g. `{ path: ../some/path }` or `{ git: { url: ... } }`).
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct MelosOverrides {
+    #[serde(default)]
+    pub dependency_overrides: HashMap<String, yaml_serde::Value>,
+}
+
 /// Represents a Melos workspace with its config and discovered packages
 pub struct Workspace {
     /// Absolute path to the workspace root (where config file lives)
@@ -27,6 +37,10 @@ pub struct Workspace {
     /// workspace discovery, useRootAsPackage issues). The caller is responsible
     /// for presenting these to the user.
     pub warnings: Vec<String>,
+
+    /// Overrides loaded from `melos_overrides.yaml` at the workspace root.
+    /// Merged into every generated `pubspec_overrides.yaml` during bootstrap.
+    pub melos_overrides: MelosOverrides,
 }
 
 impl Workspace {
@@ -114,6 +128,9 @@ impl Workspace {
             .or_else(|| std::env::var("MELOS_SDK_PATH").ok())
             .or_else(|| config.sdk_path.clone());
 
+        // Load melos_overrides.yaml if present at workspace root
+        let melos_overrides = load_melos_overrides(&root_path);
+
         Ok(Workspace {
             root_path,
             config_source,
@@ -121,12 +138,13 @@ impl Workspace {
             packages,
             sdk_path,
             warnings,
+            melos_overrides,
         })
     }
 
     /// Extract a lifecycle hook command for a given command and phase.
     ///
-    /// `command` is one of `"bootstrap"`, `"build"`, `"clean"`, `"test"`, `"publish"`.
+    /// `command` is one of `"bootstrap"`, `"build"`, `"clean"`, `"format"`, `"test"`, `"publish"`.
     /// `phase` is `"pre"` or `"post"`.
     ///
     /// Returns `None` if no hook is configured for the given command/phase.
@@ -177,6 +195,14 @@ impl Workspace {
                     _ => None,
                 }
             }
+            "format" => {
+                let h = cmd.format.as_ref()?.hooks.as_ref()?;
+                match phase {
+                    "pre" => h.pre.as_deref(),
+                    "post" => h.post.as_deref(),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -215,6 +241,38 @@ impl Workspace {
             env.insert("PATH".to_string(), new_path);
         }
         env
+    }
+}
+
+/// Load `melos_overrides.yaml` from the workspace root, if it exists.
+///
+/// Returns a default (empty) `MelosOverrides` if the file is absent or
+/// cannot be parsed (a warning is logged to stderr in the latter case).
+fn load_melos_overrides(root_path: &Path) -> MelosOverrides {
+    let path = root_path.join("melos_overrides.yaml");
+    if !path.exists() {
+        return MelosOverrides::default();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => match yaml_serde::from_str::<MelosOverrides>(&content) {
+            Ok(overrides) => overrides,
+            Err(e) => {
+                eprintln!(
+                    "Warning: failed to parse {}: {}",
+                    path.display(),
+                    e
+                );
+                MelosOverrides::default()
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "Warning: failed to read {}: {}",
+                path.display(),
+                e
+            );
+            MelosOverrides::default()
+        }
     }
 }
 
@@ -363,7 +421,8 @@ mod tests {
 
     use crate::config::{
         BootstrapCommandConfig, BootstrapHooks, CleanCommandConfig, CleanHooks, CommandConfig,
-        MelosConfig, PublishCommandConfig, PublishHooks, TestCommandConfig, TestHooks,
+        FormatCommandConfig, FormatHooks, MelosConfig, PublishCommandConfig, PublishHooks,
+        TestCommandConfig, TestHooks,
     };
 
     /// Helper to build a minimal workspace with optional command config.
@@ -386,6 +445,7 @@ mod tests {
             packages: vec![],
             sdk_path: None,
             warnings: vec![],
+            melos_overrides: MelosOverrides::default(),
         }
     }
 
@@ -528,6 +588,7 @@ mod tests {
             clean: None,
             publish: None,
             test: None,
+            format: None,
         }));
         assert_eq!(ws.hook("bootstrap", "pre"), Some("echo pre-bootstrap"));
         assert!(ws.hook("bootstrap", "post").is_none());
@@ -547,6 +608,7 @@ mod tests {
             }),
             publish: None,
             test: None,
+            format: None,
         }));
         assert!(ws.hook("clean", "pre").is_none());
         assert_eq!(ws.hook("clean", "post"), Some("echo post-clean"));
@@ -566,6 +628,7 @@ mod tests {
                     post: Some("echo post-test".to_string()),
                 }),
             }),
+            format: None,
         }));
         assert_eq!(ws.hook("test", "pre"), Some("echo pre-test"));
         assert_eq!(ws.hook("test", "post"), Some("echo post-test"));
@@ -585,6 +648,7 @@ mod tests {
                 }),
             }),
             test: None,
+            format: None,
         }));
         assert_eq!(ws.hook("publish", "pre"), Some("echo pre-publish"));
         assert!(ws.hook("publish", "post").is_none());
@@ -599,6 +663,7 @@ mod tests {
             clean: None,
             publish: None,
             test: None,
+            format: None,
         }));
         assert!(ws.hook("unknown", "pre").is_none());
     }
@@ -617,6 +682,7 @@ mod tests {
             }),
             publish: None,
             test: None,
+            format: None,
         }));
         assert!(ws.hook("clean", "during").is_none());
     }
@@ -630,9 +696,33 @@ mod tests {
             clean: Some(CleanCommandConfig { hooks: None }),
             publish: None,
             test: None,
+            format: None,
         }));
         assert!(ws.hook("clean", "pre").is_none());
         assert!(ws.hook("clean", "post").is_none());
+    }
+
+    #[test]
+    fn test_hook_format_both() {
+        let ws = make_workspace_with_commands(Some(CommandConfig {
+            version: None,
+            bootstrap: None,
+            build: None,
+            clean: None,
+            publish: None,
+            test: None,
+            format: Some(FormatCommandConfig {
+                line_length: None,
+                set_exit_if_changed: None,
+                output: None,
+                hooks: Some(FormatHooks {
+                    pre: Some("echo pre-format".to_string()),
+                    post: Some("echo post-format".to_string()),
+                }),
+            }),
+        }));
+        assert_eq!(ws.hook("format", "pre"), Some("echo pre-format"));
+        assert_eq!(ws.hook("format", "post"), Some("echo post-format"));
     }
 
     // -----------------------------------------------------------------------

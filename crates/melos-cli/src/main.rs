@@ -216,7 +216,7 @@ fn command_has_builtin_flags(command: &Commands) -> bool {
         }
         Commands::Clean(args) => args.deep || args.dry_run,
         Commands::Format(args) => {
-            args.set_exit_if_changed || args.line_length.is_some() || args.output != "write"
+            args.set_exit_if_changed || args.line_length.is_some() || args.output.is_some()
         }
         Commands::Test(args) => {
             args.fail_fast

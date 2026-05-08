@@ -1423,22 +1423,15 @@ upstream CHANGELOG end-to-end.
   no HTTP client wired up for this.
 
 #### Bootstrap
-- [ ] **`format` command config block** (Melos v6.1.0, #709) — workspace
-  defaults (e.g. `lineLength`, `setExitIfChanged`, `output`) under
-  `command.format` so users don't repeat flags on every CLI invocation.
-  Today only `ChangelogFormatConfig` exists in
-  [config/mod.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/config/mod.rs);
-  `FormatCommandConfig` is missing.
+- [ ] **`format` command config block** (Melos v6.1.0, #709) — ~~workspace
+  defaults~~ **done in Batch 56**
 - [ ] **Authenticate against private pub repositories** (Melos v4.0.0, #627) —
   pass `PUB_HOSTED_URL` / inject `pub-tokens.json` style credentials when
   running `pub get`/`pub publish` so corp pub servers work.
 - [ ] **Git dependency comparison on bootstrap** (Melos v7.0.0-dev.3, #659) —
-  detect when a `git:` dep's `ref:` has changed and force a re-fetch; today
-  bootstrap ignores git ref drift.
+  ~~detect when a `git:` dep's `ref:` has changed~~ **done in Batch 56**
 - [ ] **Workspace-level `melos_overrides.yaml` file** (Melos v3.0.0, #410) —
-  companion to `dependencyOverridePaths` (which is wired). Read a top-level
-  `melos_overrides.yaml` at the workspace root and merge its overrides into
-  every generated `pubspec_overrides.yaml`.
+  ~~companion to `dependencyOverridePaths`~~ **done in Batch 56**
 
 #### Exec / runner
 - [ ] **Run examples from their own directory** (Melos v7.0.0-dev.3, #834) —
@@ -1502,34 +1495,41 @@ and [crates/melos-cli/src/commands/version.rs](file:///Users/AD9C65/projects/pas
 - [x] `task check:all` passes — 584 tests (33 CLI unit + 26 integration +
   525 core unit), zero clippy warnings
 
-#### Batch 56 — Bootstrap & format config parity
+#### Batch 56 — Bootstrap & format config parity (done)
 
 Three independent gaps unified by their config-block nature.
 
-- [ ] `command.format` config block (Melos v6.1.0, #709)
-  - Add `FormatCommandConfig { line_length, set_exit_if_changed, output, hooks }`
-    in [config/mod.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/config/mod.rs)
-  - Wire as `format: Option<FormatCommandConfig>` on `CommandConfig`
-  - In CLI [format.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-cli/src/commands/format.rs)
-    apply config defaults when CLI flags are absent (CLI > config priority)
-  - `Workspace::hook("format", "pre"/"post")` extension
-  - Tests: parse full + minimal config, CLI overrides config, hook extraction
-- [ ] Workspace-level `melos_overrides.yaml` (Melos v3.0.0, #410)
-  - Define `MelosOverridesYaml { dependency_overrides: HashMap<String, YamlValue> }`
-  - Load alongside `Workspace::find_and_load()` if file exists at workspace root
-  - Merge into every `pubspec_overrides.yaml` produced by
-    `generate_pubspec_overrides()` in
-    [bootstrap.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/commands/bootstrap.rs)
-  - Tests: file absent (no-op), file present (merged into overrides),
-    conflict precedence (workspace siblings > melos_overrides > deps)
-- [ ] Git dependency ref comparison on bootstrap (Melos v7.0.0-dev.3, #659)
-  - For each package's `dependencies` with `git: { url, ref }`, hash the
-    `(url, ref)` pair from pubspec.yaml and compare to last bootstrap stored
-    in `.melos_tool/git_deps.json` (workspace root)
-  - On mismatch: delete `.dart_tool/package_config.json` for that package
-    before `pub get` to force re-resolution
-  - Tests: no git deps (no-op), changed ref (cache cleared), unchanged
-    (cache preserved)
+- [x] `command.format` config block (Melos v6.1.0, #709)
+  - Added `FormatCommandConfig { line_length, set_exit_if_changed, output, hooks }`
+    and `FormatHooks` in config/mod.rs
+  - Wired as `format: Option<FormatCommandConfig>` on `CommandConfig`
+  - CLI format.rs: `resolve_format_opts()` merges config defaults when CLI
+    flags are absent (CLI > config > built-in default). Changed `--output`
+    from `default_value = "write"` to `Option<String>` for proper fallback.
+  - `Workspace::hook("format", "pre"/"post")` added to hook dispatch
+  - Pre/post lifecycle hooks called in CLI format handler
+  - Tests: 3 config parsing tests (full, minimal, absent) + 1 format hook test
+- [x] Workspace-level `melos_overrides.yaml` (Melos v3.0.0, #410)
+  - Defined `MelosOverrides { dependency_overrides: HashMap<String, Value> }`
+    in workspace.rs with serde deserialization
+  - Loaded in `Workspace::find_and_load()` via `load_melos_overrides()` —
+    gracefully defaults to empty on absent/malformed file
+  - Merged into every `pubspec_overrides.yaml` via updated
+    `build_pubspec_overrides_content()` — sibling overrides take precedence
+  - Tests: 3 load tests (absent, present, malformed) + 3 merge tests
+    (with overrides, sibling precedence, only melos_overrides)
+- [x] Git dependency ref comparison on bootstrap (Melos v7.0.0-dev.3, #659)
+  - `extract_git_deps()` parses `git: { url, ref }` entries from pubspec.yaml
+  - `detect_git_dep_changes()` compares current vs saved snapshot in
+    `.melos_tool/git_deps.json`
+  - `invalidate_package_cache()` removes `.dart_tool/package_config.json` on
+    mismatch to force `pub get` re-resolution
+  - CLI bootstrap handler: detects changes before pub get, saves snapshot
+    after successful bootstrap
+  - Tests: 6 tests (no git deps, found, new entry, unchanged, ref changed,
+    cache invalidation)
+- [x] `cargo clippy -- -D warnings` passes, zero warnings
+- [x] 564 tests (538 unit + 26 integration)
 
 #### Batch 57 — Runner correctness fixes
 
