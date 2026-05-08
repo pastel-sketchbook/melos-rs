@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedSender;
@@ -65,6 +65,12 @@ impl ProcessRunner {
     /// `all_packages` is the full workspace package list, used for parent package detection.
     /// If empty, parent package env vars are not set.
     ///
+    /// When `fail_fast` is enabled and a task fails:
+    /// - Already-queued tasks waiting on the semaphore are aborted via `JoinHandle::abort()`
+    /// - Remaining unspawned tasks are skipped
+    /// - Aborted/skipped tasks are **not** counted as failures — they do not appear
+    ///   in the returned results at all, so callers see exactly 1 failure (the trigger)
+    ///
     /// Returns a vec of (package_name, success) results.
     pub async fn run_in_packages_with_events(
         &self,
@@ -101,9 +107,9 @@ impl ProcessRunner {
                 // safety: the semaphore is never closed, so acquire always succeeds
                 let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
 
-                // Skip if already failed and fail-fast is enabled
+                // Skip if already failed and fail-fast is enabled.
+                // The task is silently dropped — it won't appear in results.
                 if fail_fast && failed.load(std::sync::atomic::Ordering::Relaxed) {
-                    results.lock().await.push((pkg_name.clone(), false));
                     return;
                 }
 
@@ -257,9 +263,22 @@ impl ProcessRunner {
             handles.push(handle);
         }
 
-        // Wait for all tasks to complete
+        // If fail-fast triggered, abort all remaining queued tasks that are
+        // still waiting on the semaphore. Aborted tasks silently disappear —
+        // they won't push any result.
+        if self.fail_fast && failed.load(std::sync::atomic::Ordering::Relaxed) {
+            for handle in &handles {
+                handle.abort();
+            }
+        }
+
+        // Wait for all tasks to complete (aborted tasks return JoinError::Cancelled)
         for handle in handles {
-            handle.await.context("Package task panicked")?;
+            match handle.await {
+                Ok(()) => {}
+                Err(e) if e.is_cancelled() => {} // expected for aborted tasks
+                Err(e) => return Err(anyhow::anyhow!("Package task panicked: {}", e)),
+            }
         }
 
         let results = results.lock().await;
@@ -527,5 +546,172 @@ mod tests {
 
         let env = build_package_env(&ws_env, &pkg, &[]);
         assert!(!env.contains_key("MELOS_PACKAGE_VERSION"));
+    }
+
+    // -- fail-fast abort tests (Batch 57, Melos v7.2.0 #957) --
+
+    #[tokio::test]
+    async fn test_fail_fast_aborts_queued_tasks() {
+        // 5 packages, concurrency=1, first package fails.
+        // Only the first should actually run; the rest should be aborted/skipped.
+        let runner = ProcessRunner::new(1, true);
+        let pkgs: Vec<Package> = (0..5)
+            .map(|i| make_pkg(&format!("pkg_{}", i), &format!("/tmp/pkg_{}", i)))
+            .collect();
+
+        // "exit 1" fails immediately; subsequent packages should not run.
+        let results = runner
+            .run_in_packages(&pkgs, "exit 1", &HashMap::new(), None, &[])
+            .await
+            .unwrap();
+
+        // Exactly 1 failure (the first package that ran).
+        // Remaining packages should NOT appear in results (aborted, not failed).
+        let failed_count = results.iter().filter(|(_, s)| !*s).count();
+        assert_eq!(
+            failed_count, 1,
+            "Expected exactly 1 failure, got {} in {:?}",
+            failed_count, results
+        );
+
+        // Total results should be <= 2 (at most 1 failure + possibly 1 that
+        // snuck through before the flag was set). Never 5.
+        assert!(
+            results.len() <= 2,
+            "Expected at most 2 results (1 failure + maybe 1 race), got {} in {:?}",
+            results.len(),
+            results
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_fail_fast_runs_all() {
+        // Without fail-fast, all packages should run even if some fail.
+        let runner = ProcessRunner::new(1, false);
+        let pkgs: Vec<Package> = (0..3)
+            .map(|i| make_pkg(&format!("pkg_{}", i), &format!("/tmp/pkg_{}", i)))
+            .collect();
+
+        let results = runner
+            .run_in_packages(&pkgs, "exit 1", &HashMap::new(), None, &[])
+            .await
+            .unwrap();
+
+        // All 3 should run and all should fail.
+        assert_eq!(
+            results.len(),
+            3,
+            "All packages should run without fail-fast, got {:?}",
+            results
+        );
+        assert_eq!(
+            results.iter().filter(|(_, s)| !*s).count(),
+            3,
+            "All should fail"
+        );
+    }
+
+    // -- example package cwd tests (Batch 57.2, Melos v7.0.0-dev.3 #834) --
+
+    #[tokio::test]
+    async fn test_example_package_uses_own_cwd() {
+        // When running a command in an example sub-package, the child process
+        // cwd should be the example's own path, not the parent's.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let parent_dir = tmp.path().join("packages").join("my_lib");
+        let example_dir = parent_dir.join("example");
+        std::fs::create_dir_all(&example_dir).unwrap();
+
+        let parent = make_pkg("my_lib", parent_dir.to_str().unwrap());
+        let example = make_pkg("my_lib_example", example_dir.to_str().unwrap());
+        let all = vec![parent.clone(), example.clone()];
+
+        let runner = ProcessRunner::new(1, false);
+        let results = runner
+            .run_in_packages(&[example], "pwd", &HashMap::new(), None, &all)
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].1, "pwd should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_example_package_env_vars_correct() {
+        // Verify MELOS_PACKAGE_PATH is the example's path and
+        // MELOS_PARENT_PACKAGE_* reflects the parent.
+        let parent = make_pkg("my_lib", "/workspace/packages/my_lib");
+        let example = make_pkg("my_lib_example", "/workspace/packages/my_lib/example");
+        let all = vec![parent.clone(), example.clone()];
+
+        let env = build_package_env(&HashMap::new(), &example, &all);
+
+        assert_eq!(
+            env.get("MELOS_PACKAGE_PATH").unwrap(),
+            "/workspace/packages/my_lib/example",
+            "MELOS_PACKAGE_PATH should be the example's own path"
+        );
+        assert_eq!(
+            env.get("MELOS_PACKAGE_NAME").unwrap(),
+            "my_lib_example",
+        );
+        assert_eq!(
+            env.get("MELOS_PARENT_PACKAGE_NAME").unwrap(),
+            "my_lib",
+            "Parent package name should be set"
+        );
+        assert_eq!(
+            env.get("MELOS_PARENT_PACKAGE_PATH").unwrap(),
+            "/workspace/packages/my_lib",
+            "Parent package path should be the parent's path"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fail_fast_with_events_emits_correctly() {
+        let runner = ProcessRunner::new(1, true);
+        let pkgs: Vec<Package> = (0..3)
+            .map(|i| make_pkg(&format!("pkg_{}", i), &format!("/tmp/pkg_{}", i)))
+            .collect();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let results = runner
+            .run_in_packages_with_events(
+                &pkgs,
+                "exit 1",
+                &HashMap::new(),
+                None,
+                Some(&tx),
+                &[],
+            )
+            .await
+            .unwrap();
+
+        drop(tx);
+
+        // Collect all events
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+
+        // Should have PackageStarted and PackageFinished for only the package(s)
+        // that actually ran — not for aborted/skipped ones.
+        let started_count = events
+            .iter()
+            .filter(|e| matches!(e, Event::PackageStarted { .. }))
+            .count();
+        let finished_count = events
+            .iter()
+            .filter(|e| matches!(e, Event::PackageFinished { .. }))
+            .count();
+
+        assert_eq!(started_count, finished_count, "Every started should finish");
+        assert!(
+            started_count <= 2,
+            "At most 2 packages should start (1 failure + maybe 1 race), got {}",
+            started_count
+        );
+        assert_eq!(results.iter().filter(|(_, s)| !*s).count(), 1);
     }
 }

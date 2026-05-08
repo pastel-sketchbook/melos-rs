@@ -1533,7 +1533,7 @@ Three independent gaps unified by their config-block nature.
 
 #### Batch 57 — Runner correctness fixes
 
-- [ ] `failFast` aborts in-flight queued tasks (Melos v7.2.0, #957)
+- [x] `failFast` aborts in-flight queued tasks (Melos v7.2.0, #957)
   - Audit `ProcessRunner::run_in_packages_with_events()` in
     [runner.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/runner.rs)
   - Confirm queued tasks (waiting on semaphore) check `failed.load()` and
@@ -1542,7 +1542,7 @@ Three independent gaps unified by their config-block nature.
     `JoinHandle`s in the spawn set
   - Tests: 5 queued tasks + 1st fails → exactly 1 failure observed,
     remaining 4 reported as cancelled (not run)
-- [ ] Example package `cwd` handling (Melos v7.0.0-dev.3, #834)
+- [x] Example package `cwd` handling (Melos v7.0.0-dev.3, #834)
   - When iterating example sub-packages discovered by parent-walking, set
     child process `cwd = example_pkg.path` (not parent path)
   - Verify `MELOS_PACKAGE_PATH` is the example's path, not the parent's

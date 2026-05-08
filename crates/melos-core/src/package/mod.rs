@@ -759,6 +759,42 @@ mod tests {
     }
 
     #[test]
+    fn test_discover_finds_example_sub_packages() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Parent package
+        let parent_dir = root.join("packages").join("my_lib");
+        fs::create_dir_all(&parent_dir).unwrap();
+        fs::write(
+            parent_dir.join("pubspec.yaml"),
+            "name: my_lib\nversion: 1.0.0\n",
+        )
+        .unwrap();
+
+        // Example sub-package inside parent
+        let example_dir = parent_dir.join("example");
+        fs::create_dir_all(&example_dir).unwrap();
+        fs::write(
+            example_dir.join("pubspec.yaml"),
+            "name: my_lib_example\nversion: 1.0.0\n",
+        )
+        .unwrap();
+
+        let packages = discover_packages(root, &["packages/**".to_string()]).unwrap();
+        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"my_lib"), "parent should be found");
+        assert!(
+            names.contains(&"my_lib_example"),
+            "example sub-package should be found with ** glob"
+        );
+
+        // Verify example package has its own path, not the parent's
+        let example_pkg = packages.iter().find(|p| p.name == "my_lib_example").unwrap();
+        assert_eq!(example_pkg.path, example_dir);
+    }
+
+    #[test]
     fn test_discover_excludes_multiple_artifact_dirs() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
