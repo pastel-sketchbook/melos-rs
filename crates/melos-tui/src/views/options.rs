@@ -15,20 +15,20 @@ use crate::app::{App, OptionRow};
 /// with +/- hints. The last row is a "Run" action button.
 pub fn draw_options(frame: &mut Frame, area: Rect, app: &App) {
     let theme = &app.theme;
-    let opts = match &app.command_opts {
-        Some(o) => o,
-        None => return,
+    let Some(opts) = &app.command_opts else {
+        return;
     };
 
     let cmd_name = app
         .command_rows
         .get(app.selected_command)
-        .map(|c| c.name.as_str())
-        .unwrap_or("command");
+        .map_or("command", |c| c.name.as_str());
 
     let rows = opts.option_rows();
     // Popup height: border (2) + title line (0, in border) + rows + 1 empty + 1 run button + 1 hint.
     let content_lines = rows.len() + 3;
+    // safety: content_lines is a small count of UI rows, fits in u16
+    #[allow(clippy::cast_possible_truncation)]
     let popup_height = (content_lines as u16 + 2).min(area.height);
     let popup_width = 44.min(area.width);
 

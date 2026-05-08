@@ -79,8 +79,7 @@ impl Workspace {
                 // Re-sort after adding nested packages
                 packages.sort_by(|a, b| a.name.cmp(&b.name));
                 warnings.push(format!(
-                    "Discovered {} package(s) from nested workspaces",
-                    new_count
+                    "Discovered {new_count} package(s) from nested workspaces"
                 ));
             }
         }
@@ -98,8 +97,7 @@ impl Workspace {
                     }
                     Err(e) => {
                         warnings.push(format!(
-                            "useRootAsPackage is enabled but root pubspec.yaml could not be parsed: {}",
-                            e
+                            "useRootAsPackage is enabled but root pubspec.yaml could not be parsed: {e}"
                         ));
                     }
                 }
@@ -116,15 +114,14 @@ impl Workspace {
             packages.retain(|pkg| {
                 !ignore_patterns.iter().any(|pattern| {
                     glob::Pattern::new(pattern)
-                        .map(|p| p.matches(&pkg.name))
-                        .unwrap_or_else(|_| pkg.name.contains(pattern))
+                        .map_or_else(|_| pkg.name.contains(pattern), |p| p.matches(&pkg.name))
                 })
             });
         }
 
         // Resolve SDK path: CLI flag > MELOS_SDK_PATH env var > config sdkPath
         let sdk_path = sdk_path_override
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .or_else(|| std::env::var("MELOS_SDK_PATH").ok())
             .or_else(|| config.sdk_path.clone());
 
@@ -257,20 +254,12 @@ fn load_melos_overrides(root_path: &Path) -> MelosOverrides {
         Ok(content) => match yaml_serde::from_str::<MelosOverrides>(&content) {
             Ok(overrides) => overrides,
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to parse {}: {}",
-                    path.display(),
-                    e
-                );
+                eprintln!("Warning: failed to parse {}: {}", path.display(), e);
                 MelosOverrides::default()
             }
         },
         Err(e) => {
-            eprintln!(
-                "Warning: failed to read {}: {}",
-                path.display(),
-                e
-            );
+            eprintln!("Warning: failed to read {}: {}", path.display(), e);
             MelosOverrides::default()
         }
     }

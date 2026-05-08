@@ -86,6 +86,8 @@ pub fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
     // Blank separator before output log.
     summary_lines.push(Line::from(""));
 
+    // safety: summary has few lines, fits in u16
+    #[allow(clippy::cast_possible_truncation)]
     let summary_height = summary_lines.len() as u16;
 
     // Layout inside the outer border: summary (fixed) + output log (fill).

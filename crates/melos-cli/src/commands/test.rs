@@ -105,12 +105,12 @@ pub async fn run(workspace: &Workspace, args: TestArgs) -> Result<()> {
     let passed = results.passed();
 
     if failed > 0 {
-        anyhow::bail!("{} package(s) failed testing ({} passed)", failed, passed);
+        anyhow::bail!("{failed} package(s) failed testing ({passed} passed)");
     }
 
     println!(
         "\n{}",
-        format!("All {} package(s) passed testing.", passed).green()
+        format!("All {passed} package(s) passed testing.").green()
     );
 
     if let Some(post_hook) = workspace.hook("test", "post") {

@@ -220,19 +220,16 @@ async fn run(
             }
 
             result = recv_core_event(&mut core_rx) => {
-                match result {
-                    Some(core_event) => {
-                        debug!(event = ?core_event, "core event received");
-                        app.handle_core_event(core_event);
-                    }
-                    None => {
-                        // Channel closed: sender dropped. Mark channel as done
-                        // but do NOT await the task handle here -- that would
-                        // block the entire event loop. The separate
-                        // `poll_task_handle` branch will pick it up.
-                        debug!("core event channel closed");
-                        core_rx = None;
-                    }
+                if let Some(core_event) = result {
+                    debug!(event = ?core_event, "core event received");
+                    app.handle_core_event(core_event);
+                } else {
+                    // Channel closed: sender dropped. Mark channel as done
+                    // but do NOT await the task handle here -- that would
+                    // block the entire event loop. The separate
+                    // `poll_task_handle` branch will pick it up.
+                    debug!("core event channel closed");
+                    core_rx = None;
                 }
             }
 

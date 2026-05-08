@@ -75,7 +75,7 @@ const SEPARATOR_WIDTH: usize = 60;
 
 /// Build a separator line: `─── pkg_name ─────────────────`
 fn separator_line(name: &str, color: Color) -> String {
-    let label = format!(" {} ", name);
+    let label = format!(" {name} ");
     let prefix_dashes = 3;
     let suffix_dashes = SEPARATOR_WIDTH.saturating_sub(prefix_dashes + label.len());
     format!(
@@ -111,11 +111,11 @@ async fn render_loop(
                 is_stderr,
             } => {
                 let color = pkg_color(&mut color_map, &mut color_idx, name);
-                let prefix = format!("[{}]", name).color(color).bold();
+                let prefix = format!("[{name}]").color(color).bold();
                 if is_stderr {
-                    eprintln!("{} {}", prefix, line);
+                    eprintln!("{prefix} {line}");
                 } else {
-                    println!("{} {}", prefix, line);
+                    println!("{prefix} {line}");
                 }
             }
             Event::PackageFinished {
@@ -124,7 +124,7 @@ async fn render_loop(
                 duration,
             } => {
                 let color = pkg_color(&mut color_map, &mut color_idx, name);
-                let prefix = format!("[{}]", name).color(color).bold();
+                let prefix = format!("[{name}]").color(color).bold();
                 let elapsed = format!("({:.1}s)", duration.as_secs_f64());
                 if success {
                     println!("{} {} {}", prefix, "SUCCESS".green(), elapsed.dimmed());
@@ -145,7 +145,7 @@ async fn render_loop(
                 eprintln!("{} {}", "WARNING:".yellow().bold(), msg);
             }
             Event::Info(ref msg) => {
-                println!("{}", msg);
+                println!("{msg}");
             }
             Event::CommandStarted { .. } | Event::CommandFinished { .. } => {
                 // Reserved for future use by TUI/JSON frontends

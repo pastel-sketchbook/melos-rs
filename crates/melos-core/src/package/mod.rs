@@ -110,16 +110,12 @@ impl Package {
         // or depends on the `flutter` SDK
         let is_flutter = pubspec.flutter.is_some()
             || dependencies.contains(&"flutter".to_string())
-            || pubspec
-                .dependencies
-                .as_ref()
-                .map(|deps| {
-                    deps.get("flutter").is_some_and(|v| {
-                        // Check for `flutter: sdk: flutter` pattern
-                        v.is_mapping()
-                    })
+            || pubspec.dependencies.as_ref().is_some_and(|deps| {
+                deps.get("flutter").is_some_and(|v| {
+                    // Check for `flutter: sdk: flutter` pattern
+                    v.is_mapping()
                 })
-                .unwrap_or(false);
+            });
 
         Ok(Package {
             name: pubspec.name,
@@ -243,8 +239,8 @@ pub fn discover_packages(root: &Path, patterns: &[String]) -> Result<Vec<Package
     for pattern in patterns {
         let full_pattern = root.join(pattern).display().to_string();
 
-        for entry in glob::glob(&full_pattern)
-            .with_context(|| format!("Invalid glob pattern: {}", pattern))?
+        for entry in
+            glob::glob(&full_pattern).with_context(|| format!("Invalid glob pattern: {pattern}"))?
         {
             let entry_path = entry.with_context(|| "Failed to read glob entry")?;
 
@@ -442,15 +438,21 @@ mod tests {
 
         let pkg = Package::from_path(&pkg_dir).unwrap();
         assert_eq!(
-            pkg.dependency_versions.get("http").map(|s| s.as_str()),
+            pkg.dependency_versions
+                .get("http")
+                .map(std::string::String::as_str),
             Some("^0.13.0")
         );
         assert_eq!(
-            pkg.dependency_versions.get("core").map(|s| s.as_str()),
+            pkg.dependency_versions
+                .get("core")
+                .map(std::string::String::as_str),
             Some("^2.0.0")
         );
         assert_eq!(
-            pkg.dependency_versions.get("test").map(|s| s.as_str()),
+            pkg.dependency_versions
+                .get("test")
+                .map(std::string::String::as_str),
             Some("^1.0.0")
         );
         // flutter SDK dep should have no version constraint
@@ -790,7 +792,10 @@ mod tests {
         );
 
         // Verify example package has its own path, not the parent's
-        let example_pkg = packages.iter().find(|p| p.name == "my_lib_example").unwrap();
+        let example_pkg = packages
+            .iter()
+            .find(|p| p.name == "my_lib_example")
+            .unwrap();
         assert_eq!(example_pkg.path, example_dir);
     }
 
@@ -832,8 +837,7 @@ mod tests {
         assert_eq!(
             names.len(),
             2,
-            "only real packages should be found: {:?}",
-            names
+            "only real packages should be found: {names:?}"
         );
         assert!(names.contains(&"pkg_a"));
         assert!(names.contains(&"pkg_b"));

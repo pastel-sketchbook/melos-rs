@@ -29,7 +29,7 @@ pub fn build_extra_flags(opts: &TestOpts) -> Vec<String> {
     }
 
     if let Some(ref seed) = opts.test_randomize_ordering_seed {
-        flags.push(format!("--test-randomize-ordering-seed={}", seed));
+        flags.push(format!("--test-randomize-ordering-seed={seed}"));
     }
 
     if opts.no_run {

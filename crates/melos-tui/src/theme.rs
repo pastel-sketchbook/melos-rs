@@ -445,8 +445,7 @@ mod tests {
         for name in Theme::available_names() {
             assert!(
                 Theme::by_name(name).is_some(),
-                "Theme '{}' listed in available_names() but by_name() returned None",
-                name
+                "Theme '{name}' listed in available_names() but by_name() returned None"
             );
         }
     }

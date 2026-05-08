@@ -53,9 +53,7 @@ fn resolve_format_opts(workspace: &Workspace, args: &FormatArgs) -> FormatOpts {
         .or_else(|| cfg.and_then(|c| c.output.clone()))
         .unwrap_or_else(|| "write".to_string());
 
-    let line_length = args
-        .line_length
-        .or_else(|| cfg.and_then(|c| c.line_length));
+    let line_length = args.line_length.or_else(|| cfg.and_then(|c| c.line_length));
 
     FormatOpts {
         concurrency: args.concurrency,
@@ -109,21 +107,15 @@ pub async fn run(workspace: &Workspace, args: FormatArgs) -> Result<()> {
     if failed > 0 {
         if opts.set_exit_if_changed {
             anyhow::bail!(
-                "{} package(s) have formatting changes ({} passed). Run `melos-rs format` to fix.",
-                failed,
-                passed
+                "{failed} package(s) have formatting changes ({passed} passed). Run `melos-rs format` to fix."
             );
         }
-        anyhow::bail!(
-            "{} package(s) failed formatting ({} passed)",
-            failed,
-            passed
-        );
+        anyhow::bail!("{failed} package(s) failed formatting ({passed} passed)");
     }
 
     println!(
         "\n{}",
-        format!("All {} package(s) passed formatting.", passed).green()
+        format!("All {passed} package(s) passed formatting.").green()
     );
 
     if let Some(post_hook) = workspace.hook("format", "post") {

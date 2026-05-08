@@ -142,7 +142,7 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
                         "-a",
                         &tag,
                         "-m",
-                        &format!("Release {} v{}", pkg_name, version),
+                        &format!("Release {pkg_name} v{version}"),
                     ])
                     .current_dir(&workspace.root_path)
                     .status();
@@ -168,8 +168,8 @@ pub async fn run(workspace: &Workspace, args: PublishArgs) -> Result<()> {
             for pkg_name in &succeeded {
                 if let Some(pkg) = packages.iter().find(|p| &p.name == pkg_name) {
                     let version = pkg.version.as_deref().unwrap_or("0.0.0");
-                    let tag = format!("{}-v{}", pkg_name, version);
-                    let title = format!("{} v{}", pkg_name, version);
+                    let tag = format!("{pkg_name}-v{version}");
+                    let title = format!("{pkg_name} v{version}");
                     let url = repo.release_url(&tag, &title);
                     println!("  {} {}", pkg_name.bold(), url);
                 }
@@ -227,8 +227,8 @@ mod tests {
         };
         let pkg_name = "my_package";
         let version = "1.2.3";
-        let tag = format!("{}-v{}", pkg_name, version);
-        let title = format!("{} v{}", pkg_name, version);
+        let tag = format!("{pkg_name}-v{version}");
+        let title = format!("{pkg_name} v{version}");
         let url = repo.release_url(&tag, &title);
         assert!(url.contains("tag=my_package-v1.2.3"));
         assert!(url.contains("title=my_package%20v1.2.3"));

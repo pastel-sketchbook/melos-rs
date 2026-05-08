@@ -255,12 +255,12 @@ async fn run_pub_in_packages(
     let mut all_results = Vec::new();
 
     if !flutter_pkgs.is_empty() {
-        let cmd = format!("flutter {}", pub_subcmd);
+        let cmd = format!("flutter {pub_subcmd}");
         let pkgs: Vec<Package> = flutter_pkgs.into_iter().cloned().collect();
         let _ = tx.send(melos_core::events::Event::Progress {
             completed: 0,
             total: 0,
-            message: format!("flutter {}...", pub_subcmd),
+            message: format!("flutter {pub_subcmd}..."),
         });
         let results = runner
             .run_in_packages_with_events(&pkgs, &cmd, env_vars, None, Some(&tx), all_packages)
@@ -269,12 +269,12 @@ async fn run_pub_in_packages(
     }
 
     if !dart_pkgs.is_empty() {
-        let cmd = format!("dart {}", pub_subcmd);
+        let cmd = format!("dart {pub_subcmd}");
         let pkgs: Vec<Package> = dart_pkgs.into_iter().cloned().collect();
         let _ = tx.send(melos_core::events::Event::Progress {
             completed: 0,
             total: 0,
-            message: format!("dart {}...", pub_subcmd),
+            message: format!("dart {pub_subcmd}..."),
         });
         let results = runner
             .run_in_packages_with_events(&pkgs, &cmd, env_vars, None, Some(&tx), all_packages)
@@ -289,12 +289,12 @@ async fn run_pub_in_packages(
     let passed = all_results.len() - failed;
 
     if failed > 0 {
-        anyhow::bail!("{} package(s) failed ({} passed)", failed, passed);
+        anyhow::bail!("{failed} package(s) failed ({passed} passed)");
     }
 
     println!(
         "\n{}",
-        format!("All {} package(s) succeeded.", passed).green()
+        format!("All {passed} package(s) succeeded.").green()
     );
 
     Ok(())

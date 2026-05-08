@@ -108,7 +108,7 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
                 println!("{}", entry.path);
                 for (code, count) in &entry.fixes {
                     let label = if *count == 1 { "fix" } else { "fixes" };
-                    println!("  {} \u{2022} {} {}", code, count, label);
+                    println!("  {code} \u{2022} {count} {label}");
                 }
                 println!();
             }
@@ -118,8 +118,8 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
                 _ => println!("To fix an individual diagnostic, run one of:"),
             }
             for code in &scan.codes {
-                println!("  dart fix --apply --code={}", code);
-                println!("  melos-rs analyze --fix --code={}", code);
+                println!("  dart fix --apply --code={code}");
+                println!("  melos-rs analyze --fix --code={code}");
             }
             println!();
             println!("To fix all diagnostics, run:");
@@ -186,8 +186,7 @@ pub async fn run(workspace: &Workspace, args: AnalyzeArgs) -> Result<()> {
                 println!(
                     "{}",
                     format!(
-                        "Warning: {} failed in {} package(s), continuing with analysis...",
-                        fix_cmd, fix_failed
+                        "Warning: {fix_cmd} failed in {fix_failed} package(s), continuing with analysis..."
                     )
                     .yellow()
                 );

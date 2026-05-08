@@ -30,11 +30,11 @@ pub fn build_format_command(
     }
 
     if output != "write" {
-        cmd_parts.push(format!("--output={}", output));
+        cmd_parts.push(format!("--output={output}"));
     }
 
     if let Some(line_length) = line_length {
-        cmd_parts.push(format!("--line-length={}", line_length));
+        cmd_parts.push(format!("--line-length={line_length}"));
     }
 
     // Format the current directory (package root)

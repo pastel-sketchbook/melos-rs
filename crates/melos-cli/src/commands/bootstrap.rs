@@ -69,7 +69,9 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 
     // In 6.x mode, generate pubspec_overrides.yaml for local package linking.
     if workspace.config_source.is_legacy() {
-        let all_workspace_resolution = packages.iter().all(|p| p.uses_workspace_resolution());
+        let all_workspace_resolution = packages
+            .iter()
+            .all(melos_core::package::Package::uses_workspace_resolution);
 
         if all_workspace_resolution && !packages.is_empty() {
             println!(
@@ -210,7 +212,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 
         for (name, success) in &results {
             if !success {
-                bail_msg = Some(format!("flutter pub get failed in package '{}'", name));
+                bail_msg = Some(format!("flutter pub get failed in package '{name}'"));
                 break;
             }
         }
@@ -236,7 +238,7 @@ pub async fn run(workspace: &Workspace, args: BootstrapArgs) -> Result<()> {
 
         for (name, success) in &results {
             if !success {
-                bail_msg = Some(format!("dart pub get failed in package '{}'", name));
+                bail_msg = Some(format!("dart pub get failed in package '{name}'"));
                 break;
             }
         }

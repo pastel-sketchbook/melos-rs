@@ -107,7 +107,7 @@ pub fn detect_cycles(packages: &[Package]) -> CycleResult {
                     .map(|d| {
                         d.iter()
                             .filter(|dd| cycle_names.contains(**dd))
-                            .map(|s| s.to_string())
+                            .map(std::string::ToString::to_string)
                             .collect()
                     })
                     .unwrap_or_default();
@@ -141,7 +141,7 @@ pub fn generate_gviz(packages: &[Package]) -> String {
         for dep in &pkg.dependencies {
             if known.contains(dep.as_str()) {
                 let dep_id = dep.replace('-', "_");
-                lines.push(format!("  {} -> {};", node_id, dep_id));
+                lines.push(format!("  {node_id} -> {dep_id};"));
             }
         }
     }
@@ -164,7 +164,7 @@ pub fn generate_mermaid(packages: &[Package]) -> String {
         for dep in &pkg.dependencies {
             if known.contains(dep.as_str()) {
                 let dep_id = dep.replace('-', "_");
-                lines.push(format!("  {} --> {}", node_id, dep_id));
+                lines.push(format!("  {node_id} --> {dep_id}"));
             }
         }
     }
@@ -180,7 +180,7 @@ mod tests {
     fn make_pkg(name: &str, deps: Vec<&str>) -> Package {
         Package {
             name: name.to_string(),
-            path: PathBuf::from(format!("/workspace/packages/{}", name)),
+            path: PathBuf::from(format!("/workspace/packages/{name}")),
             version: Some("1.0.0".to_string()),
             is_flutter: false,
             publish_to: None,

@@ -171,10 +171,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     }
 
     // Fetch tags from remote if configured
-    if version_config
-        .map(|c| c.should_fetch_tags())
-        .unwrap_or(false)
-    {
+    if version_config.is_some_and(melos_core::config::VersionCommandConfig::should_fetch_tags) {
         println!("  {} Fetching tags from remote...", "$".cyan());
         git_fetch_tags(&workspace.root_path)?;
         println!("  {} Tags fetched", "OK".green());
@@ -184,12 +181,12 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     let should_changelog = if args.no_changelog {
         false
     } else {
-        version_config.is_none_or(|c| c.should_changelog())
+        version_config.is_none_or(melos_core::config::VersionCommandConfig::should_changelog)
     };
     let should_tag = if args.no_git_tag_version {
         false
     } else {
-        version_config.is_none_or(|c| c.should_tag())
+        version_config.is_none_or(melos_core::config::VersionCommandConfig::should_tag)
     };
 
     // Resolve commit body inclusion: changelogCommitBodies takes precedence over
@@ -217,9 +214,8 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         .unwrap_or(true); // Melos includes scopes by default
 
     // Resolve changelogFormat.includeDate (default: false per Melos docs)
-    let include_date = version_config
-        .map(|c| c.should_include_date())
-        .unwrap_or(false);
+    let include_date =
+        version_config.is_some_and(melos_core::config::VersionCommandConfig::should_include_date);
 
     // Changelog commit type filtering
     let changelog_include_types: Option<Vec<String>> = version_config
@@ -248,8 +244,8 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     };
 
     // Determine whether coordinated versioning is enabled (CLI flag or config)
-    let is_coordinated =
-        args.coordinated || version_config.map(|c| c.is_coordinated()).unwrap_or(false);
+    let is_coordinated = args.coordinated
+        || version_config.is_some_and(melos_core::config::VersionCommandConfig::is_coordinated);
 
     // Determine which packages to version and how.
     //
@@ -266,8 +262,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             .map(|p| {
                 let current = p.version.as_deref().unwrap_or("0.0.0");
                 let stable = graduate_version(current)
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|_| current.to_string());
+                    .map_or_else(|_| current.to_string(), |v| v.to_string());
                 (p, stable)
             })
             .collect();
@@ -333,9 +328,8 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         for (name, _) in &args.overrides {
             if manual_pkgs.contains(name) {
                 return Err(anyhow::anyhow!(
-                    "Package '{}' is specified by both `-V` and `--manual-version`. \
-                     Use one or the other.",
-                    name
+                    "Package '{name}' is specified by both `-V` and `--manual-version`. \
+                     Use one or the other."
                 ));
             }
         }
@@ -356,8 +350,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                 if args.prerelease {
                     let current = p.version.as_deref().unwrap_or("0.0.0");
                     let v = compute_next_prerelease(current, bump, &args.preid)
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|_| bump.clone());
+                        .map_or_else(|_| bump.clone(), |v| v.to_string());
                     selected.push((p, v));
                 } else {
                     selected.push((p, bump.clone()));
@@ -381,8 +374,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                 } else if args.prerelease {
                     let current = p.version.as_deref().unwrap_or("0.0.0");
                     let v = compute_next_prerelease(current, &bump.to_string(), &args.preid)
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|_| bump.to_string());
+                        .map_or_else(|_| bump.to_string(), |v| v.to_string());
                     Some((p, v))
                 } else {
                     Some((p, bump.to_string()))
@@ -397,8 +389,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                 .map(|p| {
                     let current = p.version.as_deref().unwrap_or("0.0.0");
                     let v = compute_next_prerelease(current, &args.bump, &args.preid)
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|_| args.bump.clone());
+                        .map_or_else(|_| args.bump.clone(), |v| v.to_string());
                     (p, v)
                 })
                 .collect()
@@ -524,8 +515,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                     let preid = args.dependent_preid.as_deref().unwrap_or(&args.preid);
                     let current = pkg.version.as_deref().unwrap_or("0.0.0");
                     compute_next_prerelease(current, "patch", preid)
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|_| "patch".to_string())
+                        .map_or_else(|_| "patch".to_string(), |v| v.to_string())
                 } else {
                     "patch".to_string()
                 };
@@ -574,8 +564,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                     let new_ver = versioned
                         .iter()
                         .find(|(n, _)| n == &pkg.name)
-                        .map(|(_, v)| v.as_str())
-                        .unwrap_or("unknown");
+                        .map_or("unknown", |(_, v)| v.as_str());
                     let entry = generate_changelog_entry(new_ver, commits, &make_changelog_opts());
                     write_changelog(&pkg.path, &entry)?;
                     println!(
@@ -588,16 +577,12 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
             // Workspace-level changelog
             let should_workspace = version_config
-                .map(|c| c.should_workspace_changelog())
-                .unwrap_or(true);
+                .is_none_or(melos_core::config::VersionCommandConfig::should_workspace_changelog);
             if should_workspace {
                 let all_commits: Vec<ConventionalCommit> =
                     mapped.values().flatten().cloned().collect();
                 if !all_commits.is_empty() {
-                    let summary_version = versioned
-                        .first()
-                        .map(|(_, v)| v.as_str())
-                        .unwrap_or("0.0.0");
+                    let summary_version = versioned.first().map_or("0.0.0", |(_, v)| v.as_str());
                     let entry = generate_changelog_entry(
                         summary_version,
                         &all_commits,
@@ -629,10 +614,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
                         };
 
                     if !agg_commits.is_empty() {
-                        let agg_version = versioned
-                            .first()
-                            .map(|(_, v)| v.as_str())
-                            .unwrap_or("0.0.0");
+                        let agg_version = versioned.first().map_or("0.0.0", |(_, v)| v.as_str());
                         let entry = generate_changelog_entry(
                             agg_version,
                             &agg_commits,
@@ -641,10 +623,10 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
                         // If the file has a description configured, ensure it's at the top
                         let full_entry = if let Some(ref desc) = agg.description {
-                            if !agg_path.exists() {
-                                format!("# Changelog\n\n{}\n\n{}", desc, entry)
-                            } else {
+                            if agg_path.exists() {
                                 entry
+                            } else {
+                                format!("# Changelog\n\n{desc}\n\n{entry}")
                             }
                         } else {
                             entry
@@ -669,8 +651,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
     // Update git tag references in dependent packages if configured
     let should_update_refs = version_config
-        .map(|c| c.should_update_git_tag_refs())
-        .unwrap_or(false);
+        .is_some_and(melos_core::config::VersionCommandConfig::should_update_git_tag_refs);
     if should_update_refs && !versioned.is_empty() {
         println!("\n{} Updating git tag references...", "$".cyan());
         let count = update_git_tag_refs(&workspace.root_path, &workspace.packages, &versioned)?;
@@ -695,7 +676,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
     let new_package_versions = versioned
         .iter()
-        .map(|(name, ver)| format!(" - {} @ {}", name, ver))
+        .map(|(name, ver)| format!(" - {name} @ {ver}"))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -703,11 +684,10 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         // CLI --message overrides everything
         msg.replace("{new_package_versions}", &new_package_versions)
     } else {
-        let template = version_config
-            .map(|c| c.message_template().to_string())
-            .unwrap_or_else(|| {
-                "chore(release): publish packages\n\n{new_package_versions}".to_string()
-            });
+        let template = version_config.map_or_else(
+            || "chore(release): publish packages\n\n{new_package_versions}".to_string(),
+            |c| c.message_template().to_string(),
+        );
         template.replace("{new_package_versions}", &new_package_versions)
     };
     println!(
@@ -741,7 +721,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     let should_push = if args.no_git_push {
         false
     } else {
-        version_config.is_none_or(|c| c.should_git_push())
+        version_config.is_none_or(melos_core::config::VersionCommandConfig::should_git_push)
     };
     if should_push {
         println!("\n{} Pushing to remote...", "$".cyan());
@@ -755,15 +735,13 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
 
     // Print release URLs if requested (CLI flag or config)
     let should_release_url = args.release_url
-        || version_config
-            .map(|c| c.should_release_url())
-            .unwrap_or(false);
+        || version_config.is_some_and(melos_core::config::VersionCommandConfig::should_release_url);
     if should_release_url {
         if let Some(ref repo) = workspace.config.repository {
             println!("\n{} Release URLs:", "$".cyan());
             for (pkg_name, version) in &versioned {
-                let tag = format!("{}-v{}", pkg_name, version);
-                let title = format!("{} v{}", pkg_name, version);
+                let tag = format!("{pkg_name}-v{version}");
+                let title = format!("{pkg_name} v{version}");
                 let url = repo.release_url(&tag, &title);
                 println!("  {} {}", pkg_name.bold(), url);
             }
@@ -788,7 +766,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
         if let Some((_, version)) = versioned.first() {
             let original_branch = git_current_branch(&workspace.root_path)?;
             let branch_name =
-                create_release_branch(&workspace.root_path, pattern, &version.to_string())?;
+                create_release_branch(&workspace.root_path, pattern, &version.clone())?;
             println!(
                 "\n{} Created release branch: {}",
                 "$".cyan(),

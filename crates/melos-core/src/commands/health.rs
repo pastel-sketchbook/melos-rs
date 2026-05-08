@@ -72,7 +72,9 @@ pub fn run(packages: &[Package], opts: &HealthOpts) -> HealthReport {
 
     let drift_data = if run_all || opts.version_drift {
         let data = collect_version_drift(packages);
-        total_issues += data.len() as u32;
+        // safety: issue count won't exceed u32::MAX in practice
+        #[allow(clippy::cast_possible_truncation)]
+        { total_issues += data.len() as u32; }
         Some(data)
     } else {
         None
@@ -80,7 +82,9 @@ pub fn run(packages: &[Package], opts: &HealthOpts) -> HealthReport {
 
     let missing_data = if run_all || opts.missing_fields {
         let data = collect_missing_fields(packages);
-        total_issues += data.len() as u32;
+        // safety: issue count won't exceed u32::MAX in practice
+        #[allow(clippy::cast_possible_truncation)]
+        { total_issues += data.len() as u32; }
         Some(data)
     } else {
         None
@@ -88,16 +92,9 @@ pub fn run(packages: &[Package], opts: &HealthOpts) -> HealthReport {
 
     let sdk_data = if run_all || opts.sdk_consistency {
         let data = collect_sdk_consistency(packages);
-        let sdk_issues = if !data.missing_sdk.is_empty() {
-            1u32
-        } else {
-            0
-        } + if data.dart_sdk_drift.len() > 1 { 1 } else { 0 }
-            + if data.flutter_sdk_drift.len() > 1 {
-                1
-            } else {
-                0
-            };
+        let sdk_issues = u32::from(!data.missing_sdk.is_empty())
+            + u32::from(data.dart_sdk_drift.len() > 1)
+            + u32::from(data.flutter_sdk_drift.len() > 1);
         total_issues += sdk_issues;
         Some(data)
     } else {
@@ -189,9 +186,8 @@ struct PubspecHealthFields {
 /// Read health-relevant fields from a package's pubspec.yaml.
 fn read_health_fields(pkg: &Package) -> PubspecHealthFields {
     let pubspec_path = pkg.path.join("pubspec.yaml");
-    let content = match std::fs::read_to_string(&pubspec_path) {
-        Ok(c) => c,
-        Err(_) => return PubspecHealthFields::default(),
+    let Ok(content) = std::fs::read_to_string(&pubspec_path) else {
+        return PubspecHealthFields::default();
     };
 
     // Lightweight YAML parse -- grab only the top-level keys we care about.
@@ -270,9 +266,8 @@ struct SdkConstraints {
 /// Read SDK constraints from a package's pubspec.yaml `environment` key.
 fn read_sdk_constraints(pkg: &Package) -> SdkConstraints {
     let pubspec_path = pkg.path.join("pubspec.yaml");
-    let content = match std::fs::read_to_string(&pubspec_path) {
-        Ok(c) => c,
-        Err(_) => return SdkConstraints::default(),
+    let Ok(content) = std::fs::read_to_string(&pubspec_path) else {
+        return SdkConstraints::default();
     };
 
     #[derive(serde::Deserialize, Default)]
@@ -362,7 +357,7 @@ mod tests {
     fn make_package(name: &str, dep_versions: HashMap<String, String>) -> Package {
         Package {
             name: name.to_string(),
-            path: PathBuf::from(format!("/tmp/test/{}", name)),
+            path: PathBuf::from(format!("/tmp/test/{name}")),
             version: Some("1.0.0".to_string()),
             is_flutter: false,
             publish_to: None,

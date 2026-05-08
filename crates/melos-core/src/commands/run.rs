@@ -70,13 +70,13 @@ pub fn parse_exec_flags(command: &str) -> ExecFlags {
                 // Space-separated form: --file-exists pubspec.yaml
                 if i + 1 < parts.len() =>
             {
-                flags.file_exists = Some(strip_outer_quotes(parts[i + 1]).to_string());
+                flags.file_exists = Some(strip_outer_quotes(parts[i + 1]).clone());
                 i += 1;
             }
             s if s.starts_with("--file-exists=") => {
                 // Equals form: --file-exists="pubspec.yaml" or --file-exists=pubspec.yaml
                 let value = &s["--file-exists=".len()..];
-                flags.file_exists = Some(strip_outer_quotes(value).to_string());
+                flags.file_exists = Some(strip_outer_quotes(value).clone());
             }
             "--" => break, // Stop parsing flags at separator
             _ => {}
@@ -236,7 +236,7 @@ pub fn substitute_env_vars(command: &str, env: &HashMap<String, String>) -> Stri
     for key in sorted_keys {
         let value = &env[key];
         // Replace ${VAR} form (always safe - braces delimit the name)
-        result = result.replace(&format!("${{{}}}", key), value);
+        result = result.replace(&format!("${{{key}}}"), value);
 
         // Replace $VAR form with word-boundary awareness:
         // Match $KEY only when NOT followed by another alphanumeric or underscore.
@@ -273,7 +273,7 @@ pub fn substitute_env_vars(command: &str, env: &HashMap<String, String>) -> Stri
 /// For example:
 ///   "melos run generate:dart && melos run generate:flutter"
 /// becomes:
-///   ["melos-rs run generate:dart", "melos-rs run generate:flutter"]
+///   [`melos-rs run generate:dart`, `melos-rs run generate:flutter`]
 ///
 /// Uses word-boundary-aware replacement to avoid mangling `melos-rs` into `melos-rs-rs`.
 pub fn expand_command(command: &str) -> anyhow::Result<Vec<String>> {
@@ -282,7 +282,7 @@ pub fn expand_command(command: &str) -> anyhow::Result<Vec<String>> {
     // Match standalone `melos` as a word. We then check in the replacement
     // whether it's followed by `-rs` (in which case we leave it alone).
     let re = regex::Regex::new(r"\bmelos\b")
-        .map_err(|e| anyhow::anyhow!("Failed to compile regex: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to compile regex: {e}"))?;
 
     // Split on `&&` to handle chained commands
     let parts: Vec<String> = trimmed
@@ -458,7 +458,7 @@ mod tests {
         assert_eq!(flags.concurrency, 2);
         assert!(flags.fail_fast);
         assert!(flags.order_dependents);
-        assert_eq!(flags.timeout, Some(Duration::from_secs(60)));
+        assert_eq!(flags.timeout, Some(Duration::from_mins(1)));
         assert!(flags.dry_run);
     }
 

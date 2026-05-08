@@ -85,7 +85,9 @@ impl PubTokens {
     /// Get the bearer token for a given hosted URL, if one exists.
     pub fn token_for(&self, hosted_url: &str) -> Option<&str> {
         let normalized = normalize_url(hosted_url);
-        self.tokens.get(&normalized).map(|s| s.as_str())
+        self.tokens
+            .get(&normalized)
+            .map(std::string::String::as_str)
     }
 
     /// The default path for pub-tokens.json.
@@ -166,7 +168,7 @@ pub async fn fetch_published_versions(
     let response = request
         .send()
         .await
-        .with_context(|| format!("Failed to fetch versions from {}", url))?;
+        .with_context(|| format!("Failed to fetch versions from {url}"))?;
 
     // 404 = package not yet published, return empty
     if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -175,17 +177,13 @@ pub async fn fetch_published_versions(
 
     // Other error statuses
     if !response.status().is_success() {
-        anyhow::bail!(
-            "Pub server returned HTTP {} for {}",
-            response.status(),
-            url
-        );
+        anyhow::bail!("Pub server returned HTTP {} for {}", response.status(), url);
     }
 
     let body: PubPackageResponse = response
         .json()
         .await
-        .with_context(|| format!("Failed to parse JSON response from {}", url))?;
+        .with_context(|| format!("Failed to parse JSON response from {url}"))?;
 
     Ok(body.versions.into_iter().map(|v| v.version).collect())
 }
@@ -351,10 +349,7 @@ mod tests {
 
     #[test]
     fn test_hosted_url_for_package_default() {
-        assert_eq!(
-            hosted_url_for_package(None),
-            Some(DEFAULT_PUB_HOSTED_URL)
-        );
+        assert_eq!(hosted_url_for_package(None), Some(DEFAULT_PUB_HOSTED_URL));
     }
 
     #[test]

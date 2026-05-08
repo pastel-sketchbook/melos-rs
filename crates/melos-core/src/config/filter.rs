@@ -100,6 +100,7 @@ impl PackageFilters {
     /// when both are set (non-None / non-empty).
     ///
     /// Used when combining global CLI filters with script-level packageFilters.
+    #[must_use]
     pub fn merge(&self, other: &PackageFilters) -> PackageFilters {
         PackageFilters {
             flutter: other.flutter.or(self.flutter),
@@ -108,13 +109,13 @@ impl PackageFilters {
                 .file_exists
                 .clone()
                 .or_else(|| self.file_exists.clone()),
-            depends_on: merge_opt_vec(&self.depends_on, &other.depends_on),
-            no_depends_on: merge_opt_vec(&self.no_depends_on, &other.no_depends_on),
-            ignore: merge_opt_vec(&self.ignore, &other.ignore),
-            scope: merge_opt_vec(&self.scope, &other.scope),
+            depends_on: merge_opt_vec(self.depends_on.as_ref(), other.depends_on.as_ref()),
+            no_depends_on: merge_opt_vec(self.no_depends_on.as_ref(), other.no_depends_on.as_ref()),
+            ignore: merge_opt_vec(self.ignore.as_ref(), other.ignore.as_ref()),
+            scope: merge_opt_vec(self.scope.as_ref(), other.scope.as_ref()),
             no_private: self.no_private || other.no_private,
             diff: other.diff.clone().or_else(|| self.diff.clone()),
-            category: merge_opt_vec(&self.category, &other.category),
+            category: merge_opt_vec(self.category.as_ref(), other.category.as_ref()),
             include_dependencies: self.include_dependencies || other.include_dependencies,
             include_dependents: self.include_dependents || other.include_dependents,
             published: other.published.or(self.published),
@@ -123,7 +124,7 @@ impl PackageFilters {
 }
 
 /// Merge two optional vecs: if both present, concatenate; otherwise take whichever is Some.
-fn merge_opt_vec(a: &Option<Vec<String>>, b: &Option<Vec<String>>) -> Option<Vec<String>> {
+fn merge_opt_vec(a: Option<&Vec<String>>, b: Option<&Vec<String>>) -> Option<Vec<String>> {
     match (a, b) {
         (Some(a), Some(b)) => {
             let mut merged = a.clone();

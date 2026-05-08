@@ -48,7 +48,7 @@ pub struct PackageChangeEvent {
 pub fn start_watching(
     packages: &[Package],
     debounce_ms: u64,
-    event_tx: mpsc::UnboundedSender<PackageChangeEvent>,
+    event_tx: &mpsc::UnboundedSender<PackageChangeEvent>,
     mut shutdown_rx: mpsc::Receiver<()>,
     ready_tx: Option<std::sync::mpsc::Sender<()>>,
 ) -> Result<()> {
@@ -90,8 +90,7 @@ pub fn start_watching(
         // Check for shutdown signal (non-blocking)
         // try_recv returns Ok(()) if a message was sent, or Err(Disconnected) if sender dropped
         match shutdown_rx.try_recv() {
-            Ok(()) => break,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+            Ok(()) | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
         }
 
@@ -134,7 +133,7 @@ pub fn start_watching(
                 }
             }
             Ok(Err(error)) => {
-                eprintln!("WARN: Watch error: {}", error);
+                eprintln!("WARN: Watch error: {error}");
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 // No events, continue loop
@@ -159,8 +158,7 @@ fn should_ignore_path(path: &Path) -> bool {
 fn has_watched_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| WATCHED_EXTENSIONS.contains(&ext))
-        .unwrap_or(false)
+        .is_some_and(|ext| WATCHED_EXTENSIONS.contains(&ext))
 }
 
 /// Find which package owns a given file path by checking if the file
@@ -391,7 +389,7 @@ mod tests {
         let packages_clone = packages.clone();
 
         let watcher_handle = tokio::task::spawn_blocking(move || {
-            start_watching(&packages_clone, 100, event_tx, shutdown_rx, Some(ready_tx))
+            start_watching(&packages_clone, 100, &event_tx, shutdown_rx, Some(ready_tx))
         });
 
         // Wait until watchers are fully registered before writing
@@ -448,7 +446,7 @@ mod tests {
         let packages_clone = packages.clone();
 
         let watcher_handle = tokio::task::spawn_blocking(move || {
-            start_watching(&packages_clone, 100, event_tx, shutdown_rx, Some(ready_tx))
+            start_watching(&packages_clone, 100, &event_tx, shutdown_rx, Some(ready_tx))
         });
 
         // Wait until watchers are fully registered before writing

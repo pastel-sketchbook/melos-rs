@@ -62,6 +62,8 @@ fn draw_header(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     };
 
     let version_tag = format!("v{} ", env!("CARGO_PKG_VERSION"));
+    // safety: version string is short, fits in u16
+    #[allow(clippy::cast_possible_truncation)]
     let version_width = version_tag.len() as u16;
 
     let [left_area, right_area] =
@@ -170,6 +172,8 @@ fn draw_footer(frame: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     // In Idle state, show the current theme name at the right edge.
     if app.state == AppState::Idle {
         let theme_label = format!(" {} ", app.theme_name());
+        // safety: theme label is short, fits in u16
+        #[allow(clippy::cast_possible_truncation)]
         let label_width = theme_label.len() as u16;
         if area.width > label_width {
             let right_area = ratatui::layout::Rect::new(

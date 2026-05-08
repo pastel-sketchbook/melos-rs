@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -169,7 +170,7 @@ pub fn sync_yaml_section(
         return false;
     }
 
-    let section_header = format!("{}:", section);
+    let section_header = format!("{section}:");
     let mut in_section = false;
     let mut changed = false;
 
@@ -193,11 +194,11 @@ pub fn sync_yaml_section(
 
         // Check if this line is a simple `  key: value` entry
         for (key, new_value) in values {
-            if trimmed.starts_with(&format!("{}:", key)) {
+            if trimmed.starts_with(&format!("{key}:")) {
                 // Determine current indentation
                 let indent = line.len() - line.trim_start().len();
                 let indent_str: String = line.chars().take(indent).collect();
-                let new_line = format!("{}{}: {}", indent_str, key, new_value);
+                let new_line = format!("{indent_str}{key}: {new_value}");
                 if *line != new_line {
                     *line = new_line;
                     changed = true;
@@ -217,7 +218,7 @@ pub fn build_pub_get_command(
     no_example: bool,
     offline: bool,
 ) -> String {
-    let mut cmd = format!("{} pub get", sdk);
+    let mut cmd = format!("{sdk} pub get");
     if enforce_lockfile {
         cmd.push_str(" --enforce-lockfile");
     }
@@ -260,9 +261,8 @@ pub fn enforce_versions(
                 continue;
             };
 
-            let constraint = match semver::VersionReq::parse(constraint_str) {
-                Ok(req) => req,
-                Err(_) => continue,
+            let Ok(constraint) = semver::VersionReq::parse(constraint_str) else {
+                continue;
             };
 
             // Dart versions may have +buildNumber; strip it for semver parsing
@@ -270,9 +270,8 @@ pub fn enforce_versions(
                 .split('+')
                 .next()
                 .unwrap_or(sibling_version_str);
-            let sibling_version = match semver::Version::parse(version_for_semver) {
-                Ok(v) => v,
-                Err(_) => continue,
+            let Ok(sibling_version) = semver::Version::parse(version_for_semver) else {
+                continue;
             };
 
             if !constraint.matches(&sibling_version) {
@@ -373,8 +372,7 @@ pub fn generate_pubspec_overrides(
         let override_dir = workspace_root.join(override_path_str);
         if !override_dir.exists() {
             warnings.push(format!(
-                "dependencyOverridePaths: '{}' does not exist, skipping",
-                override_path_str
+                "dependencyOverridePaths: '{override_path_str}' does not exist, skipping"
             ));
             continue;
         }
@@ -487,8 +485,8 @@ pub fn build_pubspec_overrides_content(
             pathdiff::diff_paths(&dep.path, pkg_path).unwrap_or_else(|| dep.path.clone());
         let relative_str = relative.display().to_string();
 
-        content.push_str(&format!("  {}:\n", dep.name));
-        content.push_str(&format!("    path: {}\n", relative_str));
+        let _ = writeln!(content, "  {}:", dep.name);
+        let _ = writeln!(content, "    path: {relative_str}");
     }
 
     // Append melos_overrides entries (sorted for determinism), skipping any
@@ -503,16 +501,15 @@ pub fn build_pubspec_overrides_content(
         for (name, value) in sorted_overrides {
             // Serialize the YAML value inline. For path overrides this produces
             // something like `\n  path: ../external\n`.
-            let serialized = yaml_serde::to_string(value)
-                .unwrap_or_else(|_| "{}".to_string());
+            let serialized = yaml_serde::to_string(value).unwrap_or_else(|_| "{}".to_string());
             // Indent each line of the serialized value under the package key
             let indented: String = serialized
                 .trim_start_matches("---\n")
                 .lines()
-                .map(|line| format!("    {}", line))
+                .map(|line| format!("    {line}"))
                 .collect::<Vec<_>>()
                 .join("\n");
-            content.push_str(&format!("  {}:\n{}\n", name, indented));
+            let _ = write!(content, "  {name}:\n{indented}\n");
         }
     }
 
@@ -537,9 +534,8 @@ pub type GitDepsSnapshot = HashMap<String, HashMap<String, (String, String)>>;
 /// ```
 pub fn extract_git_deps(pkg: &Package) -> Vec<(String, String, String)> {
     let pubspec_path = pkg.path.join("pubspec.yaml");
-    let content = match std::fs::read_to_string(&pubspec_path) {
-        Ok(c) => c,
-        Err(_) => return vec![],
+    let Ok(content) = std::fs::read_to_string(&pubspec_path) else {
+        return vec![];
     };
     let parsed: HashMap<String, yaml_serde::Value> = match yaml_serde::from_str(&content) {
         Ok(v) => v,
@@ -586,9 +582,7 @@ fn git_deps_snapshot_path(workspace_root: &std::path::Path) -> PathBuf {
 /// Load the previously-saved git dep snapshot.
 ///
 /// Returns a map of `pkg_name -> { dep_name -> (url, ref) }`.
-pub fn load_git_deps_snapshot(
-    workspace_root: &std::path::Path,
-) -> GitDepsSnapshot {
+pub fn load_git_deps_snapshot(workspace_root: &std::path::Path) -> GitDepsSnapshot {
     let path = git_deps_snapshot_path(workspace_root);
     match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
@@ -606,10 +600,9 @@ pub fn save_git_deps_snapshot(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
-    let json = serde_json::to_string_pretty(snapshot)
-        .context("Failed to serialize git deps snapshot")?;
-    std::fs::write(&path, json)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
+    let json =
+        serde_json::to_string_pretty(snapshot).context("Failed to serialize git deps snapshot")?;
+    std::fs::write(&path, json).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
 }
 
@@ -667,7 +660,7 @@ pub fn invalidate_package_cache(pkg: &Package) -> Result<()> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-use std::path::PathBuf;
+    use std::path::PathBuf;
 
     use crate::config::{BootstrapCommandConfig, CommandConfig, ConfigSource, MelosConfig};
     use crate::workspace::Workspace;
@@ -724,7 +717,7 @@ use std::path::PathBuf;
     ) -> Package {
         Package {
             name: name.to_string(),
-            path: PathBuf::from(format!("/workspace/packages/{}", name)),
+            path: PathBuf::from(format!("/workspace/packages/{name}")),
             version: Some(version.to_string()),
             is_flutter: false,
             publish_to: None,
@@ -802,13 +795,11 @@ use std::path::PathBuf;
         // melos_overrides entry appended
         assert!(
             content.contains("  external_pkg:"),
-            "Missing melos_overrides entry:\n{}",
-            content
+            "Missing melos_overrides entry:\n{content}"
         );
         assert!(
             content.contains("../../external/external_pkg"),
-            "Missing path in melos_overrides entry:\n{}",
-            content
+            "Missing path in melos_overrides entry:\n{content}"
         );
     }
 
@@ -838,13 +829,11 @@ use std::path::PathBuf;
         let core_count = content.matches("  core:").count();
         assert_eq!(
             core_count, 1,
-            "Sibling should take precedence, got {} entries:\n{}",
-            core_count, content
+            "Sibling should take precedence, got {core_count} entries:\n{content}"
         );
         assert!(
             content.contains("path: ../core"),
-            "Should use sibling path, not melos_overrides:\n{}",
-            content
+            "Should use sibling path, not melos_overrides:\n{content}"
         );
     }
 
@@ -878,7 +867,7 @@ use std::path::PathBuf;
             "pubspec_overrides.yaml should be generated even with only melos_overrides"
         );
         let content = std::fs::read_to_string(&overrides_path).unwrap();
-        assert!(content.contains("ext:"), "Missing ext entry:\n{}", content);
+        assert!(content.contains("ext:"), "Missing ext entry:\n{content}");
     }
 
     // -- git dependency ref comparison tests (Batch 56, Melos v7.0.0-dev.3 #659) --
@@ -948,7 +937,7 @@ use std::path::PathBuf;
 
         // Second run — no changes
         let (changed, _) = detect_git_dep_changes(&[pkg], ws_dir.path());
-        assert!(changed.is_empty(), "Expected no changes, got: {:?}", changed);
+        assert!(changed.is_empty(), "Expected no changes, got: {changed:?}");
     }
 
     #[test]
@@ -989,7 +978,10 @@ use std::path::PathBuf;
 
         let pkg = make_package("app", &dir.path().to_string_lossy(), vec![]);
         invalidate_package_cache(&pkg).unwrap();
-        assert!(!config_file.exists(), "package_config.json should be removed");
+        assert!(
+            !config_file.exists(),
+            "package_config.json should be removed"
+        );
     }
 
     // -- effective_concurrency tests --
@@ -1289,8 +1281,13 @@ use std::path::PathBuf;
         )
         .unwrap();
 
-        let result =
-            generate_pubspec_overrides(&[app], &[core], &["external".to_string()], dir.path(), &HashMap::new());
+        let result = generate_pubspec_overrides(
+            &[app],
+            &[core],
+            &["external".to_string()],
+            dir.path(),
+            &HashMap::new(),
+        );
         assert!(result.is_ok());
 
         let overrides_path = pkg_dir.join("pubspec_overrides.yaml");
@@ -1512,23 +1509,19 @@ use std::path::PathBuf;
         let content = std::fs::read_to_string(pkg_dir.join("pubspec.yaml")).unwrap();
         assert!(
             content.contains("http: ^1.0.0"),
-            "http should be updated to ^1.0.0, got:\n{}",
-            content
+            "http should be updated to ^1.0.0, got:\n{content}"
         );
         assert!(
             content.contains("test: ^2.0.0"),
-            "test should be updated to ^2.0.0, got:\n{}",
-            content
+            "test should be updated to ^2.0.0, got:\n{content}"
         );
         assert!(
             content.contains("sdk: '>=3.0.0 <4.0.0'"),
-            "sdk should be updated, got:\n{}",
-            content
+            "sdk should be updated, got:\n{content}"
         );
         assert!(
             content.contains("intl: ^0.17.0"),
-            "intl should be unchanged, got:\n{}",
-            content
+            "intl should be unchanged, got:\n{content}"
         );
     }
 
@@ -1636,7 +1629,13 @@ use std::path::PathBuf;
         std::fs::create_dir_all(&core_dir).unwrap();
         let core = make_package("core", &core_dir.to_string_lossy(), vec![]);
 
-        let result = generate_pubspec_overrides(&[app, legacy_app], &[core], &[], dir.path(), &HashMap::new());
+        let result = generate_pubspec_overrides(
+            &[app, legacy_app],
+            &[core],
+            &[],
+            dir.path(),
+            &HashMap::new(),
+        );
         assert!(result.is_ok());
 
         assert!(

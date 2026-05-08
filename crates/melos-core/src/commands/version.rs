@@ -6,7 +6,7 @@
 //! tested and reused independently.
 
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -80,8 +80,7 @@ pub fn parse_version_override(s: &str) -> Result<(String, String), String> {
     let parts: Vec<&str> = s.splitn(2, ':').collect();
     if parts.len() != 2 {
         return Err(format!(
-            "Invalid version override '{}'. Expected format: package:bump",
-            s
+            "Invalid version override '{s}'. Expected format: package:bump"
         ));
     }
     Ok((parts[0].to_string(), parts[1].to_string()))
@@ -98,16 +97,14 @@ pub fn parse_manual_version(s: &str) -> Result<(String, String), String> {
     let parts: Vec<&str> = s.splitn(2, ':').collect();
     if parts.len() != 2 {
         return Err(format!(
-            "Invalid manual version '{}'. Expected format: package:semver (e.g. my_pkg:1.2.3)",
-            s
+            "Invalid manual version '{s}'. Expected format: package:semver (e.g. my_pkg:1.2.3)"
         ));
     }
     let pkg = parts[0].trim();
     let raw_version = parts[1].trim();
     if pkg.is_empty() {
         return Err(format!(
-            "Invalid manual version '{}': package name is empty",
-            s
+            "Invalid manual version '{s}': package name is empty"
         ));
     }
     // Strip any Flutter-style `+buildNumber` suffix before semver validation,
@@ -116,8 +113,7 @@ pub fn parse_manual_version(s: &str) -> Result<(String, String), String> {
     let semver_part = raw_version.split('+').next().unwrap_or(raw_version);
     Version::parse(semver_part).map_err(|e| {
         format!(
-            "Invalid manual version '{}': '{}' is not a valid semver (e.g. 1.2.3, 1.2.3-dev.0): {}",
-            s, raw_version, e
+            "Invalid manual version '{s}': '{raw_version}' is not a valid semver (e.g. 1.2.3, 1.2.3-dev.0): {e}"
         )
     })?;
     Ok((pkg.to_string(), raw_version.to_string()))
@@ -170,7 +166,7 @@ pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<Convention
 pub fn highest_bump(commits: &[ConventionalCommit]) -> BumpType {
     commits
         .iter()
-        .map(|c| c.bump_type())
+        .map(ConventionalCommit::bump_type)
         .max()
         .unwrap_or(BumpType::None)
 }
@@ -185,7 +181,7 @@ pub fn parse_commits_since(root: &Path, since_ref: &str) -> Result<Vec<Conventio
     let output = std::process::Command::new("git")
         .args([
             "log",
-            &format!("{}..HEAD", since_ref),
+            &format!("{since_ref}..HEAD"),
             "--format=%h%n%B%n---END---",
         ])
         .current_dir(root)
@@ -194,7 +190,7 @@ pub fn parse_commits_since(root: &Path, since_ref: &str) -> Result<Vec<Conventio
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git log failed: {}", stderr);
+        bail!("git log failed: {stderr}");
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -246,7 +242,7 @@ pub fn map_commits_to_packages(
 
         let changed_files: Vec<String> = String::from_utf8_lossy(&output.stdout)
             .lines()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
 
         // Check which packages are affected by the changed files
@@ -282,10 +278,8 @@ pub fn validate_branch(root: &Path, expected_branch: &str) -> Result<()> {
 
     if current != expected_branch {
         bail!(
-            "Expected to be on branch '{}', but currently on '{}'. \
-             Version bumps are restricted to the configured branch.",
-            expected_branch,
-            current
+            "Expected to be on branch '{expected_branch}', but currently on '{current}'. \
+             Version bumps are restricted to the configured branch."
         );
     }
 
@@ -297,8 +291,8 @@ pub fn validate_branch(root: &Path, expected_branch: &str) -> Result<()> {
 /// Returns the tag name string (e.g. `"my_pkg-v1.2.0"`) so the caller can
 /// print colored output or perform other presentation logic.
 pub fn create_git_tag(root: &Path, pkg_name: &str, version: &str) -> Result<String> {
-    let tag_name = format!("{}-v{}", pkg_name, version);
-    let message = format!("{} v{}", pkg_name, version);
+    let tag_name = format!("{pkg_name}-v{version}");
+    let message = format!("{pkg_name} v{version}");
 
     let status = std::process::Command::new("git")
         .args(["tag", "-a", &tag_name, "-m", &message])
@@ -307,7 +301,7 @@ pub fn create_git_tag(root: &Path, pkg_name: &str, version: &str) -> Result<Stri
         .context("Failed to create git tag")?;
 
     if !status.success() {
-        bail!("Failed to create git tag '{}'", tag_name);
+        bail!("Failed to create git tag '{tag_name}'");
     }
 
     Ok(tag_name)
@@ -377,10 +371,10 @@ pub fn create_release_branch(root: &Path, pattern: &str, version: &str) -> Resul
         .args(["checkout", "-b", &branch_name])
         .current_dir(root)
         .status()
-        .with_context(|| format!("Failed to create release branch '{}'", branch_name))?;
+        .with_context(|| format!("Failed to create release branch '{branch_name}'"))?;
 
     if !status.success() {
-        bail!("git checkout -b '{}' failed", branch_name);
+        bail!("git checkout -b '{branch_name}' failed");
     }
 
     Ok(branch_name)
@@ -392,10 +386,10 @@ pub fn push_release_branch(root: &Path, branch_name: &str) -> Result<()> {
         .args(["push", "-u", "origin", branch_name])
         .current_dir(root)
         .status()
-        .with_context(|| format!("Failed to push release branch '{}'", branch_name))?;
+        .with_context(|| format!("Failed to push release branch '{branch_name}'"))?;
 
     if !status.success() {
-        bail!("git push -u origin '{}' failed", branch_name);
+        bail!("git push -u origin '{branch_name}' failed");
     }
 
     Ok(())
@@ -407,10 +401,10 @@ pub fn git_checkout(root: &Path, branch: &str) -> Result<()> {
         .args(["checkout", branch])
         .current_dir(root)
         .status()
-        .with_context(|| format!("Failed to checkout branch '{}'", branch))?;
+        .with_context(|| format!("Failed to checkout branch '{branch}'"))?;
 
     if !status.success() {
-        bail!("git checkout '{}' failed", branch);
+        bail!("git checkout '{branch}' failed");
     }
 
     Ok(())
@@ -512,13 +506,17 @@ pub fn chrono_date_today() -> String {
 
     // Simple date calculation from Unix timestamp
     // Days since epoch
+    // safety: total_secs / 86400 fits in i64 for any realistic timestamp
+    #[allow(clippy::cast_possible_wrap)]
     let days = (total_secs / 86400) as i64;
 
     // Algorithm from http://howardhinnant.github.io/date_algorithms.html
     let z = days + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    #[allow(clippy::cast_sign_loss)] // safety: doe is always non-negative by construction
     let doe = (z - era * 146097) as u64; // day of era [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // year of era [0, 399]
+    #[allow(clippy::cast_possible_wrap)] // safety: yoe fits in i64
     let y = (yoe as i64) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
     let mp = (5 * doy + 2) / 153; // [0, 11]
@@ -526,7 +524,7 @@ pub fn chrono_date_today() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // month [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
 
-    format!("{:04}-{:02}-{:02}", y, m, d)
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// Generate a CHANGELOG.md entry for a package version.
@@ -568,7 +566,7 @@ pub fn generate_changelog_entry(
             commit
                 .scope
                 .as_ref()
-                .map(|s| format!("**{}**: ", s))
+                .map(|s| format!("**{s}**: "))
                 .unwrap_or_default()
         } else {
             String::new()
@@ -593,7 +591,7 @@ pub fn generate_changelog_entry(
             && let Some(ref body) = commit.body
             && (!opts.only_breaking_bodies || commit.breaking)
         {
-            entry.push_str(&format!("\n  {}", body.replace('\n', "\n  ")));
+            let _ = write!(entry, "\n  {}", body.replace('\n', "\n  "));
         }
 
         if commit.breaking {
@@ -605,9 +603,9 @@ pub fn generate_changelog_entry(
 
     let mut output = if opts.include_date {
         let date = chrono_date_today();
-        format!("## {} ({})\n", version, date)
+        format!("## {version} ({date})\n")
     } else {
-        format!("## {}\n", version)
+        format!("## {version}\n")
     };
 
     // Emit sections in a stable order
@@ -627,9 +625,9 @@ pub fn generate_changelog_entry(
 
     for &section_name in &section_order {
         if let Some(entries) = sections.get(section_name) {
-            output.push_str(&format!("\n### {}\n\n", section_name));
+            let _ = write!(output, "\n### {section_name}\n\n");
             for entry in entries {
-                output.push_str(&format!("{}\n", entry));
+                let _ = writeln!(output, "{entry}");
             }
         }
     }
@@ -658,10 +656,10 @@ pub fn write_changelog(pkg_path: &Path, entry: &str) -> Result<()> {
             let first_newline = s.find('\n').unwrap_or(s.len());
             let header = &s[..first_newline];
             let rest = &s[first_newline..];
-            format!("{}\n\n{}{}", header, entry, rest)
+            format!("{header}\n\n{entry}{rest}")
         }
-        "" => format!("# Changelog\n\n{}", entry),
-        _ => format!("{}\n{}", entry, existing),
+        "" => format!("# Changelog\n\n{entry}"),
+        _ => format!("{entry}\n{existing}"),
     };
 
     std::fs::write(&changelog_path, new_content)
@@ -709,7 +707,7 @@ pub fn compute_next_version(current: &str, bump: &str) -> Result<Version> {
         explicit => {
             // Try to parse as explicit version
             version = Version::parse(explicit)
-                .map_err(|_| anyhow::anyhow!("Invalid version or bump type: {}", explicit))?;
+                .map_err(|_| anyhow::anyhow!("Invalid version or bump type: {explicit}"))?;
         }
     }
 
@@ -741,7 +739,7 @@ pub fn compute_next_prerelease(current: &str, bump: &str, preid: &str) -> Result
 
     // If current is already a prerelease with the same preid, just increment the counter
     if !pre_str.is_empty() {
-        let prefix = format!("{}.", preid);
+        let prefix = format!("{preid}.");
         if let Some(counter_str) = pre_str.strip_prefix(&prefix)
             && let Ok(counter) = counter_str.parse::<u64>()
         {
@@ -749,15 +747,15 @@ pub fn compute_next_prerelease(current: &str, bump: &str, preid: &str) -> Result
             let new_pre = format!("{}.{}", preid, counter + 1);
             let mut result = current_base;
             result.pre = Prerelease::new(&new_pre)
-                .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Invalid prerelease: {e}"))?;
             return Ok(result);
         }
 
         // Different preid -- reset counter to 0 but keep the same base
-        let new_pre = format!("{}.0", preid);
+        let new_pre = format!("{preid}.0");
         let mut result = current_base;
         result.pre =
-            Prerelease::new(&new_pre).map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+            Prerelease::new(&new_pre).map_err(|e| anyhow::anyhow!("Invalid prerelease: {e}"))?;
         return Ok(result);
     }
 
@@ -769,10 +767,10 @@ pub fn compute_next_prerelease(current: &str, bump: &str, preid: &str) -> Result
         ),
         bump,
     )?;
-    let new_pre = format!("{}.0", preid);
+    let new_pre = format!("{preid}.0");
     let mut result = base;
     result.pre =
-        Prerelease::new(&new_pre).map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+        Prerelease::new(&new_pre).map_err(|e| anyhow::anyhow!("Invalid prerelease: {e}"))?;
     Ok(result)
 }
 
@@ -800,8 +798,7 @@ pub fn is_prerelease(version_str: &str) -> bool {
             let cleaned = version_str.split('+').next().unwrap_or(version_str);
             Version::parse(cleaned)
         })
-        .map(|v| !v.pre.is_empty())
-        .unwrap_or(false)
+        .is_ok_and(|v| !v.pre.is_empty())
 }
 
 /// Extract build number from a Flutter version string like "1.2.3+42".
@@ -833,7 +830,7 @@ pub fn apply_version_bump(pkg: &Package, bump: &str) -> Result<String> {
     let next_version_str = if bump == "build" {
         let build_num = extract_build_number(current_version).unwrap_or(0) + 1;
         let base = current_version.split('+').next().unwrap_or(current_version);
-        format!("{}+{}", base, build_num)
+        format!("{base}+{build_num}")
     } else {
         let build_num = extract_build_number(current_version);
         match build_num {
@@ -848,7 +845,7 @@ pub fn apply_version_bump(pkg: &Package, bump: &str) -> Result<String> {
     // Replace version in pubspec.yaml
     let new_content = regex::Regex::new(r"(?m)^version:\s*\S+")
         .context("Failed to compile version regex")?
-        .replace(&content, &format!("version: {}", next_version_str))
+        .replace(&content, &format!("version: {next_version_str}"))
         .to_string();
 
     std::fs::write(&pubspec_path, new_content)
@@ -878,7 +875,7 @@ pub fn update_dependency_constraint(
         })
         .unwrap_or_else(|_| Version::new(0, 0, 0));
 
-    let constraint = format!("^{}", ver);
+    let constraint = format!("^{ver}");
 
     // Match patterns like:
     //   dep_name: ^1.0.0
@@ -891,14 +888,14 @@ pub fn update_dependency_constraint(
         dep = regex::escape(dep_name)
     );
     let re = regex::Regex::new(&pattern)
-        .with_context(|| format!("Failed to compile dependency regex for '{}'", dep_name))?;
+        .with_context(|| format!("Failed to compile dependency regex for '{dep_name}'"))?;
 
     if !re.is_match(&content) {
         return Ok(false);
     }
 
     let new_content = re
-        .replace(&content, format!("${{1}}{}", constraint))
+        .replace(&content, format!("${{1}}{constraint}"))
         .to_string();
 
     if new_content == content {
@@ -926,11 +923,9 @@ pub fn package_matches_filters(
 ) -> bool {
     // Scope filter: if set, package name must match at least one scope glob
     if let Some(ref scopes) = filters.scope {
-        let matches_scope = scopes.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
-                .map(|p| p.matches(pkg_name))
-                .unwrap_or(false)
-        });
+        let matches_scope = scopes
+            .iter()
+            .any(|pattern| glob::Pattern::new(pattern).is_ok_and(|p| p.matches(pkg_name)));
         if !matches_scope {
             return false;
         }
@@ -938,11 +933,9 @@ pub fn package_matches_filters(
 
     // Ignore filter: if set, exclude packages matching any ignore glob
     if let Some(ref ignores) = filters.ignore {
-        let matches_ignore = ignores.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
-                .map(|p| p.matches(pkg_name))
-                .unwrap_or(false)
-        });
+        let matches_ignore = ignores
+            .iter()
+            .any(|pattern| glob::Pattern::new(pattern).is_ok_and(|p| p.matches(pkg_name)));
         if matches_ignore {
             return false;
         }
@@ -992,11 +985,11 @@ pub fn update_git_tag_refs(
                 regex::escape(dep_name),
                 regex::escape(dep_name),
             );
-            let new_tag = format!("{}-v{}", dep_name, new_version);
+            let new_tag = format!("{dep_name}-v{new_version}");
 
             if let Ok(re) = regex::Regex::new(&old_tag_pattern) {
                 new_content = re
-                    .replace(&new_content, format!("${{1}}{}", new_tag))
+                    .replace(&new_content, format!("${{1}}{new_tag}"))
                     .to_string();
             }
         }
@@ -1074,7 +1067,7 @@ mod tests {
     fn test_parse_manual_version_rejects_bump_type() {
         // Bump types like "patch" are NOT valid semver and must be rejected.
         let err = parse_manual_version("pkg:patch").unwrap_err();
-        assert!(err.contains("not a valid semver"), "got: {}", err);
+        assert!(err.contains("not a valid semver"), "got: {err}");
     }
 
     #[test]
@@ -1086,13 +1079,13 @@ mod tests {
     #[test]
     fn test_parse_manual_version_rejects_no_colon() {
         let err = parse_manual_version("no-colon").unwrap_err();
-        assert!(err.contains("Expected format"), "got: {}", err);
+        assert!(err.contains("Expected format"), "got: {err}");
     }
 
     #[test]
     fn test_parse_manual_version_rejects_empty_package() {
         let err = parse_manual_version(":1.2.3").unwrap_err();
-        assert!(err.contains("package name is empty"), "got: {}", err);
+        assert!(err.contains("package name is empty"), "got: {err}");
     }
 
     // -----------------------------------------------------------------------
@@ -1365,18 +1358,17 @@ mod tests {
         let re = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").unwrap();
         assert!(
             re.is_match(&date),
-            "Date '{}' doesn't match YYYY-MM-DD format",
-            date
+            "Date '{date}' doesn't match YYYY-MM-DD format"
         );
 
         let year: u32 = date[..4].parse().unwrap();
-        assert!((2020..=2099).contains(&year), "Year {} out of range", year);
+        assert!((2020..=2099).contains(&year), "Year {year} out of range");
 
         let month: u32 = date[5..7].parse().unwrap();
-        assert!((1..=12).contains(&month), "Month {} out of range", month);
+        assert!((1..=12).contains(&month), "Month {month} out of range");
 
         let day: u32 = date[8..10].parse().unwrap();
-        assert!((1..=31).contains(&day), "Day {} out of range", day);
+        assert!((1..=31).contains(&day), "Day {day} out of range");
     }
 
     // -----------------------------------------------------------------------
@@ -1504,11 +1496,7 @@ mod tests {
         );
         assert!(entry.starts_with("## 1.0.0 ("));
         let re = regex::Regex::new(r"## 1\.0\.0 \(\d{4}-\d{2}-\d{2}\)").unwrap();
-        assert!(
-            re.is_match(&entry),
-            "Expected date in header, got: {}",
-            entry
-        );
+        assert!(re.is_match(&entry), "Expected date in header, got: {entry}");
     }
 
     // -----------------------------------------------------------------------
@@ -1672,7 +1660,7 @@ mod tests {
         ];
         let new_package_versions = versions
             .iter()
-            .map(|(name, ver)| format!(" - {} @ {}", name, ver))
+            .map(|(name, ver)| format!(" - {name} @ {ver}"))
             .collect::<Vec<_>>()
             .join("\n");
         let result = template.replace("{new_package_versions}", &new_package_versions);
@@ -1985,8 +1973,7 @@ mod tests {
         let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
         assert!(
             content.contains("core_lib: ^2.0.0"),
-            "Expected updated constraint, got:\n{}",
-            content
+            "Expected updated constraint, got:\n{content}"
         );
     }
 
@@ -2062,23 +2049,19 @@ mod tests {
         let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
         assert!(
             content.contains("version: 1.1.0"),
-            "Top-level version not bumped:\n{}",
-            content
+            "Top-level version not bumped:\n{content}"
         );
         assert!(
             content.contains("version: ^9.9.9"),
-            "Nested dep version was clobbered:\n{}",
-            content
+            "Nested dep version was clobbered:\n{content}"
         );
         assert!(
             content.contains("version: ^4.5.6"),
-            "Nested dev_dep version was clobbered:\n{}",
-            content
+            "Nested dev_dep version was clobbered:\n{content}"
         );
         assert!(
             content.contains("ref: bar-v3.0.0"),
-            "Git ref was clobbered:\n{}",
-            content
+            "Git ref was clobbered:\n{content}"
         );
     }
 
@@ -2123,23 +2106,19 @@ mod tests {
         let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
         assert!(
             content.contains("core_lib: ^2.0.0"),
-            "core_lib not updated:\n{}",
-            content
+            "core_lib not updated:\n{content}"
         );
         assert!(
             content.contains("other_lib: ^7.7.7"),
-            "other_lib was clobbered:\n{}",
-            content
+            "other_lib was clobbered:\n{content}"
         );
         assert!(
             content.contains("path: ../path_dep"),
-            "path_dep was clobbered:\n{}",
-            content
+            "path_dep was clobbered:\n{content}"
         );
         assert!(
             content.contains("ref: git_dep-v2.0.0"),
-            "git_dep ref was clobbered:\n{}",
-            content
+            "git_dep ref was clobbered:\n{content}"
         );
     }
 
@@ -2153,7 +2132,7 @@ mod tests {
         let pkg_path = tmp.path().join("packages").join("my_app");
         std::fs::create_dir_all(&pkg_path).unwrap();
 
-        let pubspec_content = r#"name: my_app
+        let pubspec_content = r"name: my_app
 version: 1.0.0
 dependencies:
   core_lib:
@@ -2161,7 +2140,7 @@ dependencies:
       url: https://github.com/org/repo.git
       path: packages/core_lib
       ref: core_lib-v1.0.0
-"#;
+";
         std::fs::write(pkg_path.join("pubspec.yaml"), pubspec_content).unwrap();
 
         let packages = vec![Package {
@@ -2183,8 +2162,7 @@ dependencies:
         let updated = std::fs::read_to_string(pkg_path.join("pubspec.yaml")).unwrap();
         assert!(
             updated.contains("ref: core_lib-v2.0.0"),
-            "Expected updated ref, got:\n{}",
-            updated
+            "Expected updated ref, got:\n{updated}"
         );
         assert!(!updated.contains("ref: core_lib-v1.0.0"));
     }
@@ -2195,12 +2173,12 @@ dependencies:
         let pkg_path = tmp.path().join("packages").join("my_app");
         std::fs::create_dir_all(&pkg_path).unwrap();
 
-        let pubspec_content = r#"name: my_app
+        let pubspec_content = r"name: my_app
 version: 1.0.0
 dependencies:
   core_lib:
     path: ../core_lib
-"#;
+";
         std::fs::write(pkg_path.join("pubspec.yaml"), pubspec_content).unwrap();
 
         let packages = vec![Package {
@@ -2254,7 +2232,7 @@ dependencies:
 
     #[test]
     fn test_parse_changelog_config_with_type_filters() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2269,7 +2247,7 @@ command:
       excludeTypes:
         - chore
         - ci
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let changelog_config = version_config.changelog_config.unwrap();
@@ -2285,14 +2263,14 @@ command:
 
     #[test]
     fn test_parse_fetch_tags_config() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     fetchTags: true
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_fetch_tags());
@@ -2300,14 +2278,14 @@ command:
 
     #[test]
     fn test_parse_fetch_tags_default_false() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_fetch_tags());
@@ -2315,7 +2293,7 @@ command:
 
     #[test]
     fn test_parse_bootstrap_config_with_hooks() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2325,7 +2303,7 @@ command:
     hooks:
       pre: echo pre-bootstrap
       post: echo post-bootstrap
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let bootstrap_config = config.command.unwrap().bootstrap.unwrap();
         assert_eq!(bootstrap_config.enforce_lockfile, Some(true));
@@ -2336,7 +2314,7 @@ command:
 
     #[test]
     fn test_parse_clean_config_with_pre_hook() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2345,7 +2323,7 @@ command:
     hooks:
       pre: echo pre-clean
       post: echo post-clean
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let clean_config = config.command.unwrap().clean.unwrap();
         let hooks = clean_config.hooks.unwrap();
@@ -2355,7 +2333,7 @@ command:
 
     #[test]
     fn test_parse_test_config_with_hooks() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2364,7 +2342,7 @@ command:
     hooks:
       pre: echo pre-test
       post: echo post-test
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let test_config = config.command.unwrap().test.unwrap();
         let hooks = test_config.hooks.unwrap();
@@ -2374,7 +2352,7 @@ command:
 
     #[test]
     fn test_parse_test_config_pre_only() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2382,7 +2360,7 @@ command:
   test:
     hooks:
       pre: dart run build_runner build
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let test_config = config.command.unwrap().test.unwrap();
         let hooks = test_config.hooks.unwrap();
@@ -2392,14 +2370,14 @@ command:
 
     #[test]
     fn test_parse_test_config_absent() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.command.unwrap().test.is_none());
     }
@@ -2410,14 +2388,14 @@ command:
 
     #[test]
     fn test_parse_release_url_config() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     releaseUrl: true
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_release_url());
@@ -2425,14 +2403,14 @@ command:
 
     #[test]
     fn test_parse_release_url_default_false() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_release_url());
@@ -2499,14 +2477,14 @@ command:
 
     #[test]
     fn test_parse_aggregate_changelogs_default_none() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.changelogs.is_none());
@@ -2518,7 +2496,7 @@ command:
 
     #[test]
     fn test_parse_changelog_commit_bodies_config() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2527,7 +2505,7 @@ command:
     changelogCommitBodies:
       include: true
       onlyBreaking: true
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let bodies = version_config.changelog_commit_bodies.unwrap();
@@ -2537,7 +2515,7 @@ command:
 
     #[test]
     fn test_parse_changelog_commit_bodies_only_breaking_default() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2545,7 +2523,7 @@ command:
   version:
     changelogCommitBodies:
       include: true
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let bodies = version_config.changelog_commit_bodies.unwrap();
@@ -2555,7 +2533,7 @@ command:
 
     #[test]
     fn test_parse_changelog_commit_bodies_all_bodies() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2564,7 +2542,7 @@ command:
     changelogCommitBodies:
       include: true
       onlyBreaking: false
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         let bodies = version_config.changelog_commit_bodies.unwrap();
@@ -2578,7 +2556,7 @@ command:
 
     #[test]
     fn test_parse_changelog_format_include_date() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2586,7 +2564,7 @@ command:
   version:
     changelogFormat:
       includeDate: true
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_include_date());
@@ -2594,14 +2572,14 @@ command:
 
     #[test]
     fn test_parse_changelog_format_default_no_date() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_include_date());
@@ -2613,14 +2591,14 @@ command:
 
     #[test]
     fn test_parse_update_git_tag_refs_config() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     updateGitTagRefs: true
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.should_update_git_tag_refs());
@@ -2628,14 +2606,14 @@ command:
 
     #[test]
     fn test_parse_update_git_tag_refs_default_false() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(!version_config.should_update_git_tag_refs());
@@ -2783,14 +2761,14 @@ command:
 
     #[test]
     fn test_parse_release_branch_default_none() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: crate::config::MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let version_config = config.command.unwrap().version.unwrap();
         assert!(version_config.release_branch_pattern().is_none());

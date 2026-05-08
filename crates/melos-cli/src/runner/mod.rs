@@ -26,7 +26,7 @@ pub async fn run_lifecycle_hook(
     let status = cmd
         .status()
         .await
-        .with_context(|| format!("Failed to execute {} hook: {}", label, hook_cmd))?;
+        .with_context(|| format!("Failed to execute {label} hook: {hook_cmd}"))?;
 
     if !status.success() {
         anyhow::bail!(

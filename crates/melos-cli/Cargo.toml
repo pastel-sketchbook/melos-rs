@@ -29,3 +29,6 @@ pathdiff = { workspace = true }
 tempfile = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
+
+[lints]
+workspace = true

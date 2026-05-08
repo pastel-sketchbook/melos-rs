@@ -2,7 +2,7 @@ pub mod filter;
 pub mod script;
 
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -117,22 +117,20 @@ impl MelosConfig {
                 // Warn about exec-style scripts missing `--` separator
                 if is_exec_style(cmd) && !cmd.contains(" -- ") {
                     warnings.push(format!(
-                        "Script '{}' looks like an exec command but has no `--` separator. \
+                        "Script '{name}' looks like an exec command but has no `--` separator. \
                          The command may not be parsed correctly. \
-                         Expected format: `melos exec [flags] -- <command>`",
-                        name
+                         Expected format: `melos exec [flags] -- <command>`"
                     ));
                 }
 
                 // Warn about empty run commands (only if no exec shorthand or steps)
                 if cmd.trim().is_empty() && !has_exec_config && !has_steps {
-                    warnings.push(format!("Script '{}' has an empty `run` command.", name));
+                    warnings.push(format!("Script '{name}' has an empty `run` command."));
                 }
             } else if !has_exec_config && !has_steps {
                 // No run command and no exec/steps config
                 warnings.push(format!(
-                    "Script '{}' has no `run`, `exec`, or `steps` defined.",
-                    name
+                    "Script '{name}' has no `run`, `exec`, or `steps` defined."
                 ));
             }
 
@@ -327,7 +325,7 @@ pub fn url_encode(s: &str) -> String {
                 encoded.push(byte as char);
             }
             _ => {
-                encoded.push_str(&format!("%{:02X}", byte));
+                let _ = write!(encoded, "%{byte:02X}");
             }
         }
     }
@@ -351,7 +349,7 @@ impl RepositoryConfig {
     pub fn commit_url(&self, hash: &str) -> String {
         let base = self.url.trim_end_matches('/');
         // GitHub/GitLab/Bitbucket all use /commit/<hash>
-        format!("{}/commit/{}", base, hash)
+        format!("{base}/commit/{hash}")
     }
 
     /// Get a prefilled release creation page URL for a given tag and title.
@@ -361,10 +359,7 @@ impl RepositoryConfig {
         let base = self.url.trim_end_matches('/');
         let encoded_tag = url_encode(tag);
         let encoded_title = url_encode(title);
-        format!(
-            "{}/releases/new?tag={}&title={}",
-            base, encoded_tag, encoded_title
-        )
+        format!("{base}/releases/new?tag={encoded_tag}&title={encoded_title}")
     }
 }
 
@@ -413,21 +408,20 @@ impl<'de> serde::Deserialize<'de> for RepositoryConfig {
                 let owner = owner.ok_or_else(|| de::Error::missing_field("owner"))?;
                 let name = name.ok_or_else(|| de::Error::missing_field("name"))?;
 
-                let base_url = match origin {
-                    Some(ref o) => o.trim_end_matches('/').to_string(),
-                    None => {
-                        let host = match repo_type.as_deref() {
-                            Some("gitlab") => "https://gitlab.com",
-                            Some("bitbucket") => "https://bitbucket.org",
-                            Some("azure") => "https://dev.azure.com",
-                            _ => "https://github.com", // default to github
-                        };
-                        host.to_string()
-                    }
+                let base_url = if let Some(ref o) = origin {
+                    o.trim_end_matches('/').to_string()
+                } else {
+                    let host = match repo_type.as_deref() {
+                        Some("gitlab") => "https://gitlab.com",
+                        Some("bitbucket") => "https://bitbucket.org",
+                        Some("azure") => "https://dev.azure.com",
+                        _ => "https://github.com", // default to github
+                    };
+                    host.to_string()
                 };
 
                 Ok(RepositoryConfig {
-                    url: format!("{}/{}/{}", base_url, owner, name),
+                    url: format!("{base_url}/{owner}/{name}"),
                 })
             }
         }
@@ -635,13 +629,13 @@ pub struct ChangelogConfig {
 
     /// Only include these conventional commit types in the changelog.
     /// If set, commits with types not in this list are excluded.
-    /// Example: ["feat", "fix", "perf"]
+    /// Example: [`feat`, `fix`, `perf`]
     #[serde(default)]
     pub include_types: Option<Vec<String>>,
 
     /// Exclude these conventional commit types from the changelog.
     /// Applied after include_types (if both set, include_types takes precedence).
-    /// Example: ["chore", "ci", "build"]
+    /// Example: [`chore`, `ci`, `build`]
     #[serde(default)]
     pub exclude_types: Option<Vec<String>>,
 }
@@ -1196,11 +1190,11 @@ mod tests {
 
     #[test]
     fn test_parse_minimal_config() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(config.name, "test_project");
         assert_eq!(config.packages, vec!["packages/**"]);
@@ -1244,7 +1238,7 @@ command:
 
     #[test]
     fn test_parse_config_with_scripts() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -1253,7 +1247,7 @@ scripts:
     run: flutter analyze .
     description: Run analysis
   format: dart format .
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(config.scripts.len(), 2);
 
@@ -1321,7 +1315,7 @@ categories:
 
     #[test]
     fn test_parse_7x_pubspec_with_melos_section() {
-        let yaml = r#"
+        let yaml = r"
 name: my_workspace
 workspace:
   - packages/core
@@ -1332,7 +1326,7 @@ melos:
   categories:
     libs:
       - core
-"#;
+";
         let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(wrapper.name, "my_workspace");
         assert_eq!(
@@ -1348,27 +1342,27 @@ melos:
 
     #[test]
     fn test_parse_7x_with_melos_name_override() {
-        let yaml = r#"
+        let yaml = r"
 name: pubspec_name
 melos:
   name: custom_workspace_name
   packages:
     - packages/**
-"#;
+";
         let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(wrapper.melos.name.as_deref(), Some("custom_workspace_name"));
     }
 
     #[test]
     fn test_parse_7x_packages_from_workspace_field() {
-        let yaml = r#"
+        let yaml = r"
 name: my_workspace
 workspace:
   - packages/core
   - packages/app
 melos:
   scripts: {}
-"#;
+";
         let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
 
         // Simulate what parse_config does: fall back to workspace paths
@@ -1384,7 +1378,7 @@ melos:
 
     #[test]
     fn test_parse_7x_melos_packages_override() {
-        let yaml = r#"
+        let yaml = r"
 name: my_workspace
 workspace:
   - packages/core
@@ -1393,7 +1387,7 @@ melos:
   packages:
     - packages/**
     - tools/**
-"#;
+";
         let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
         // melos.packages should take precedence over workspace:
         assert_eq!(
@@ -1530,7 +1524,7 @@ melos:
 
     #[test]
     fn test_validate_valid_config_no_warnings() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -1541,13 +1535,12 @@ scripts:
 categories:
   apps:
     - app_*
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let warnings = config.validate();
         assert!(
             warnings.is_empty(),
-            "Expected no warnings, got: {:?}",
-            warnings
+            "Expected no warnings, got: {warnings:?}"
         );
     }
 
@@ -1557,12 +1550,12 @@ categories:
 
     #[test]
     fn test_repository_config_from_url_string() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 repository: https://github.com/invertase/melos
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let repo = config.repository.unwrap();
         assert_eq!(repo.url, "https://github.com/invertase/melos");
@@ -1570,7 +1563,7 @@ repository: https://github.com/invertase/melos
 
     #[test]
     fn test_repository_config_from_object_github() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -1578,7 +1571,7 @@ repository:
   type: github
   owner: invertase
   name: melos
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let repo = config.repository.unwrap();
         assert_eq!(repo.url, "https://github.com/invertase/melos");
@@ -1586,7 +1579,7 @@ repository:
 
     #[test]
     fn test_repository_config_from_object_gitlab() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -1594,7 +1587,7 @@ repository:
   type: gitlab
   owner: myorg
   name: myrepo
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let repo = config.repository.unwrap();
         assert_eq!(repo.url, "https://gitlab.com/myorg/myrepo");
@@ -1602,7 +1595,7 @@ repository:
 
     #[test]
     fn test_repository_config_from_object_custom_origin() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -1611,7 +1604,7 @@ repository:
   origin: https://git.internal.io
   owner: team
   name: project
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let repo = config.repository.unwrap();
         assert_eq!(repo.url, "https://git.internal.io/team/project");
@@ -1619,14 +1612,14 @@ repository:
 
     #[test]
     fn test_repository_config_default_type_is_github() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 repository:
   owner: myowner
   name: myrepo
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let repo = config.repository.unwrap();
         assert_eq!(repo.url, "https://github.com/myowner/myrepo");
@@ -1656,11 +1649,11 @@ repository:
 
     #[test]
     fn test_repository_config_absent() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.repository.is_none());
     }
@@ -1670,11 +1663,11 @@ packages:
         // Verify the MelosSection correctly parses the repository field,
         // which is what the 7.x config path uses
         let section: MelosSection = yaml_serde::from_str(
-            r#"
+            r"
 repository: https://github.com/myorg/myapp
 packages:
   - packages/**
-"#,
+",
         )
         .unwrap();
         assert!(section.repository.is_some());
@@ -1713,7 +1706,7 @@ scripts:
 
     #[test]
     fn test_script_entry_exec_object_with_run() {
-        let yaml = r#"
+        let yaml = r"
 name: test
 packages:
   - packages/**
@@ -1723,7 +1716,7 @@ scripts:
     exec:
       concurrency: 3
       failFast: true
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let entry = &config.scripts["test"];
 
@@ -1767,7 +1760,7 @@ scripts:
 
     #[test]
     fn test_script_entry_private() {
-        let yaml = r#"
+        let yaml = r"
 name: test
 packages:
   - packages/**
@@ -1777,7 +1770,7 @@ scripts:
     private: true
   public:
     run: echo public
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.scripts["internal"].is_private());
         assert!(!config.scripts["public"].is_private());
@@ -1824,8 +1817,7 @@ scripts:
         let warnings = config.validate();
         assert!(
             warnings.is_empty(),
-            "Expected no warnings, got: {:?}",
-            warnings
+            "Expected no warnings, got: {warnings:?}"
         );
     }
 
@@ -1861,8 +1853,7 @@ scripts:
         let warnings = config.validate();
         assert!(
             warnings.is_empty(),
-            "Expected no warnings, got: {:?}",
-            warnings
+            "Expected no warnings, got: {warnings:?}"
         );
     }
 
@@ -1889,11 +1880,11 @@ ignore:
 
     #[test]
     fn test_parse_no_top_level_ignore() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.ignore.is_none());
     }
@@ -1904,7 +1895,7 @@ packages:
 
     #[test]
     fn test_parse_publish_hooks() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -1913,7 +1904,7 @@ command:
     hooks:
       pre: dart pub run build_runner build
       post: dart pub run build_runner clean
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let publish = config.command.unwrap().publish.unwrap();
         let hooks = publish.hooks.unwrap();
@@ -1929,7 +1920,7 @@ command:
 
     #[test]
     fn test_parse_publish_hooks_pre_only() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -1937,7 +1928,7 @@ command:
   publish:
     hooks:
       pre: echo before
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let publish = config.command.unwrap().publish.unwrap();
         let hooks = publish.hooks.unwrap();
@@ -1947,14 +1938,14 @@ command:
 
     #[test]
     fn test_parse_no_publish_config() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   version:
     branch: main
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.command.unwrap().publish.is_none());
     }
@@ -1965,36 +1956,36 @@ command:
 
     #[test]
     fn test_parse_sdk_path() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 sdkPath: /opt/flutter/sdk
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(config.sdk_path.as_deref(), Some("/opt/flutter/sdk"));
     }
 
     #[test]
     fn test_parse_no_sdk_path() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.sdk_path.is_none());
     }
 
     #[test]
     fn test_parse_7x_sdk_path() {
-        let yaml = r#"
+        let yaml = r"
 name: my_workspace
 workspace:
   - packages/core
 melos:
   sdkPath: /usr/local/flutter
-"#;
+";
         let wrapper: PubspecWithMelos = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(
             wrapper.melos.sdk_path.as_deref(),
@@ -2008,7 +1999,7 @@ melos:
 
     #[test]
     fn test_parse_script_groups() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2023,7 +2014,7 @@ scripts:
     groups:
       - ci
   format: dart format .
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
 
         let analyze = &config.scripts["analyze"];
@@ -2058,7 +2049,7 @@ scripts:
     #[test]
     fn test_parse_all_command_configs_together() {
         // Ensure all command configs can coexist
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2074,7 +2065,7 @@ command:
     hooks:
       pre: echo pre-publish
       post: echo post-publish
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let cmd = config.command.unwrap();
         assert!(cmd.version.is_some());
@@ -2093,7 +2084,7 @@ command:
 
     #[test]
     fn test_parse_format_command_config_full() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2105,7 +2096,7 @@ command:
     hooks:
       pre: echo pre-format
       post: echo post-format
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let fmt = config.command.unwrap().format.unwrap();
         assert_eq!(fmt.line_length, Some(120));
@@ -2118,14 +2109,14 @@ command:
 
     #[test]
     fn test_parse_format_command_config_minimal() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
 command:
   format:
     lineLength: 80
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let fmt = config.command.unwrap().format.unwrap();
         assert_eq!(fmt.line_length, Some(80));
@@ -2136,7 +2127,7 @@ command:
 
     #[test]
     fn test_parse_format_command_config_absent() {
-        let yaml = r#"
+        let yaml = r"
 name: test_project
 packages:
   - packages/**
@@ -2144,7 +2135,7 @@ command:
   bootstrap:
     hooks:
       pre: echo hi
-"#;
+";
         let config: MelosConfig = yaml_serde::from_str(yaml).unwrap();
         let cmd = config.command.unwrap();
         assert!(cmd.format.is_none());

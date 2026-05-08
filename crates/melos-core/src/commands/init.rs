@@ -14,12 +14,12 @@ pub fn write_7x_config(dir: &Path, name: &str, package_patterns: &[String]) -> R
 
     let workspace_entries: String = package_patterns
         .iter()
-        .map(|p| format!("  - {}", p))
+        .map(|p| format!("  - {p}"))
         .collect::<Vec<_>>()
         .join("\n");
 
     let content = format!(
-        r#"name: {name}
+        r"name: {name}
 
 environment:
   sdk: ^3.0.0
@@ -29,7 +29,7 @@ workspace:
 
 melos:
   scripts: {{}}
-"#
+"
     );
 
     std::fs::write(&pubspec_path, content)
@@ -59,18 +59,18 @@ pub fn write_legacy_config(dir: &Path, name: &str, package_patterns: &[String]) 
     // melos.yaml
     let packages_yaml: String = package_patterns
         .iter()
-        .map(|p| format!("  - {}", p))
+        .map(|p| format!("  - {p}"))
         .collect::<Vec<_>>()
         .join("\n");
 
     let melos_content = format!(
-        r#"name: {name}
+        r"name: {name}
 
 packages:
 {packages_yaml}
 
 scripts: {{}}
-"#
+"
     );
 
     std::fs::write(&melos_path, melos_content)
@@ -78,14 +78,14 @@ scripts: {{}}
 
     // pubspec.yaml (basic root package)
     let pubspec_content = format!(
-        r#"name: {name}
+        r"name: {name}
 
 environment:
   sdk: ^3.0.0
 
 dev_dependencies:
   melos: ^7.0.0
-"#
+"
     );
 
     std::fs::write(&pubspec_path, pubspec_content)

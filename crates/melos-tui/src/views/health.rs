@@ -19,9 +19,8 @@ const TAB_LABELS: &[&str] = &["Version Drift", "Missing Fields", "SDK Consistenc
 /// The active tab is determined by `app.health_tab`. Tab/BackTab cycle through
 /// the tabs in the Done state key handler.
 pub fn draw_health(frame: &mut Frame, area: Rect, app: &App) {
-    let report = match &app.health_report {
-        Some(r) => r,
-        None => return,
+    let Some(report) = &app.health_report else {
+        return;
     };
     let theme = &app.theme;
 
@@ -184,12 +183,7 @@ fn draw_sdk_consistency(frame: &mut Frame, area: Rect, report: &HealthReport, th
                 || !sdk.dart_sdk_drift.is_empty()
                 || !sdk.flutter_sdk_drift.is_empty();
 
-            if !has_issues {
-                lines.push(Line::from(Span::styled(
-                    "SDK constraints are consistent.",
-                    Style::default().fg(theme.success),
-                )));
-            } else {
+            if has_issues {
                 if !sdk.missing_sdk.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("{} packages missing SDK constraint:", sdk.missing_sdk.len()),
@@ -244,6 +238,11 @@ fn draw_sdk_consistency(frame: &mut Frame, area: Rect, report: &HealthReport, th
                         ]));
                     }
                 }
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "SDK constraints are consistent.",
+                    Style::default().fg(theme.success),
+                )));
             }
         }
     }

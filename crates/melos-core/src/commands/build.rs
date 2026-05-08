@@ -108,15 +108,10 @@ pub fn resolve_artifact_path(
             let capitalized_mode = capitalize_first(&mode_str);
             match build_type {
                 "appbundle" => Some(format!(
-                    "build/app/outputs/bundle/{flavor}{mode}/app-{flavor}-{mode_lower}.aab",
-                    flavor = flavor_name,
-                    mode = capitalized_mode,
-                    mode_lower = mode_str,
+                    "build/app/outputs/bundle/{flavor_name}{capitalized_mode}/app-{flavor_name}-{mode_str}.aab",
                 )),
                 "apk" => Some(format!(
-                    "build/app/outputs/flutter-apk/app-{flavor}-{mode}.apk",
-                    flavor = flavor_name,
-                    mode = mode_str,
+                    "build/app/outputs/flutter-apk/app-{flavor_name}-{mode_str}.apk",
                 )),
                 _ => None,
             }
@@ -158,7 +153,7 @@ pub fn expand_simulator_template(
     result = result.replace("{mode}", &mode_str);
 
     // iOS configuration: "Debug-{flavor}"
-    let configuration = format!("Debug-{}", flavor_name);
+    let configuration = format!("Debug-{flavor_name}");
     result = result.replace("{configuration}", &configuration);
 
     // Android artifact paths
@@ -166,9 +161,7 @@ pub fn expand_simulator_template(
         let aab_path =
             resolve_artifact_path(platform, "appbundle", flavor_name, mode).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Cannot resolve AAB path for {} {} (only Android appbundle is supported)",
-                    platform,
-                    flavor_name
+                    "Cannot resolve AAB path for {platform} {flavor_name} (only Android appbundle is supported)"
                 )
             })?;
         let output_dir = Path::new(&aab_path)
@@ -182,9 +175,7 @@ pub fn expand_simulator_template(
         let apk_path =
             resolve_artifact_path(platform, "apk", flavor_name, mode).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Cannot resolve APK path for {} {} (only Android APK is supported)",
-                    platform,
-                    flavor_name
+                    "Cannot resolve APK path for {platform} {flavor_name} (only Android APK is supported)"
                 )
             })?;
         let output_dir = Path::new(&apk_path)
@@ -213,11 +204,9 @@ pub fn expand_simulator_template(
 /// Returns an error if conflicting flags are given.
 pub fn resolve_platforms(android: bool, ios: bool, all: bool) -> Result<Vec<Platform>> {
     match (android, ios, all) {
-        (false, false, false) | (false, false, true) => Ok(vec![Platform::Android, Platform::Ios]),
         (true, false, false) => Ok(vec![Platform::Android]),
         (false, true, false) => Ok(vec![Platform::Ios]),
-        (true, true, false) | (true, true, true) => Ok(vec![Platform::Android, Platform::Ios]),
-        (true, false, true) | (false, true, true) => Ok(vec![Platform::Android, Platform::Ios]),
+        _ => Ok(vec![Platform::Android, Platform::Ios]),
     }
 }
 
@@ -237,15 +226,12 @@ pub fn resolve_flavors<'a>(
                 );
             }
         }
-        return Ok(explicit.iter().map(|s| s.as_str()).collect());
+        return Ok(explicit.iter().map(std::string::String::as_str).collect());
     }
 
     if let Some(default) = config_default {
         if !available.contains(&default.to_string()) {
-            bail!(
-                "Default flavor '{}' is not defined in build.flavors",
-                default
-            );
+            bail!("Default flavor '{default}' is not defined in build.flavors");
         }
         return Ok(vec![default]);
     }
@@ -303,28 +289,22 @@ pub fn resolve_simulator_command(
 
     let Some(sim) = sim_config else {
         bail!(
-            "--simulator requested but no simulator config found for {}.\n\
-             Add a `command.build.{}.simulator` section to melos.yaml.",
-            platform,
-            platform,
+            "--simulator requested but no simulator config found for {platform}.\n\
+             Add a `command.build.{platform}.simulator` section to melos.yaml.",
         );
     };
 
     if !sim.enabled {
         bail!(
-            "--simulator requested but simulator is disabled for {}.\n\
-             Set `command.build.{}.simulator.enabled: true` in melos.yaml.",
-            platform,
-            platform,
+            "--simulator requested but simulator is disabled for {platform}.\n\
+             Set `command.build.{platform}.simulator.enabled: true` in melos.yaml.",
         );
     }
 
     let Some(ref template) = sim.command else {
         bail!(
-            "--simulator requested but no command template found for {}.\n\
-             Set `command.build.{}.simulator.command` in melos.yaml.",
-            platform,
-            platform,
+            "--simulator requested but no command template found for {platform}.\n\
+             Set `command.build.{platform}.simulator.command` in melos.yaml.",
         );
     };
 
@@ -361,11 +341,14 @@ pub struct BuildStepResult {
 pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs_f64();
     if secs < 60.0 {
-        format!("{:.1}s", secs)
+        format!("{secs:.1}s")
     } else {
+        // safety: secs is always non-negative and fits in u64 for display purposes
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let mins = secs as u64 / 60;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let remaining = secs as u64 % 60;
-        format!("{}m {:02}s", mins, remaining)
+        format!("{mins}m {remaining:02}s")
     }
 }
 
@@ -603,11 +586,11 @@ mod tests {
 
     #[test]
     fn test_parse_build_config_minimal() {
-        let yaml = r#"
+        let yaml = r"
             flavors:
               prod:
                 target: lib/main.dart
-        "#;
+        ";
         let config: crate::config::BuildCommandConfig =
             yaml_serde::from_str(yaml).expect("should parse minimal build config");
         assert_eq!(config.flavors.len(), 1);
@@ -648,9 +631,9 @@ mod tests {
 
     #[test]
     fn test_parse_flavor_mode_default_is_release() {
-        let yaml = r#"
+        let yaml = r"
             target: lib/main.dart
-        "#;
+        ";
         let config: crate::config::FlavorConfig =
             yaml_serde::from_str(yaml).expect("should parse flavor with default mode");
         assert_eq!(config.mode, BuildMode::Release);
@@ -658,13 +641,13 @@ mod tests {
 
     #[test]
     fn test_parse_build_config_with_package_filters() {
-        let yaml = r#"
+        let yaml = r"
             flavors:
               prod:
                 target: lib/main.dart
             packageFilters:
               flutter: true
-        "#;
+        ";
         let config: crate::config::BuildCommandConfig =
             yaml_serde::from_str(yaml).expect("should parse build config with filters");
         let filters = config.package_filters.expect("package_filters");
@@ -1063,7 +1046,7 @@ mod tests {
 
     #[test]
     fn test_format_duration_exact_minute() {
-        let d = Duration::from_secs(60);
+        let d = Duration::from_mins(1);
         assert_eq!(format_duration(d), "1m 00s");
     }
 

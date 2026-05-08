@@ -75,6 +75,8 @@ pub struct ListArgs {
 }
 
 /// List packages in the workspace
+// allow: called via async dispatch in main.rs
+#[allow(clippy::unused_async)]
 pub async fn run(workspace: &Workspace, args: ListArgs) -> Result<()> {
     let filters = package_filters_from_args(&args.filters);
     let packages = apply_filters_with_categories(
@@ -187,8 +189,8 @@ fn print_json(packages: &[Package]) {
 
     // serde_json handles all escaping correctly
     match serde_json::to_string_pretty(&entries) {
-        Ok(json) => println!("{}", json),
-        Err(e) => eprintln!("Failed to serialize packages to JSON: {}", e),
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("Failed to serialize packages to JSON: {e}"),
     }
 }
 
@@ -202,7 +204,7 @@ fn print_graph(packages: &[Package]) {
             .dependencies
             .iter()
             .filter(|d| known.contains(d.as_str()))
-            .map(|d| d.as_str())
+            .map(std::string::String::as_str)
             .collect();
 
         if local_deps.is_empty() {
@@ -218,13 +220,7 @@ fn print_graph(packages: &[Package]) {
 fn detect_and_report_cycles(packages: &[Package]) -> Result<()> {
     let result = detect_cycles(packages);
 
-    if !result.has_cycles() {
-        println!(
-            "\n  {} No dependency cycles detected ({} packages).\n",
-            "OK".green(),
-            result.total
-        );
-    } else {
+    if result.has_cycles() {
         println!(
             "\n  {} Dependency cycle(s) detected involving {} package(s):\n",
             "WARNING".yellow().bold(),
@@ -234,6 +230,12 @@ fn detect_and_report_cycles(packages: &[Package]) -> Result<()> {
             println!("    {} -> {}", name.bold(), deps.join(", "));
         }
         println!();
+    } else {
+        println!(
+            "\n  {} No dependency cycles detected ({} packages).\n",
+            "OK".green(),
+            result.total
+        );
     }
 
     Ok(())
@@ -248,7 +250,7 @@ mod tests {
     fn make_pkg(name: &str, deps: Vec<&str>) -> Package {
         Package {
             name: name.to_string(),
-            path: PathBuf::from(format!("/workspace/packages/{}", name)),
+            path: PathBuf::from(format!("/workspace/packages/{name}")),
             version: Some("1.0.0".to_string()),
             is_flutter: false,
             publish_to: None,

@@ -589,7 +589,7 @@ impl App {
         } else {
             "pubspec.yaml".to_string()
         });
-        self.warnings = workspace.warnings.clone();
+        self.warnings.clone_from(&workspace.warnings);
 
         self.package_rows = workspace
             .packages
@@ -776,10 +776,10 @@ impl App {
                 (KeyCode::Char('u'), true) => {
                     self.output_scroll = self.output_scroll.saturating_sub(half_page);
                 }
-                (KeyCode::PageDown, _) | (KeyCode::Char('f'), _) => {
+                (KeyCode::PageDown | KeyCode::Char('f'), _) => {
                     self.scroll_output_down(self.page_size);
                 }
-                (KeyCode::PageUp, _) | (KeyCode::Char('b'), _) => {
+                (KeyCode::PageUp | KeyCode::Char('b'), _) => {
                     self.output_scroll = self.output_scroll.saturating_sub(self.page_size);
                 }
                 _ => {}
@@ -788,11 +788,12 @@ impl App {
         }
 
         let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+        // safety: page_size is a small terminal dimension, fits in isize
+        #[allow(clippy::cast_possible_wrap)]
         let half_page = (self.page_size / 2).max(1) as isize;
 
         match (code, ctrl) {
-            (KeyCode::Char('q'), false) => self.quit = true,
-            (KeyCode::Char('c'), true) => self.quit = true,
+            (KeyCode::Char('q'), false) | (KeyCode::Char('c'), true) => self.quit = true,
             (KeyCode::Esc, _) => self.handle_esc(),
 
             // Execute selected command
@@ -817,10 +818,14 @@ impl App {
 
             // Full-page scroll: PgUp/PgDn, Ctrl+f/Ctrl+b, or plain f/b
             (KeyCode::PageDown, _) | (KeyCode::Char('f'), true | false) => {
-                self.move_selection(self.page_size as isize)
+                // safety: page_size is a small terminal dimension, fits in isize
+                #[allow(clippy::cast_possible_wrap)]
+                self.move_selection(self.page_size as isize);
             }
             (KeyCode::PageUp, _) | (KeyCode::Char('b'), true | false) => {
-                self.move_selection(-(self.page_size as isize))
+                // safety: page_size is a small terminal dimension, fits in isize
+                #[allow(clippy::cast_possible_wrap)]
+                self.move_selection(-(self.page_size as isize));
             }
 
             // Help overlay
@@ -916,7 +921,10 @@ impl App {
 
     /// Handle key presses while the options overlay is visible.
     fn handle_options_key(&mut self, code: KeyCode) {
-        let opt_count = self.command_opts.as_ref().map_or(0, |o| o.option_count());
+        let opt_count = self
+            .command_opts
+            .as_ref()
+            .map_or(0, CommandOpts::option_count);
 
         match code {
             KeyCode::Esc | KeyCode::Char('q') => self.dismiss_options(),
@@ -1221,6 +1229,8 @@ impl App {
             return;
         }
         let new_idx = if delta < 0 {
+            // safety: delta is negative here, so -delta is positive and fits in usize
+            #[allow(clippy::cast_sign_loss)]
             let abs = (-delta) as usize;
             if abs > current {
                 // Wrap: single-step up wraps to end; page-up clamps to 0.
@@ -1229,6 +1239,8 @@ impl App {
                 current - abs
             }
         } else {
+            // safety: delta is non-negative in this branch
+            #[allow(clippy::cast_sign_loss)]
             let abs = delta as usize;
             if current + abs >= len {
                 // Wrap: single-step down wraps to start; page-down clamps to end.

@@ -111,7 +111,7 @@ async fn run_watch_loop(
         .config
         .scripts
         .get(script_name)
-        .ok_or_else(|| anyhow::anyhow!("Script '{}' not found in config", script_name))?;
+        .ok_or_else(|| anyhow::anyhow!("Script '{script_name}' not found in config"))?;
 
     let watch_packages = if let Some(script_filters) = script.package_filters() {
         let merged = script_filters.merge(cli_filters);
@@ -146,10 +146,10 @@ async fn run_watch_loop(
         watch_packages.len()
     );
 
-    let watch_pkgs_clone: Vec<Package> = watch_packages.to_vec();
+    let watch_pkgs_clone: Vec<Package> = watch_packages.clone();
 
     let watcher_handle = tokio::task::spawn_blocking(move || {
-        watcher::start_watching(&watch_pkgs_clone, 0, event_tx, shutdown_rx, None)
+        watcher::start_watching(&watch_pkgs_clone, 0, &event_tx, shutdown_rx, None)
     });
 
     let shutdown_tx_ctrlc = shutdown_tx.clone();
@@ -162,9 +162,8 @@ async fn run_watch_loop(
 
     // Watch loop
     loop {
-        let first_event = match event_rx.recv().await {
-            Some(e) => e,
-            None => break,
+        let Some(first_event) = event_rx.recv().await else {
+            break;
         };
 
         let mut changed_packages = HashSet::new();
@@ -319,8 +318,7 @@ async fn run_script_recursive(
 ) -> Result<()> {
     if depth > MAX_SCRIPT_DEPTH {
         bail!(
-            "Script recursion depth exceeded ({} levels). Check for deeply nested 'melos run' references.",
-            MAX_SCRIPT_DEPTH
+            "Script recursion depth exceeded ({MAX_SCRIPT_DEPTH} levels). Check for deeply nested 'melos run' references."
         );
     }
 
@@ -338,7 +336,7 @@ async fn run_script_recursive(
         .config
         .scripts
         .get(script_name)
-        .ok_or_else(|| anyhow::anyhow!("Script '{}' not found in config", script_name))?;
+        .ok_or_else(|| anyhow::anyhow!("Script '{script_name}' not found in config"))?;
 
     if let Some(desc) = script.description() {
         println!("\n{} {}", "Description:".dimmed(), desc.trim());
@@ -401,7 +399,7 @@ async fn run_script_recursive(
                         .status()
                         .await
                         .with_context(|| {
-                            format!("Failed to spawn shell for script '{}'", script_name)
+                            format!("Failed to spawn shell for script '{script_name}'")
                         })?;
 
                     if !status.success() {
@@ -416,8 +414,7 @@ async fn run_script_recursive(
         }
         (None, None, None) => {
             bail!(
-                "Script '{}' has no runnable configuration (no `run`, `exec`, or `steps` defined)",
-                script_name
+                "Script '{script_name}' has no runnable configuration (no `run`, `exec`, or `steps` defined)"
             );
         }
     }
@@ -485,7 +482,7 @@ async fn run_steps(
                     .envs(env_vars)
                     .status()
                     .await
-                    .with_context(|| format!("Failed to spawn shell for step '{}'", step))?;
+                    .with_context(|| format!("Failed to spawn shell for step '{step}'"))?;
 
                 if !status.success() {
                     bail!(
@@ -576,7 +573,7 @@ async fn run_exec_config_script(
 
     let failed = results.iter().filter(|(_, success)| !success).count();
     if failed > 0 {
-        bail!("{} package(s) failed", failed);
+        bail!("{failed} package(s) failed");
     }
 
     Ok(())
@@ -673,7 +670,7 @@ async fn run_exec_script(
 
     let failed = results.iter().filter(|(_, success)| !success).count();
     if failed > 0 {
-        bail!("{} package(s) failed", failed);
+        bail!("{failed} package(s) failed");
     }
 
     Ok(())
@@ -694,7 +691,13 @@ fn select_script_interactive(
         .collect();
 
     if scripts.is_empty() {
-        if !include_private && workspace.config.scripts.values().any(|e| e.is_private()) {
+        if !include_private
+            && workspace
+                .config
+                .scripts
+                .values()
+                .any(melos_core::config::ScriptEntry::is_private)
+        {
             bail!(
                 "No scripts available (all scripts are private). Use --include-private to see them."
             );
@@ -727,9 +730,9 @@ fn select_script_interactive(
     // Try as number first
     if let Ok(num) = input.parse::<usize>() {
         if num >= 1 && num <= sorted_scripts.len() {
-            return Ok(sorted_scripts[num - 1].0.to_string());
+            return Ok(sorted_scripts[num - 1].0.clone());
         }
-        bail!("Invalid selection: {}", num);
+        bail!("Invalid selection: {num}");
     }
 
     // Try as name
@@ -737,5 +740,5 @@ fn select_script_interactive(
         return Ok(input.to_string());
     }
 
-    bail!("Script '{}' not found", input);
+    bail!("Script '{input}' not found");
 }

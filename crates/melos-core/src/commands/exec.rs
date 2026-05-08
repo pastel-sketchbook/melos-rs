@@ -66,9 +66,9 @@ mod tests {
             command: "dart test".to_string(),
             concurrency: 3,
             fail_fast: true,
-            timeout: Some(Duration::from_secs(60)),
+            timeout: Some(Duration::from_mins(1)),
         };
-        assert_eq!(opts.timeout, Some(Duration::from_secs(60)));
+        assert_eq!(opts.timeout, Some(Duration::from_mins(1)));
         assert!(opts.fail_fast);
     }
 }

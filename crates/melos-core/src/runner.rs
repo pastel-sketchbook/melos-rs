@@ -114,7 +114,7 @@ impl ProcessRunner {
                 }
 
                 emit(
-                    &tx,
+                    tx.as_ref(),
                     Event::PackageStarted {
                         name: pkg_name.clone(),
                     },
@@ -150,7 +150,7 @@ impl ProcessRunner {
                             let mut lines = reader.lines();
                             while let Ok(Some(line)) = lines.next_line().await {
                                 emit(
-                                    &stdout_tx,
+                                    stdout_tx.as_ref(),
                                     Event::PackageOutput {
                                         name: stdout_name.clone(),
                                         line,
@@ -166,7 +166,7 @@ impl ProcessRunner {
                             let mut lines = reader.lines();
                             while let Ok(Some(line)) = lines.next_line().await {
                                 emit(
-                                    &stderr_tx,
+                                    stderr_tx.as_ref(),
                                     Event::PackageOutput {
                                         name: stderr_name.clone(),
                                         line,
@@ -182,10 +182,10 @@ impl ProcessRunner {
                                 Ok(Ok(s)) => Some(s),
                                 Ok(Err(e)) => {
                                     emit(
-                                        &tx,
+                                        tx.as_ref(),
                                         Event::PackageOutput {
                                             name: pkg_name.clone(),
-                                            line: format!("ERROR: {}", e),
+                                            line: format!("ERROR: {e}"),
                                             is_stderr: true,
                                         },
                                     );
@@ -193,7 +193,7 @@ impl ProcessRunner {
                                 }
                                 Err(_) => {
                                     emit(
-                                        &tx,
+                                        tx.as_ref(),
                                         Event::PackageOutput {
                                             name: pkg_name.clone(),
                                             line: format!(
@@ -211,10 +211,10 @@ impl ProcessRunner {
                                 Ok(s) => Some(s),
                                 Err(e) => {
                                     emit(
-                                        &tx,
+                                        tx.as_ref(),
                                         Event::PackageOutput {
                                             name: pkg_name.clone(),
-                                            line: format!("ERROR: {}", e),
+                                            line: format!("ERROR: {e}"),
                                             is_stderr: true,
                                         },
                                     );
@@ -231,10 +231,10 @@ impl ProcessRunner {
                     }
                     Err(e) => {
                         emit(
-                            &tx,
+                            tx.as_ref(),
                             Event::PackageOutput {
                                 name: pkg_name.clone(),
-                                line: format!("ERROR: {}", e),
+                                line: format!("ERROR: {e}"),
                                 is_stderr: true,
                             },
                         );
@@ -245,7 +245,7 @@ impl ProcessRunner {
                 let duration = start.elapsed();
 
                 emit(
-                    &tx,
+                    tx.as_ref(),
                     Event::PackageFinished {
                         name: pkg_name.clone(),
                         success,
@@ -277,7 +277,7 @@ impl ProcessRunner {
             match handle.await {
                 Ok(()) => {}
                 Err(e) if e.is_cancelled() => {} // expected for aborted tasks
-                Err(e) => return Err(anyhow::anyhow!("Package task panicked: {}", e)),
+                Err(e) => return Err(anyhow::anyhow!("Package task panicked: {e}")),
             }
         }
 
@@ -288,7 +288,7 @@ impl ProcessRunner {
 
 /// Send an event if the transmitter is present, ignoring send errors
 /// (the receiver may have been dropped).
-fn emit(tx: &Option<UnboundedSender<Event>>, event: Event) {
+fn emit(tx: Option<&UnboundedSender<Event>>, event: Event) {
     if let Some(tx) = tx {
         let _ = tx.send(event);
     }
@@ -599,7 +599,7 @@ mod tests {
         // Only the first should actually run; the rest should be aborted/skipped.
         let runner = ProcessRunner::new(1, true);
         let pkgs: Vec<Package> = (0..5)
-            .map(|i| make_pkg(&format!("pkg_{}", i), &format!("/tmp/pkg_{}", i)))
+            .map(|i| make_pkg(&format!("pkg_{i}"), &format!("/tmp/pkg_{i}")))
             .collect();
 
         // "exit 1" fails immediately; subsequent packages should not run.
@@ -613,8 +613,7 @@ mod tests {
         let failed_count = results.iter().filter(|(_, s)| !*s).count();
         assert_eq!(
             failed_count, 1,
-            "Expected exactly 1 failure, got {} in {:?}",
-            failed_count, results
+            "Expected exactly 1 failure, got {failed_count} in {results:?}"
         );
 
         // Total results should be <= 2 (at most 1 failure + possibly 1 that
@@ -632,7 +631,7 @@ mod tests {
         // Without fail-fast, all packages should run even if some fail.
         let runner = ProcessRunner::new(1, false);
         let pkgs: Vec<Package> = (0..3)
-            .map(|i| make_pkg(&format!("pkg_{}", i), &format!("/tmp/pkg_{}", i)))
+            .map(|i| make_pkg(&format!("pkg_{i}"), &format!("/tmp/pkg_{i}")))
             .collect();
 
         let results = runner
@@ -644,8 +643,7 @@ mod tests {
         assert_eq!(
             results.len(),
             3,
-            "All packages should run without fail-fast, got {:?}",
-            results
+            "All packages should run without fail-fast, got {results:?}"
         );
         assert_eq!(
             results.iter().filter(|(_, s)| !*s).count(),
@@ -694,10 +692,7 @@ mod tests {
             "/workspace/packages/my_lib/example",
             "MELOS_PACKAGE_PATH should be the example's own path"
         );
-        assert_eq!(
-            env.get("MELOS_PACKAGE_NAME").unwrap(),
-            "my_lib_example",
-        );
+        assert_eq!(env.get("MELOS_PACKAGE_NAME").unwrap(), "my_lib_example",);
         assert_eq!(
             env.get("MELOS_PARENT_PACKAGE_NAME").unwrap(),
             "my_lib",
@@ -714,19 +709,12 @@ mod tests {
     async fn test_fail_fast_with_events_emits_correctly() {
         let runner = ProcessRunner::new(1, true);
         let pkgs: Vec<Package> = (0..3)
-            .map(|i| make_pkg(&format!("pkg_{}", i), &format!("/tmp/pkg_{}", i)))
+            .map(|i| make_pkg(&format!("pkg_{i}"), &format!("/tmp/pkg_{i}")))
             .collect();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let results = runner
-            .run_in_packages_with_events(
-                &pkgs,
-                "exit 1",
-                &HashMap::new(),
-                None,
-                Some(&tx),
-                &[],
-            )
+            .run_in_packages_with_events(&pkgs, "exit 1", &HashMap::new(), None, Some(&tx), &[])
             .await
             .unwrap();
 
@@ -752,8 +740,7 @@ mod tests {
         assert_eq!(started_count, finished_count, "Every started should finish");
         assert!(
             started_count <= 2,
-            "At most 2 packages should start (1 failure + maybe 1 race), got {}",
-            started_count
+            "At most 2 packages should start (1 failure + maybe 1 race), got {started_count}"
         );
         assert_eq!(results.iter().filter(|(_, s)| !*s).count(), 1);
     }

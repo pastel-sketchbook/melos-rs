@@ -29,7 +29,7 @@ pub fn build_publish_command(dry_run: bool) -> String {
 
 /// Build the git tag name for a published package.
 pub fn build_git_tag(package_name: &str, version: &str) -> String {
-    format!("{}-v{}", package_name, version)
+    format!("{package_name}-v{version}")
 }
 
 /// Run `dart pub publish` across packages, emitting events for progress tracking.

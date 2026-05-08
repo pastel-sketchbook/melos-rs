@@ -139,13 +139,13 @@ exec: "echo hello"
 
     #[test]
     fn test_exec_entry_object_options() {
-        let yaml = r#"
+        let yaml = r"
 run: flutter test
 exec:
   concurrency: 3
   failFast: true
   orderDependents: true
-"#;
+";
         let config: ScriptConfig = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(config.run, "flutter test");
         match config.exec {
@@ -160,10 +160,10 @@ exec:
 
     #[test]
     fn test_exec_entry_object_defaults() {
-        let yaml = r#"
+        let yaml = r"
 run: dart test
 exec: {}
-"#;
+";
         let config: ScriptConfig = yaml_serde::from_str(yaml).unwrap();
         match config.exec {
             Some(ExecEntry::Options(ref opts)) => {
@@ -177,12 +177,12 @@ exec: {}
 
     #[test]
     fn test_steps_parsing() {
-        let yaml = r#"
+        let yaml = r"
 steps:
   - analyze
   - dart format --set-exit-if-changed .
   - test:unit
-"#;
+";
         let config: ScriptConfig = yaml_serde::from_str(yaml).unwrap();
         let steps = config.steps.unwrap();
         assert_eq!(steps.len(), 3);
@@ -193,19 +193,19 @@ steps:
 
     #[test]
     fn test_private_field() {
-        let yaml = r#"
+        let yaml = r"
 run: echo internal
 private: true
-"#;
+";
         let config: ScriptConfig = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(config.private, Some(true));
     }
 
     #[test]
     fn test_private_field_default() {
-        let yaml = r#"
+        let yaml = r"
 run: echo hello
-"#;
+";
         let config: ScriptConfig = yaml_serde::from_str(yaml).unwrap();
         assert!(config.private.is_none());
     }

@@ -89,16 +89,16 @@ pub fn build_analyze_command(
     let sdk = if is_flutter { "flutter" } else { "dart" };
     let mut cmd_parts = vec![sdk.to_string(), "analyze".to_string()];
 
-    if !no_fatal {
+    if no_fatal {
+        cmd_parts.push("--no-fatal-warnings".to_string());
+        cmd_parts.push("--no-fatal-infos".to_string());
+    } else {
         if fatal_warnings {
             cmd_parts.push("--fatal-warnings".to_string());
         }
         if fatal_infos {
             cmd_parts.push("--fatal-infos".to_string());
         }
-    } else {
-        cmd_parts.push("--no-fatal-warnings".to_string());
-        cmd_parts.push("--no-fatal-infos".to_string());
     }
 
     // Analyze the current directory (package root)
@@ -153,7 +153,10 @@ pub fn parse_dry_run_output(stdout: &str, pkg_prefix: &str) -> Vec<DryRunFileEnt
             if let Some((code, count)) = parse_fix_line(trimmed) {
                 current_fixes.push((code, count));
             }
-        } else if trimmed.ends_with(".dart") {
+        } else if std::path::Path::new(trimmed)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dart"))
+        {
             // Non-indented Dart file path = start of new file entry
             if let Some(path) = current_path.take()
                 && !current_fixes.is_empty()
@@ -163,7 +166,7 @@ pub fn parse_dry_run_output(stdout: &str, pkg_prefix: &str) -> Vec<DryRunFileEnt
                     fixes: std::mem::take(&mut current_fixes),
                 });
             }
-            current_path = Some(format!("{}/{}", pkg_prefix, trimmed));
+            current_path = Some(format!("{pkg_prefix}/{trimmed}"));
         }
         // Any other non-indented line is ignored (future-proofing)
     }

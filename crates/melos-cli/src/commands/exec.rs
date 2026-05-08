@@ -188,7 +188,7 @@ async fn run_watch_loop(
     let watch_packages: Vec<Package> = packages.to_vec();
 
     let watcher_handle = tokio::task::spawn_blocking(move || {
-        watcher::start_watching(&watch_packages, 0, event_tx, shutdown_rx, None)
+        watcher::start_watching(&watch_packages, 0, &event_tx, shutdown_rx, None)
     });
 
     let shutdown_tx_ctrlc = shutdown_tx.clone();
@@ -200,9 +200,8 @@ async fn run_watch_loop(
     });
 
     loop {
-        let first_event = match event_rx.recv().await {
-            Some(e) => e,
-            None => break,
+        let Some(first_event) = event_rx.recv().await else {
+            break;
         };
 
         let mut changed_packages = HashSet::new();

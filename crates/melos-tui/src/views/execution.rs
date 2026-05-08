@@ -112,7 +112,9 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
         None => (0, 0),
     };
     let ratio = if total > 0 {
-        completed as f64 / total as f64
+        // safety: package counts are small, no precision loss in practice
+        #[allow(clippy::cast_precision_loss)]
+        { completed as f64 / total as f64 }
     } else {
         0.0
     };
@@ -291,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_format_elapsed_exact_minute() {
-        assert_eq!(format_elapsed(Duration::from_secs(60)), "1:00");
+        assert_eq!(format_elapsed(Duration::from_mins(1)), "1:00");
     }
 
     // --- Running state renders elapsed time ---
@@ -302,7 +304,11 @@ mod tests {
         app.state = AppState::Running;
         app.running_command = Some("analyze".to_string());
         // Set command_start to a known instant in the past.
-        app.command_start = Some(std::time::Instant::now() - Duration::from_secs(65));
+        app.command_start = Some(
+            std::time::Instant::now()
+                .checked_sub(Duration::from_secs(65))
+                .unwrap(),
+        );
         let buf = render_frame(draw_running, &app, 60, 10);
         let content = buffer_text(&buf, 60, 10);
         // Should contain "1:05" (65 seconds = 1 min 5 sec).

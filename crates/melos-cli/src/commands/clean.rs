@@ -211,12 +211,12 @@ pub async fn run(workspace: &Workspace, args: CleanArgs) -> Result<()> {
     let total = all_filtered.len();
     if failed > 0 {
         let passed = total - failed as usize;
-        anyhow::bail!("{} package(s) failed cleaning ({} passed)", failed, passed);
+        anyhow::bail!("{failed} package(s) failed cleaning ({passed} passed)");
     }
 
     println!(
         "\n{}",
-        format!("All {} package(s) passed cleaning.", total).green()
+        format!("All {total} package(s) passed cleaning.").green()
     );
 
     if let Some(post_hook) = workspace.hook("clean", "post") {

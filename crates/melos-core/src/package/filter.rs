@@ -19,7 +19,9 @@ pub fn apply_filters(
     filters: &PackageFilters,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<Package>> {
-    let _guard = tests::ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = tests::ENV_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Save and remove MELOS_PACKAGES to prevent env-var pollution from parallel tests
     let saved = std::env::var("MELOS_PACKAGES").ok();
     if saved.is_some() {
@@ -111,8 +113,7 @@ fn matches_filters(pkg: &Package, filters: &PackageFilters) -> bool {
     if let Some(ref scopes) = filters.scope {
         let matches_any = scopes.iter().any(|pattern| {
             glob::Pattern::new(pattern)
-                .map(|p| p.matches(&pkg.name))
-                .unwrap_or_else(|_| pkg.name.contains(pattern))
+                .map_or_else(|_| pkg.name.contains(pattern), |p| p.matches(&pkg.name))
         });
         if !matches_any {
             return false;
@@ -123,8 +124,7 @@ fn matches_filters(pkg: &Package, filters: &PackageFilters) -> bool {
     if let Some(ref ignores) = filters.ignore {
         let matches_any = ignores.iter().any(|pattern| {
             glob::Pattern::new(pattern)
-                .map(|p| p.matches(&pkg.name))
-                .unwrap_or_else(|_| pkg.name.contains(pattern))
+                .map_or_else(|_| pkg.name.contains(pattern), |p| p.matches(&pkg.name))
         });
         if matches_any {
             return false;
@@ -211,8 +211,7 @@ fn resolve_category_packages(
             for pkg in packages {
                 let in_category = patterns.iter().any(|pattern| {
                     glob::Pattern::new(pattern)
-                        .map(|p| p.matches(&pkg.name))
-                        .unwrap_or_else(|_| pkg.name.contains(pattern))
+                        .map_or_else(|_| pkg.name.contains(pattern), |p| p.matches(&pkg.name))
                 });
                 if in_category {
                     matching.insert(pkg.name.clone());
@@ -265,7 +264,7 @@ pub fn topological_sort(packages: &[Package]) -> Vec<Package> {
 
     // Sort the initial queue for deterministic output
     let mut sorted_queue: Vec<&str> = queue.drain(..).collect();
-    sorted_queue.sort();
+    sorted_queue.sort_unstable();
     queue.extend(sorted_queue);
 
     let mut result: Vec<Package> = Vec::with_capacity(packages.len());
@@ -286,7 +285,7 @@ pub fn topological_sort(packages: &[Package]) -> Vec<Package> {
                     }
                 }
             }
-            ready.sort();
+            ready.sort_unstable();
             queue.extend(ready);
         }
     }
@@ -425,7 +424,7 @@ mod tests {
     fn make_package(name: &str, is_flutter: bool, deps: Vec<&str>) -> Package {
         Package {
             name: name.to_string(),
-            path: PathBuf::from(format!("/tmp/packages/{}", name)),
+            path: PathBuf::from(format!("/tmp/packages/{name}")),
             version: Some("1.0.0".to_string()),
             is_flutter,
             publish_to: None,
@@ -439,7 +438,7 @@ mod tests {
     fn make_private_package(name: &str) -> Package {
         Package {
             name: name.to_string(),
-            path: PathBuf::from(format!("/tmp/packages/{}", name)),
+            path: PathBuf::from(format!("/tmp/packages/{name}")),
             version: Some("1.0.0".to_string()),
             is_flutter: false,
             publish_to: Some("none".to_string()),
@@ -874,7 +873,9 @@ mod tests {
 
     #[test]
     fn test_melos_packages_env_overrides_scope() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let packages = vec![
             make_package("app_main", false, vec![]),
@@ -900,7 +901,9 @@ mod tests {
 
     #[test]
     fn test_melos_packages_env_overrides_existing_scope() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let packages = vec![
             make_package("app_main", false, vec![]),
@@ -927,7 +930,9 @@ mod tests {
 
     #[test]
     fn test_melos_packages_env_empty_string_no_effect() {
-        let _guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let packages = vec![
             make_package("app_main", false, vec![]),

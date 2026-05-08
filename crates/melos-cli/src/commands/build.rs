@@ -215,7 +215,7 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
         } else {
             // Determine bump types to apply (build number first, then version)
             let bump_label = match (&args.version_bump, args.build_number_bump) {
-                (Some(v), true) => format!("{} + build number", v),
+                (Some(v), true) => format!("{v} + build number"),
                 (Some(v), false) => v.clone(),
                 (None, true) => "build number".to_string(),
                 (None, false) => unreachable!(),
@@ -485,12 +485,7 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
             step_results.push(step_result);
 
             if step_total_failed > 0 && args.fail_fast {
-                bail!(
-                    "{} package(s) failed building {} {}",
-                    step_total_failed,
-                    platform,
-                    flavor_name
-                );
+                bail!("{step_total_failed} package(s) failed building {platform} {flavor_name}");
             }
         }
     }
@@ -514,7 +509,7 @@ pub async fn run(workspace: &Workspace, args: BuildArgs) -> Result<()> {
     println!("{}", format_build_summary(&step_results, total_duration));
 
     if total_failed > 0 {
-        bail!("{} package(s) failed", total_failed);
+        bail!("{total_failed} package(s) failed");
     }
 
     Ok(())

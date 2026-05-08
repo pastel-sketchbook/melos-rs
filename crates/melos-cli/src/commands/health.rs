@@ -39,6 +39,8 @@ pub struct HealthArgs {
 }
 
 /// Run health checks on the workspace
+// allow: called via async dispatch in main.rs
+#[allow(clippy::unused_async)]
 pub async fn run(workspace: &Workspace, args: HealthArgs) -> Result<()> {
     let filters = package_filters_from_args(&args.filters);
     let packages = apply_filters_with_categories(
