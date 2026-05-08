@@ -4,7 +4,13 @@ A Rust CLI replacement for [Melos](https://melos.invertase.dev/) - Flutter/Dart 
 
 ## Parity Target
 
-Tracking feature parity against **Melos 7.4.0** (latest stable as of 2026-02-22).
+Tracking feature parity against **Melos 7.6.0** (latest stable as of 2026-05-04).
+
+- **Last upstream CHANGELOG audit:** 2026-05-08 — Melos `v7.6.0`
+  ([commit 5012a00b](https://github.com/invertase/melos/commit/5012a00bd0b6ce59d03674b65e0fe10f3fa806ff))
+- **Previous audit baseline:** Melos `v7.4.0` (Batch 25, 2026-02-22)
+- See "Upstream Parity Audit" section near the bottom for the diff between
+  Melos 7.4.0 → 7.6.0 and a list of legacy Melos features still missing.
 
 | Area | Melos 7.4.0 | melos-rs | Notes |
 |------|-------------|----------|-------|
@@ -674,16 +680,6 @@ and full command wiring.
     with package filters
 - [x] `task check:all` passes — 446 tests (420 unit + 26 integration), zero clippy warnings
 
-## Remaining / Future
-
-Stretch goals and out-of-scope items. None of these are required for Melos 7.4.0 CLI parity.
-
-- [ ] Plugin system for custom commands
-- [ ] GitHub Actions integration helpers
-- [ ] IDE integration (IntelliJ, VS Code) -- out of scope for CLI tool
-
----
-
 ## Core Library Extraction -- `melos-core` + `melos-tui` (Beyond Melos Parity)
 
 Extract business logic into a reusable library crate (`melos-core`) with an event-based
@@ -1275,7 +1271,9 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] Progress label is context-aware: "previewing fixes" for `--dry-run`, "scanning for conflicts" for `--fix` pre-scan
 - [x] Tests: 3 skip-logic decision tests + 1 DryRunScan struct assembly test = 4 new tests
 - [x] Updated README: `--fix` description now mentions conflict pre-scan
-- Total: 504 unit tests + 26 integration tests = 530 tests — Analyze --dry-run, --code flags (done, v0.3.3)
+- Total: 504 unit tests + 26 integration tests = 530 tests
+
+#### Batch 39 — Analyze --dry-run, --code flags (done, v0.3.3)
 - [x] Added `--dry-run` flag to `analyze` command — runs `dart fix --dry-run` only, skips analysis (conflicts with `--fix`)
 - [x] Added `--code` flag — comma-separated diagnostic codes appended as `--code=<code>` to dart fix command
 - [x] `--code` validated to require `--fix` or `--dry-run`
@@ -1380,3 +1378,205 @@ melos-rs build --android --flavor prod --flavor qa --flavor dev
 - [x] `scripts/update-formula.sh` — automates SHA256 replacement after releases (downloads checksums, updates formulas)
 - [x] README updated with Homebrew, download, and source installation instructions
 - [ ] After first release: run `scripts/update-formula.sh <version>` to replace SHA256 placeholders
+
+---
+
+## Upstream Parity Audit (Melos v7.4.0 → v7.6.0 + legacy gaps)
+
+Audit date: 2026-05-08. Source:
+[invertase/melos CHANGELOG.md](https://github.com/invertase/melos/blob/main/CHANGELOG.md).
+Prior audit was Batch 25 (Melos 7.4.0).
+
+### Newer Melos releases (v7.4.0 → v7.6.0)
+
+#### `v7.6.0` (2026-05-04)
+- [ ] **out of scope** — `runArguments` for IntelliJ run configurations (#1005)
+
+#### `v7.5.x` (2026-04-05)
+- [ ] No user-visible feat entries; chore/docs only (no action)
+
+#### `v7.3.0` (2025-10-23)
+- [x] `groups` config for scripts and `--group` option (#963) — done in Batch 16
+- [ ] **out of scope** — IntelliJ `runConfiguration` opt-out (#962)
+
+### Legacy Melos features still missing (pre-7.4.0)
+
+These were skipped during earlier batches and surfaced by re-reading the
+upstream CHANGELOG end-to-end.
+
+#### Versioning
+- [ ] **`--manual-version` option on `version` command** (Melos v1.3.0, #242) —
+  set an arbitrary version string per package on the CLI, bypassing
+  conventional-commit derivation. Distinct from per-package
+  `-V package:bump` overrides which only accept bump types.
+- [ ] **Versioning of nested version fields in pubspec.yaml** (Melos
+  v7.0.0-dev.3, #831) — verify `apply_version_bump()` /
+  `update_dependency_constraint()` in
+  [crates/melos-core/src/commands/version.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/commands/version.rs)
+  handle deeply nested version fields (e.g. inside `dependency_overrides`,
+  `dev_dependencies` blocks with comments/anchors).
+- [ ] **Pre-release identifiers with numeric segments** (Melos v7.2.0, #943) —
+  verify `compute_next_prerelease()` accepts numeric preid like `0`, `1.2.3`.
+- [ ] **Externally hosted versioning** (Melos v7.0.0-dev.6, #852) — when
+  `publish_to:` points at a custom pub server (not pub.dev), fetch the
+  latest published version from that hosted URL instead of pub.dev. Currently
+  no HTTP client wired up for this.
+
+#### Bootstrap
+- [ ] **`format` command config block** (Melos v6.1.0, #709) — workspace
+  defaults (e.g. `lineLength`, `setExitIfChanged`, `output`) under
+  `command.format` so users don't repeat flags on every CLI invocation.
+  Today only `ChangelogFormatConfig` exists in
+  [config/mod.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/config/mod.rs);
+  `FormatCommandConfig` is missing.
+- [ ] **Authenticate against private pub repositories** (Melos v4.0.0, #627) —
+  pass `PUB_HOSTED_URL` / inject `pub-tokens.json` style credentials when
+  running `pub get`/`pub publish` so corp pub servers work.
+- [ ] **Git dependency comparison on bootstrap** (Melos v7.0.0-dev.3, #659) —
+  detect when a `git:` dep's `ref:` has changed and force a re-fetch; today
+  bootstrap ignores git ref drift.
+- [ ] **Workspace-level `melos_overrides.yaml` file** (Melos v3.0.0, #410) —
+  companion to `dependencyOverridePaths` (which is wired). Read a top-level
+  `melos_overrides.yaml` at the workspace root and merge its overrides into
+  every generated `pubspec_overrides.yaml`.
+
+#### Exec / runner
+- [ ] **Run examples from their own directory** (Melos v7.0.0-dev.3, #834) —
+  when iterating example packages, set the child process `cwd` to the
+  example dir (not the parent). Currently
+  [crates/melos-core/src/runner.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/runner.rs)
+  only injects `MELOS_PARENT_PACKAGE_*` env vars; verify cwd handling for
+  nested examples.
+- [ ] **`failFast` cancels in-flight queued tasks** (Melos v7.2.0, #957) —
+  verify `ProcessRunner` aborts already-spawned-but-not-started tasks
+  immediately when one fails, instead of letting the semaphore drain.
+
+### Out of scope (per AGENTS.md)
+
+IntelliJ/IDE features intentionally excluded:
+- `runArguments` (v7.6.0), `runConfiguration` opt-out (v7.3.0),
+  keep-custom-modules (v7.2.0), `executeInTerminal` (v7.0.0),
+  module name prefix (v2.7.0).
+
+### Actionable batches derived from audit
+
+#### Batch 55 — Version command extensions (done)
+
+Closed 3 versioning gaps from the upstream parity audit. All changes scoped
+to [crates/melos-core/src/commands/version.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/commands/version.rs)
+and [crates/melos-cli/src/commands/version.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-cli/src/commands/version.rs).
+
+- [x] `--manual-version <pkg:semver>` repeatable CLI flag (Melos v1.3.0, #242)
+  - Added `parse_manual_version(s) -> Result<(String, String), String>` in
+    core that validates the RHS via `semver::Version::parse` (Flutter-style
+    `+buildNumber` suffix is preserved but stripped before semver check)
+  - Added `manual_version: Vec<(String, String)>` field to `VersionArgs` in
+    CLI with clap `value_parser`
+  - Slotted into the version-resolution chain alongside `-V` overrides:
+    after `--graduate` and `--coordinated`, before `--conventional-commits`
+    and `--all`. Manual versions take precedence over `--prerelease`
+    (explicit semver wins). Conflict guard returns `anyhow::Error` if the
+    same package appears in both `-V` and `--manual-version`.
+  - Updated the no-mode-selected error message to mention `--manual-version`
+  - Smoke-tested via `melos-rs version --manual-version "pkg:not-semver"`
+    which exits 2 with an actionable validation error
+- [x] Numeric pre-release identifier support (Melos v7.2.0, #943)
+  - Verified `compute_next_prerelease()` already handles purely-numeric
+    `preid` values (e.g. `0`, `123`) — semver `Prerelease::new("0.0")` is
+    valid, and the existing strip_prefix/parse loop works
+- [x] Nested version-field safety in pubspec.yaml (Melos v7.0.0-dev.3, #831)
+  - Verified existing `apply_version_bump()` regex `(?m)^version:\s*\S+`
+    only matches top-level (column-0) `version:` keys, never indented
+    nested keys inside `dependency_overrides`/`dev_dependencies`/etc.
+  - Verified existing `update_dependency_constraint()` regex requires the
+    constraint value to start on the same line as `dep_name:`, so map-style
+    nested deps (path/git/version-as-map) are correctly skipped
+- [x] Tests: 12 new tests
+  - 7 `parse_manual_version` tests (valid semver, prerelease, build metadata,
+    rejects bump types, rejects partial semver, rejects no-colon, rejects
+    empty package)
+  - 3 numeric preid tests (`numeric_preid_fresh`, `numeric_preid_increment`,
+    `numeric_preid_switch_from_alpha`)
+  - 2 nested-version safety tests (`apply_version_bump_does_not_touch_nested_version_fields`,
+    `update_dependency_constraint_skips_unrelated_nested_fields`)
+- [x] `task check:all` passes — 584 tests (33 CLI unit + 26 integration +
+  525 core unit), zero clippy warnings
+
+#### Batch 56 — Bootstrap & format config parity
+
+Three independent gaps unified by their config-block nature.
+
+- [ ] `command.format` config block (Melos v6.1.0, #709)
+  - Add `FormatCommandConfig { line_length, set_exit_if_changed, output, hooks }`
+    in [config/mod.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/config/mod.rs)
+  - Wire as `format: Option<FormatCommandConfig>` on `CommandConfig`
+  - In CLI [format.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-cli/src/commands/format.rs)
+    apply config defaults when CLI flags are absent (CLI > config priority)
+  - `Workspace::hook("format", "pre"/"post")` extension
+  - Tests: parse full + minimal config, CLI overrides config, hook extraction
+- [ ] Workspace-level `melos_overrides.yaml` (Melos v3.0.0, #410)
+  - Define `MelosOverridesYaml { dependency_overrides: HashMap<String, YamlValue> }`
+  - Load alongside `Workspace::find_and_load()` if file exists at workspace root
+  - Merge into every `pubspec_overrides.yaml` produced by
+    `generate_pubspec_overrides()` in
+    [bootstrap.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/commands/bootstrap.rs)
+  - Tests: file absent (no-op), file present (merged into overrides),
+    conflict precedence (workspace siblings > melos_overrides > deps)
+- [ ] Git dependency ref comparison on bootstrap (Melos v7.0.0-dev.3, #659)
+  - For each package's `dependencies` with `git: { url, ref }`, hash the
+    `(url, ref)` pair from pubspec.yaml and compare to last bootstrap stored
+    in `.melos_tool/git_deps.json` (workspace root)
+  - On mismatch: delete `.dart_tool/package_config.json` for that package
+    before `pub get` to force re-resolution
+  - Tests: no git deps (no-op), changed ref (cache cleared), unchanged
+    (cache preserved)
+
+#### Batch 57 — Runner correctness fixes
+
+- [ ] `failFast` aborts in-flight queued tasks (Melos v7.2.0, #957)
+  - Audit `ProcessRunner::run_in_packages_with_events()` in
+    [runner.rs](file:///Users/AD9C65/projects/pastel-projects/melos-rs/crates/melos-core/src/runner.rs)
+  - Confirm queued tasks (waiting on semaphore) check `failed.load()` and
+    short-circuit before spawning `tokio::process::Command`
+  - Add explicit cancellation: when `fail_fast` and a task fails, abort all
+    `JoinHandle`s in the spawn set
+  - Tests: 5 queued tasks + 1st fails → exactly 1 failure observed,
+    remaining 4 reported as cancelled (not run)
+- [ ] Example package `cwd` handling (Melos v7.0.0-dev.3, #834)
+  - When iterating example sub-packages discovered by parent-walking, set
+    child process `cwd = example_pkg.path` (not parent path)
+  - Verify `MELOS_PACKAGE_PATH` is the example's path, not the parent's
+  - Tests: fixture with `packages/foo/example/`, exec `pwd` inside example
+    yields example dir, `MELOS_PARENT_PACKAGE_*` reflects `foo`
+
+#### Batch 58 — External pub server support (HTTP)
+
+Both items require an HTTP client. Group together to amortize the
+dependency addition (e.g. `reqwest` with `rustls-tls` + `json`).
+
+- [ ] Externally hosted versioning lookups (Melos v7.0.0-dev.6, #852)
+  - Add `pub_server::fetch_published_versions(hosted_url, package_name)`
+    that GETs `<hosted_url>/api/packages/<name>` and parses
+    `versions[].version`
+  - Use in `version` command when `package.publish_to` is set to a custom URL
+  - Fallback gracefully (warn + use local pubspec version) on HTTP error
+  - Tests: mock server returns version list, malformed JSON, 404, network
+    error
+- [ ] Authenticate against private pub repositories (Melos v4.0.0, #627)
+  - Read `~/.config/dart/pub-tokens.json` at bootstrap/publish time
+  - Inject matching `Authorization: Bearer <token>` header when calling
+    `pub_server::fetch_published_versions()`
+  - Pass `PUB_HOSTED_URL` env var to `pub get`/`pub publish` child processes
+    when package's `publish_to` is a custom URL
+  - Tests: token file present/absent, hosted URL match/mismatch, env var
+    propagation
+
+---
+
+## Remaining / Future
+
+Stretch goals and out-of-scope items. Not required for Melos 7.6.0 CLI parity.
+
+- [ ] Plugin system for custom commands
+- [ ] GitHub Actions integration helpers
+- [ ] IDE integration (IntelliJ, VS Code) -- out of scope for CLI tool

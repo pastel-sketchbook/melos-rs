@@ -14,6 +14,7 @@ use melos_core::commands::version::{
 };
 use melos_core::package::filter::apply_filters_with_categories;
 use melos_core::workspace::Workspace;
+use std::collections::HashSet;
 
 /// Arguments for the `version` command
 #[derive(Args, Debug)]
@@ -29,6 +30,13 @@ pub struct VersionArgs {
     /// Per-package version overrides (e.g., -Vanmobile:patch -Vadapter:build)
     #[arg(short = 'V', value_parser = melos_core::commands::version::parse_version_override)]
     pub overrides: Vec<(String, String)>,
+
+    /// Set explicit semver for a package, bypassing conventional-commit
+    /// derivation. Repeatable: `--manual-version pkg_a:1.2.3 --manual-version pkg_b:0.5.0-dev.1`.
+    /// The right-hand side must be a valid semver. Mutually exclusive with
+    /// `-V` for the same package. Mirrors Melos's `--manual-version` (v1.3.0).
+    #[arg(long, value_parser = melos_core::commands::version::parse_manual_version)]
+    pub manual_version: Vec<(String, String)>,
 
     /// Skip confirmation prompt
     #[arg(long)]
@@ -312,27 +320,52 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
             .iter()
             .map(|p| (p, explicit.clone()))
             .collect()
-    } else if !args.overrides.is_empty() {
-        // Per-package overrides (prerelease modifier applied if --prerelease)
-        args.overrides
-            .iter()
-            .filter_map(|(name, bump)| {
-                eligible_packages
-                    .iter()
-                    .find(|p| p.name.contains(name))
-                    .map(|p| {
-                        if args.prerelease {
-                            let current = p.version.as_deref().unwrap_or("0.0.0");
-                            let v = compute_next_prerelease(current, bump, &args.preid)
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|_| bump.clone());
-                            (p, v)
-                        } else {
-                            (p, bump.clone())
-                        }
-                    })
-            })
-            .collect()
+    } else if !args.overrides.is_empty() || !args.manual_version.is_empty() {
+        // Per-package overrides (-V) and manual versions (--manual-version) merged.
+        //
+        // Manual versions take precedence over `--prerelease` (the explicit
+        // semver is used as-is). Conflict if the same package appears in both
+        // `-V` and `--manual-version`.
+        let mut manual_pkgs: HashSet<String> = HashSet::new();
+        for (name, _) in &args.manual_version {
+            manual_pkgs.insert(name.clone());
+        }
+        for (name, _) in &args.overrides {
+            if manual_pkgs.contains(name) {
+                return Err(anyhow::anyhow!(
+                    "Package '{}' is specified by both `-V` and `--manual-version`. \
+                     Use one or the other.",
+                    name
+                ));
+            }
+        }
+
+        let mut selected: Vec<(&melos_core::package::Package, String)> = Vec::new();
+
+        // Manual versions: explicit semver, no prerelease modifier
+        for (name, version) in &args.manual_version {
+            if let Some(p) = eligible_packages.iter().find(|p| p.name.contains(name)) {
+                selected.push((p, version.clone()));
+            }
+        }
+
+        // -V overrides: bump types (patch/minor/major/build) or explicit version,
+        // optionally promoted to prerelease via --prerelease
+        for (name, bump) in &args.overrides {
+            if let Some(p) = eligible_packages.iter().find(|p| p.name.contains(name)) {
+                if args.prerelease {
+                    let current = p.version.as_deref().unwrap_or("0.0.0");
+                    let v = compute_next_prerelease(current, bump, &args.preid)
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|_| bump.clone());
+                    selected.push((p, v));
+                } else {
+                    selected.push((p, bump.clone()));
+                }
+            }
+        }
+
+        selected
     } else if args.conventional_commits {
         // Use conventional commits to determine bumps
         let mapped = conventional_commits
@@ -378,7 +411,7 @@ pub async fn run(workspace: &Workspace, args: VersionArgs) -> Result<()> {
     } else {
         println!(
             "{}",
-            "Specify --all, --conventional-commits, --graduate, or use -V overrides to select packages."
+            "Specify --all, --conventional-commits, --graduate, --manual-version, or -V overrides to select packages."
                 .yellow()
         );
         return Ok(());

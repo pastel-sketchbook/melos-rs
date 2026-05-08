@@ -87,6 +87,42 @@ pub fn parse_version_override(s: &str) -> Result<(String, String), String> {
     Ok((parts[0].to_string(), parts[1].to_string()))
 }
 
+/// Parse a `--manual-version` flag value of the form `package:semver`.
+///
+/// Unlike [`parse_version_override`], the right-hand side MUST be a strict
+/// semantic version (validated via `semver::Version::parse`). Bump types
+/// like `patch` or `minor` are rejected.
+///
+/// Mirrors Melos's `--manual-version` option (Melos v1.3.0, #242).
+pub fn parse_manual_version(s: &str) -> Result<(String, String), String> {
+    let parts: Vec<&str> = s.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return Err(format!(
+            "Invalid manual version '{}'. Expected format: package:semver (e.g. my_pkg:1.2.3)",
+            s
+        ));
+    }
+    let pkg = parts[0].trim();
+    let raw_version = parts[1].trim();
+    if pkg.is_empty() {
+        return Err(format!(
+            "Invalid manual version '{}': package name is empty",
+            s
+        ));
+    }
+    // Strip any Flutter-style `+buildNumber` suffix before semver validation,
+    // but keep the full string in the returned value so apply_version_bump can
+    // preserve the build number through compute_next_version's explicit branch.
+    let semver_part = raw_version.split('+').next().unwrap_or(raw_version);
+    Version::parse(semver_part).map_err(|e| {
+        format!(
+            "Invalid manual version '{}': '{}' is not a valid semver (e.g. 1.2.3, 1.2.3-dev.0): {}",
+            s, raw_version, e
+        )
+    })?;
+    Ok((pkg.to_string(), raw_version.to_string()))
+}
+
 /// Parse a single commit message into a [`ConventionalCommit`], if it matches
 /// the conventional commit format.
 ///
@@ -1008,6 +1044,58 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // parse_manual_version (Batch 55: --manual-version flag)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_manual_version_valid_semver() {
+        let (name, version) = parse_manual_version("my_pkg:1.2.3").unwrap();
+        assert_eq!(name, "my_pkg");
+        assert_eq!(version, "1.2.3");
+    }
+
+    #[test]
+    fn test_parse_manual_version_valid_prerelease() {
+        let (name, version) = parse_manual_version("pkg:0.5.0-dev.1").unwrap();
+        assert_eq!(name, "pkg");
+        assert_eq!(version, "0.5.0-dev.1");
+    }
+
+    #[test]
+    fn test_parse_manual_version_valid_with_build_metadata() {
+        // Flutter-style +buildNumber suffix is preserved in the returned value
+        // but stripped before semver validation.
+        let (name, version) = parse_manual_version("pkg:1.2.3+42").unwrap();
+        assert_eq!(name, "pkg");
+        assert_eq!(version, "1.2.3+42");
+    }
+
+    #[test]
+    fn test_parse_manual_version_rejects_bump_type() {
+        // Bump types like "patch" are NOT valid semver and must be rejected.
+        let err = parse_manual_version("pkg:patch").unwrap_err();
+        assert!(err.contains("not a valid semver"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_parse_manual_version_rejects_partial_semver() {
+        // "0.1" is not a complete semver (needs major.minor.patch).
+        assert!(parse_manual_version("pkg:0.1").is_err());
+    }
+
+    #[test]
+    fn test_parse_manual_version_rejects_no_colon() {
+        let err = parse_manual_version("no-colon").unwrap_err();
+        assert!(err.contains("Expected format"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_parse_manual_version_rejects_empty_package() {
+        let err = parse_manual_version(":1.2.3").unwrap_err();
+        assert!(err.contains("package name is empty"), "got: {}", err);
+    }
+
+    // -----------------------------------------------------------------------
     // ConventionalCommit parsing
     // -----------------------------------------------------------------------
 
@@ -1195,6 +1283,31 @@ mod tests {
     fn test_compute_next_prerelease_major_already_at_major() {
         let v = compute_next_prerelease("2.0.0-dev.0", "major", "dev").unwrap();
         assert_eq!(v.to_string(), "2.0.0-dev.1");
+    }
+
+    // -----------------------------------------------------------------------
+    // Numeric prerelease identifiers (Batch 55, Melos v7.2.0 #943)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_compute_next_prerelease_numeric_preid_fresh() {
+        // Bump from stable to a prerelease using a purely numeric preid like "0".
+        let v = compute_next_prerelease("1.2.3", "minor", "0").unwrap();
+        assert_eq!(v.to_string(), "1.3.0-0.0");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_numeric_preid_increment() {
+        // Same numeric preid -- counter increments.
+        let v = compute_next_prerelease("1.3.0-0.5", "minor", "0").unwrap();
+        assert_eq!(v.to_string(), "1.3.0-0.6");
+    }
+
+    #[test]
+    fn test_compute_next_prerelease_numeric_preid_switch_from_alpha() {
+        // Switching from alpha preid ("dev") to numeric preid ("0") resets counter.
+        let v = compute_next_prerelease("1.3.0-dev.5", "minor", "0").unwrap();
+        assert_eq!(v.to_string(), "1.3.0-0.0");
     }
 
     // -----------------------------------------------------------------------
@@ -1902,6 +2015,132 @@ mod tests {
 
         let updated = update_dependency_constraint(&pkg, "core_lib", "2.0.0").unwrap();
         assert!(!updated);
+    }
+
+    // -----------------------------------------------------------------------
+    // Nested version-field safety (Batch 55, Melos v7.0.0-dev.3 #831)
+    // -----------------------------------------------------------------------
+
+    /// `apply_version_bump` must rewrite only the package's own top-level
+    /// `version:` key, not nested `version:` keys inside dependency blocks.
+    #[test]
+    fn test_apply_version_bump_does_not_touch_nested_version_fields() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(
+            &pubspec,
+            "name: my_app\n\
+             version: 1.0.0\n\
+             dependency_overrides:\n  \
+               foo:\n    \
+                 version: ^9.9.9\n  \
+               bar:\n    \
+                 git:\n      \
+                   url: https://example.com/bar.git\n      \
+                   ref: bar-v3.0.0\n\
+             dev_dependencies:\n  \
+               baz:\n    \
+                 version: ^4.5.6\n",
+        )
+        .expect("write pubspec");
+
+        let pkg = Package {
+            name: "my_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec![],
+            dev_dependencies: vec!["baz".to_string()],
+            dependency_versions: HashMap::new(),
+            resolution: None,
+        };
+
+        let new_version = apply_version_bump(&pkg, "minor").expect("apply bump");
+        assert_eq!(new_version, "1.1.0");
+
+        let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
+        assert!(
+            content.contains("version: 1.1.0"),
+            "Top-level version not bumped:\n{}",
+            content
+        );
+        assert!(
+            content.contains("version: ^9.9.9"),
+            "Nested dep version was clobbered:\n{}",
+            content
+        );
+        assert!(
+            content.contains("version: ^4.5.6"),
+            "Nested dev_dep version was clobbered:\n{}",
+            content
+        );
+        assert!(
+            content.contains("ref: bar-v3.0.0"),
+            "Git ref was clobbered:\n{}",
+            content
+        );
+    }
+
+    /// `update_dependency_constraint` must only rewrite the named dep's
+    /// inline constraint, leaving other deps and nested map-style entries
+    /// untouched.
+    #[test]
+    fn test_update_dependency_constraint_skips_unrelated_nested_fields() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let pubspec = dir.path().join("pubspec.yaml");
+        std::fs::write(
+            &pubspec,
+            "name: my_app\n\
+             version: 1.0.0\n\
+             dependencies:\n  \
+               core_lib: ^1.0.0\n  \
+               other_lib: ^7.7.7\n  \
+               path_dep:\n    \
+                 path: ../path_dep\n  \
+               git_dep:\n    \
+                 git:\n      \
+                   url: https://example.com/git_dep.git\n      \
+                   ref: git_dep-v2.0.0\n",
+        )
+        .expect("write pubspec");
+
+        let pkg = Package {
+            name: "my_app".to_string(),
+            path: dir.path().to_path_buf(),
+            version: Some("1.0.0".to_string()),
+            is_flutter: false,
+            publish_to: None,
+            dependencies: vec!["core_lib".to_string(), "other_lib".to_string()],
+            dev_dependencies: vec![],
+            dependency_versions: HashMap::new(),
+            resolution: None,
+        };
+
+        let updated = update_dependency_constraint(&pkg, "core_lib", "2.0.0").unwrap();
+        assert!(updated);
+
+        let content = std::fs::read_to_string(&pubspec).expect("read pubspec");
+        assert!(
+            content.contains("core_lib: ^2.0.0"),
+            "core_lib not updated:\n{}",
+            content
+        );
+        assert!(
+            content.contains("other_lib: ^7.7.7"),
+            "other_lib was clobbered:\n{}",
+            content
+        );
+        assert!(
+            content.contains("path: ../path_dep"),
+            "path_dep was clobbered:\n{}",
+            content
+        );
+        assert!(
+            content.contains("ref: git_dep-v2.0.0"),
+            "git_dep ref was clobbered:\n{}",
+            content
+        );
     }
 
     // -----------------------------------------------------------------------
