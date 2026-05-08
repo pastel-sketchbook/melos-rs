@@ -114,7 +114,9 @@ pub fn draw_running(frame: &mut Frame, area: Rect, app: &App) {
     let ratio = if total > 0 {
         // safety: package counts are small, no precision loss in practice
         #[allow(clippy::cast_precision_loss)]
-        { completed as f64 / total as f64 }
+        {
+            completed as f64 / total as f64
+        }
     } else {
         0.0
     };

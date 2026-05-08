@@ -32,7 +32,7 @@ For I/O-bound commands (`analyze`, `format`), the bottleneck is the Dart toolcha
 
 ## Features
 
-Full parity with Melos 7.4.0 for CLI workflows:
+Full parity with Melos 7.6.0 for CLI workflows:
 
 **Commands**
 
@@ -43,7 +43,7 @@ Full parity with Melos 7.4.0 for CLI workflows:
 | `exec` | Execute arbitrary commands in each package |
 | `run` | Run named scripts defined in `melos.yaml` |
 | `list` | List packages (long, json, parsable, graph, gviz, mermaid) |
-| `version` | Bump versions via conventional commits, generate changelogs, create git tags |
+| `version` | Bump versions via conventional commits, generate changelogs, create git tags. Supports `--manual-version pkg:1.2.3` to pin exact versions |
 | `publish` | Publish packages to pub.dev with dry-run support |
 | `test` | Run `dart test` / `flutter test` with coverage and golden updates |
 | `analyze` | Run `dart analyze` with `--fix`, fatal warnings/infos control |
@@ -63,20 +63,25 @@ Full parity with Melos 7.4.0 for CLI workflows:
 - `melos.yaml` (6.x format) and `pubspec.yaml` with `melos:` section (7.x format)
 - Named scripts with steps, exec config, environment variables, groups, and privacy
 - Command hooks (pre/post) for bootstrap, clean, test, publish, and version
+- `command.format` config block: default `line_length`, `set_exit_if_changed`, `output` mode
 - Workspace `categories` for package grouping
 - `resolution: workspace` support (Dart 3.5+) — skips `pubspec_overrides.yaml` generation
+- `melos_overrides.yaml` for workspace-wide dependency overrides merged into `pubspec_overrides.yaml`
 - Shared dependency synchronization and version enforcement
 - Repository config for commit/release URL generation
+- External pub server support with `pub-tokens.json` authentication and per-package `PUB_HOSTED_URL` injection
 
 **Execution**
 
 - Configurable concurrency with `--concurrency` / `-c` (default 5)
-- `--fail-fast` to abort on first failure
+- `--fail-fast` to abort on first failure (aborts queued tasks, excludes cancelled from results)
 - `--order-dependents` for topological execution order
 - File watching with `--watch` for exec and run commands
 - Cross-platform shell support (Unix `sh -c` / Windows `cmd /C`)
 - Buffered output to prevent interleaving in concurrent mode
 - Per-package environment variables (`MELOS_PACKAGE_NAME`, `MELOS_PACKAGE_VERSION`, etc.)
+- Example package `cwd` set to example directory with `MELOS_PARENT_PACKAGE_*` env vars
+- Git dependency ref tracking — cache invalidation on ref changes across bootstraps
 
 **Analyze Options**
 
@@ -142,7 +147,7 @@ mv melos-rs /usr/local/bin/
 
 ### From source
 
-Requires [Rust toolchain](https://rustup.rs/) (stable, 1.85+; uses `let_chains` which stabilized in 1.87).
+Requires [Rust toolchain](https://rustup.rs/) (stable, 1.95+).
 
 ```sh
 # CLI only (default)
@@ -274,7 +279,7 @@ crates/
 
 ### Test suite
 
-865 tests (33 CLI unit + 513 core unit + 293 TUI unit + 26 integration). Run with:
+917 tests (33 CLI unit + 563 core unit + 295 TUI unit + 26 integration). Run with:
 
 ```sh
 # Default members (core + CLI)

@@ -932,7 +932,7 @@ mod tests {
         let pkg = make_package("app", &pkg_dir.to_string_lossy(), vec!["lib"]);
 
         // Save snapshot first
-        let (_, snapshot) = detect_git_dep_changes(&[pkg.clone()], ws_dir.path());
+        let (_, snapshot) = detect_git_dep_changes(std::slice::from_ref(&pkg), ws_dir.path());
         save_git_deps_snapshot(ws_dir.path(), &snapshot).unwrap();
 
         // Second run — no changes

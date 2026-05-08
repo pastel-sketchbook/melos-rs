@@ -3,6 +3,8 @@
 //! These tests exercise the compiled binary end-to-end using `assert_cmd`.
 //! Fixture workspaces are created in temp directories with `tempfile`.
 
+use std::fmt::Write as _;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
@@ -41,7 +43,7 @@ fn create_fixture_workspace(
                 pubspec.push_str("\ndependencies:\n");
             }
             for dep in *deps {
-                pubspec.push_str(&format!("  {dep}:\n    path: ../{dep}\n"));
+                let _ = write!(pubspec, "  {dep}:\n    path: ../{dep}\n");
             }
         }
 

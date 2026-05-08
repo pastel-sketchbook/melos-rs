@@ -74,7 +74,9 @@ pub fn run(packages: &[Package], opts: &HealthOpts) -> HealthReport {
         let data = collect_version_drift(packages);
         // safety: issue count won't exceed u32::MAX in practice
         #[allow(clippy::cast_possible_truncation)]
-        { total_issues += data.len() as u32; }
+        {
+            total_issues += data.len() as u32;
+        }
         Some(data)
     } else {
         None
@@ -84,7 +86,9 @@ pub fn run(packages: &[Package], opts: &HealthOpts) -> HealthReport {
         let data = collect_missing_fields(packages);
         // safety: issue count won't exceed u32::MAX in practice
         #[allow(clippy::cast_possible_truncation)]
-        { total_issues += data.len() as u32; }
+        {
+            total_issues += data.len() as u32;
+        }
         Some(data)
     } else {
         None
