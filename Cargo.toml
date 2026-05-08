@@ -37,6 +37,9 @@ semver = "1.0.28"
 # Path utilities
 pathdiff = "0.2.3"
 
+# HTTP client (pub server lookups)
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls", "json"] }
+
 # File watching
 notify = "8.2.0"
 notify-debouncer-mini = "0.7.0"

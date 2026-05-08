@@ -328,6 +328,15 @@ fn build_package_env(
         }
     }
 
+    // Set PUB_HOSTED_URL for packages with a custom publish_to URL
+    // so that `pub get` / `pub publish` child processes target the right server.
+    if let Some(ref publish_to) = pkg.publish_to
+        && !publish_to.eq_ignore_ascii_case("none")
+        && !publish_to.is_empty()
+    {
+        env.insert("PUB_HOSTED_URL".to_string(), publish_to.clone());
+    }
+
     env
 }
 
@@ -546,6 +555,40 @@ mod tests {
 
         let env = build_package_env(&ws_env, &pkg, &[]);
         assert!(!env.contains_key("MELOS_PACKAGE_VERSION"));
+    }
+
+    // -- PUB_HOSTED_URL env var tests (Batch 58, Melos v4.0.0 #627) --
+
+    #[test]
+    fn test_build_package_env_pub_hosted_url_custom() {
+        let ws_env = HashMap::new();
+        let mut pkg = make_pkg("core", "/workspace/packages/core");
+        pkg.publish_to = Some("https://custom.pub.example.com".to_string());
+
+        let env = build_package_env(&ws_env, &pkg, &[]);
+        assert_eq!(
+            env.get("PUB_HOSTED_URL").unwrap(),
+            "https://custom.pub.example.com"
+        );
+    }
+
+    #[test]
+    fn test_build_package_env_pub_hosted_url_not_set_for_none() {
+        let ws_env = HashMap::new();
+        let mut pkg = make_pkg("core", "/workspace/packages/core");
+        pkg.publish_to = Some("none".to_string());
+
+        let env = build_package_env(&ws_env, &pkg, &[]);
+        assert!(!env.contains_key("PUB_HOSTED_URL"));
+    }
+
+    #[test]
+    fn test_build_package_env_pub_hosted_url_not_set_when_absent() {
+        let ws_env = HashMap::new();
+        let pkg = make_pkg("core", "/workspace/packages/core");
+
+        let env = build_package_env(&ws_env, &pkg, &[]);
+        assert!(!env.contains_key("PUB_HOSTED_URL"));
     }
 
     // -- fail-fast abort tests (Batch 57, Melos v7.2.0 #957) --

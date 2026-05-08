@@ -19,6 +19,7 @@ semver = { workspace = true }
 pathdiff = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

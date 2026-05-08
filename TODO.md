@@ -1554,7 +1554,7 @@ Three independent gaps unified by their config-block nature.
 Both items require an HTTP client. Group together to amortize the
 dependency addition (e.g. `reqwest` with `rustls-tls` + `json`).
 
-- [ ] Externally hosted versioning lookups (Melos v7.0.0-dev.6, #852)
+- [x] Externally hosted versioning lookups (Melos v7.0.0-dev.6, #852)
   - Add `pub_server::fetch_published_versions(hosted_url, package_name)`
     that GETs `<hosted_url>/api/packages/<name>` and parses
     `versions[].version`
@@ -1562,7 +1562,7 @@ dependency addition (e.g. `reqwest` with `rustls-tls` + `json`).
   - Fallback gracefully (warn + use local pubspec version) on HTTP error
   - Tests: mock server returns version list, malformed JSON, 404, network
     error
-- [ ] Authenticate against private pub repositories (Melos v4.0.0, #627)
+- [x] Authenticate against private pub repositories (Melos v4.0.0, #627)
   - Read `~/.config/dart/pub-tokens.json` at bootstrap/publish time
   - Inject matching `Authorization: Bearer <token>` header when calling
     `pub_server::fetch_published_versions()`
