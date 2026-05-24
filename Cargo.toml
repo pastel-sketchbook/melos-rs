@@ -4,7 +4,7 @@ default-members = ["crates/melos-core", "crates/melos-cli"]
 resolver = "3"
 
 [workspace.package]
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 rust-version = "1.95.0"
 license = "MIT"
@@ -12,14 +12,14 @@ license = "MIT"
 [workspace.dependencies]
 # Serialization / Config
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 yaml_serde = "0.10.4"
 
 # File system
 glob = "0.3.3"
 
 # Async runtime
-tokio = { version = "1.52.1", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 
 # Error handling
 anyhow = "1.0.102"
@@ -46,7 +46,7 @@ notify-debouncer-mini = "0.7.0"
 
 # CLI
 clap = { version = "4.6.1", features = ["derive"] }
-clap_complete = "4.6.2"
+clap_complete = "4.6.5"
 
 # Terminal output
 colored = "3.1.1"
@@ -64,7 +64,7 @@ tracing-appender = "0.2.5"
 
 # Dev
 tempfile = "3.27.0"
-assert_cmd = "2.2.1"
+assert_cmd = "2.2.2"
 predicates = "3.1.4"
 
 # Internal
